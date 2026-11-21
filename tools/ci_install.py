@@ -9,6 +9,8 @@
               the matrix expects, and each must be named with a reason and a fix
     read      a local HTML file, a public page and (--ocr) a scanned PDF, through the installed skill;
               (--cjk) files named and written in Chinese
+    nodecheck defuddle's Markdown under the Node of Playwright's wheel (what --setup uses) and under nodejs.org's, on
+              the same pages, and what each costs to download and to keep: the saving, per system
     suites    the offline suites, under the environment's own Python
     bare      a Python with nothing installed and no --setup: the CLI, the report, a local read
     collect   the setup's logs and state into the folder that is uploaded
@@ -549,6 +551,7 @@ def cjk_reads(a, work, res):
 def cmd_suites(a):
     cjk = ["cjk"] if os.path.isfile(os.path.join(ROOT, "tests", "cjk.py")) else []
     names = [x for x in a.only.split(",") if x] or (OFFLINE + cjk + ([] if a.no_browser else [BROWSER_SUITE]))
+    names = [x for x in names if x not in a.skip.split(",")]
     flags = [] if a.no_xutf8 else ["-X", "utf8"]       # a Chinese Windows or locale gives a driver no UTF-8 mode
     py = a.python or env_python(a) or sys.executable
     print("suites run under %s" % py)
@@ -652,6 +655,99 @@ def cmd_bare(a):
     return 1 if bad else 0
 
 
+# ---------------------------------------------------------------- nodecheck
+FIXTURES = {
+    "article": "<html><head><title>Article</title></head><body><nav><a href='/'>Home</a> <a href='/about'>About</a></nav>"
+               "<article><h1>A long article</h1><p>First paragraph with <a href='https://example.org/x'>a link</a>, "
+               "<em>emphasis</em> and <strong>strong</strong> text, long enough to count as the body of an article for "
+               "any extractor, and then some more words to be sure about it.</p><h2>A list</h2><ul><li>one</li>"
+               "<li>two <code>code</code></li><li>three</li></ul><h2>A table</h2><table><tr><th>a</th><th>b</th></tr>"
+               "<tr><td>1</td><td>2</td></tr></table><pre><code>def f():\n    return 1\n</code></pre>"
+               "<blockquote>A quotation that goes on for a little while.</blockquote><p>Last paragraph, with enough "
+               "words in it to be an ordinary one: the quick brown fox jumps over the lazy dog, twice.</p></article>"
+               "<footer>Copyright</footer></body></html>",
+    "unicode": "<html><head><title>" + CN_NAME + "</title></head><body><article><h1>" + CN_NAME + "</h1><p>"
+               + CN_SENTENCE * 5 + "</p><p>" + PRIVET + ", world: letters outside ASCII, and é ü ñ "
+               "— “quotes”.</p></article></body></html>",
+    "images": "<html><head><title>Pictures</title></head><body><article><h1>Pictures</h1><p>Text before the figure, long "
+              "enough to be the body of an article for any extractor that looks at it.</p><figure><img src='/a.png' "
+              "alt='A chart'><figcaption>Figure one</figcaption></figure><p>Text after the figure, again long enough "
+              "to count, with several words more than strictly needed.</p></article></body></html>",
+}
+
+
+def head_size(url):
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "read-page-ci"})
+        with urllib.request.urlopen(req, timeout=60) as r:          # a GET, whose body is not read: HEAD gets no length from every host
+            return int(r.headers.get("Content-Length") or 0)
+    except Exception:                                          # noqa: BLE001
+        return 0
+
+
+def cmd_nodecheck(a):
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, os.path.join(skill_dir(a), "scripts"))
+    import ddworker
+    import envsetup
+    import ownenv
+    d = home_of(a)
+    info = load_json(os.path.join(d, "setup.json"))
+    wheel = ownenv.at(d, info.get("node_bin"))
+    if not wheel or "playwright" not in wheel:
+        print("note: this setup's Node is not Playwright's (%s): no wheel here, nothing to compare" % (info.get("node_bin") or "none"))
+        return 0
+    cli = os.path.join(ownenv.at(d, info.get("npm") or "npm"), "defuddle.cmd" if os.name == "nt" else os.path.join("bin", "defuddle"))
+    work = tempfile.mkdtemp(prefix="rp-nodecheck-")
+    w = envsetup.Work(work, "nodecheck", "ci")
+    try:
+        official = w._node_official()                          # nodejs.org's archive, as the fallback fetches it
+    except Exception as e:                                     # noqa: BLE001
+        print("note: nodejs.org's Node cannot be had here (%s): no comparison" % str(e)[:100])
+        return 0
+    outs, bad = {}, []
+    for label, node in (("wheel", wheel), ("nodejs.org", official)):
+        dist, node_exe = ddworker.locate(cli, node)
+        if not dist:
+            return fail("defuddle's files are not where npm puts them (%s)" % cli)
+        for name, html in FIXTURES.items():
+            path = os.path.join(work, name + ".html")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(html)
+            rc, out = run_capture([node_exe, os.path.join(dist, "cli.js"), "parse", path, "--markdown"], timeout=120)
+            outs[(label, name)] = out
+            if rc != 0:
+                bad.append("defuddle under %s's Node exited %s on %s: %s" % (label, rc, name, out[-120:]))
+    same = [n for n in FIXTURES if outs.get(("wheel", n)) == outs.get(("nodejs.org", n)) and outs.get(("wheel", n))]
+    for n in FIXTURES:
+        print("%-8s %5d B under the wheel's Node, %5d B under nodejs.org's: %s" % (
+            n, len(outs.get(("wheel", n), "")), len(outs.get(("nodejs.org", n), "")),
+            "identical" if n in same else "DIFFERENT"))
+        if n not in same:
+            bad.append("defuddle's Markdown of %s differs between the two Nodes" % n)
+    ver = lambda exe: run_capture([exe, "--version"], timeout=60)[1].strip()          # noqa: E731
+    npm_dir = os.path.join(d, "node")
+    m = envsetup.machine()
+    osn = "win" if os.name == "nt" else "darwin" if sys.platform == "darwin" else "linux"
+    arch = {"x64": "x64", "arm64": "arm64"}.get(m, m)
+    ext = ".zip" if os.name == "nt" else ".tar.gz"
+    archive = head_size("https://nodejs.org/dist/v%s/node-v%s-%s-%s%s" % (envsetup.NODE_VERSION, envsetup.NODE_VERSION, osn, arch, ext))
+    tgz = head_size("https://registry.npmjs.org/npm/-/npm-%s.tgz" % envsetup.NPM_VERSION)
+    kept_official = tree_size(os.path.join(work, "node"))
+    kept_npm = tree_size(npm_dir) if os.path.isdir(npm_dir) else 0
+    print("\nNode %s (wheel) against %s (nodejs.org)" % (ver(wheel), ver(official)))
+    print("download : nodejs.org's archive %s, npm's tarball %s: %s saved" % (human(archive), human(tgz), human(archive - tgz)))
+    print("on disk  : nodejs.org's Node and npm %s, npm alone %s: %s saved" % (human(kept_official), human(kept_npm),
+                                                                           human(kept_official - kept_npm)))
+    save("nodecheck", {"identical": len(same), "of": len(FIXTURES), "archive": archive, "tarball": tgz,
+                       "disk_official": kept_official, "disk_npm": kept_npm})
+    shutil.rmtree(work, ignore_errors=True)
+    for b in bad:
+        fail(b)
+    return 1 if bad else 0
+
+
 # ---------------------------------------------------------------- collect, summary
 def cmd_collect(a):
     d, out = home_of(a), logs()
@@ -695,6 +791,11 @@ def cmd_summary(a):
                                                               ", ".join(chk.get("expected") or []) or "nothing"))
     if r.get("reads"):
         lines.append("| reads | %s |" % ", ".join("%s %s" % kv for kv in sorted(r["reads"].items())))
+    if r.get("nodecheck"):
+        nc = r["nodecheck"]
+        lines.append("| node | defuddle identical under both Nodes on %d of %d pages; nodejs.org's archive %s and %s on disk, "
+                     "npm's tarball %s and %s |" % (nc["identical"], nc["of"], human(nc["archive"]), human(nc["disk_official"]),
+                                                    human(nc["tarball"]), human(nc["disk_npm"])))
     if r.get("bare"):
         lines.append("| bare | %s |" % ", ".join("%s %s" % kv for kv in sorted(r["bare"].items())))
     s = r.get("suites") or {}
@@ -745,10 +846,12 @@ def main(argv):
         lambda p: p.add_argument("--expect"))
     add("suites", cmd_suites, lambda p: p.add_argument("--only", default=""),
         lambda p: p.add_argument("--no-browser", action="store_true"),
+        lambda p: p.add_argument("--skip", default="", help="suites left out, comma separated (and why, in the workflow)"),
         lambda p: p.add_argument("--no-xutf8", action="store_true",
                                  help="run each suite without -X utf8, as a Python on a Chinese Windows or a GBK locale is"),
         lambda p: p.add_argument("--timeout", type=int, default=1800))
     add("bare", cmd_bare)
+    add("nodecheck", cmd_nodecheck)
     add("collect", cmd_collect)
     add("summary", cmd_summary, lambda p: p.add_argument("--title"))
     p = sub.add_parser("mkscan")

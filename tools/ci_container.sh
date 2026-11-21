@@ -32,6 +32,7 @@ rc=0
 $ci machine || rc=1
 $ci setup --follow --skill "$skill" --label first || rc=1
 $ci check --skill "$skill" || rc=1
+$ci nodecheck --skill "$skill" || rc=1
 $ci read --skill "$skill" || rc=1
 $ci collect --skill "$skill"
 $ci summary --title "container $img"

@@ -397,10 +397,11 @@ its end. That is asked of a small child that has broken away (the job it lands i
 lets nothing leave), not read from the job the process is in: a venv's `python.exe` runs its
 interpreter in a job of its own, nested in the harness's, and hides it. A background yt-dlp update has a lock of its own (`ytdlp.lock`); a `--setup` waits for it, up
 to five minutes, and holds it for its run.
-Its first line says what it will download (about 390 MB on Windows, 445 on Linux, 355 on macOS -
-the pinned wheels by PyPI's sizes, the Python, Node and browser archives by their Content-Length;
-430, 480 and 380 with pandoc) and keep (about 0.95 GB on Windows, 1.1 GB on Linux; 1.2 and 1.3
-with pandoc), or that the folder is up to date and only a check follows. The steps run
+Its first line says what it will download (about 360 MB on Windows, 390 on Linux, 350 on macOS - measured by
+real installs on GitHub's runners, 2026-11-21, with Node from Playwright's wheel: Windows x64 359 MB, Linux x64 393
+and arm64 370, macOS arm64 348; nodejs.org's Node made it 33, 59, 56 and 55 MB more and 94, 185, 181 and 180 MB more on disk) and keep
+(about 0.9 GB on Windows, 1.0 GB on Linux, 0.85 on macOS, uv's cache hard-linked into it not counted twice), or that
+the folder is up to date and only a check follows. The steps run
 one after another; only the check's engines answer side by side. Side by side was built and
 measured (2026-11-19, from nothing into fresh folders): 62 and 68 s against 68 and 65
 one after another, WSL 83 against 79 - no gain, so not kept. The link is the limit: 9 MB/s, no

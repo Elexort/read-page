@@ -18,15 +18,15 @@ STATE_SCHEMA = 1
 
 
 def _size_note():
-    """What --setup downloads and keeps (without markitdown and pandoc): the pinned wheels by
-    PyPI's sizes and the Python, Node and browser archives by their Content-Length; on disk as
-    measured on Windows and on Linux (WSL), less pandoc's installed size there (226 and 162 MB).
-    macOS is counted, not measured."""
+    """What --setup downloads and keeps (no markitdown, no pandoc, and Node is Playwright's own: nothing of
+    nodejs.org): measured by real installs on GitHub's runners (2026-11-21, the bytes the network adapter received and
+    the folder's size without uv's cache, which is hard-linked into it): Windows x64 359 MB and 0.9 GB, Linux x64
+    393 MB and 0.96 GB (arm64 370 MB, 0.92 GB), macOS arm64 348 MB and 0.82 GB."""
     if os.name == "nt":
-        return "downloads about 390 MB, takes about 0.95 GB on disk, no admin rights"
+        return "downloads about 360 MB, takes about 0.9 GB on disk, no admin rights"
     if sys.platform == "darwin":
-        return "downloads about 355 MB, takes about 1.0 GB on disk, no admin rights"
-    return "downloads about 445 MB, takes about 1.1 GB on disk, no admin rights"
+        return "downloads about 350 MB, takes about 0.85 GB on disk, no admin rights"
+    return "downloads about 390 MB, takes about 1.0 GB on disk, no admin rights"
 
 
 SIZE_NOTE = _size_note()
