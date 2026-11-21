@@ -165,7 +165,8 @@ while the rows below stood)
   `rus`; the user's own unless `READ_PAGE_OCR_LANGS` is set) when it is installed, and names a missing one in
   `improve` (`signals.ocr_missing_langs`; on the `ocr:` line of `--ocr N`).
 - **pdftotext, tesseract's command and lynx are given ASCII paths** on Windows (the file linked or copied into an
-  ASCII folder under the cache, its 8.3 name or a public folder of the system; the output moved back); tesserocr gets
+  ASCII folder of the user's own - under the cache, its 8.3 name, or the environment's folder when its path is ASCII, never
+  a folder other users read; the output moved back); tesserocr gets
   its picture from Pillow. A profile named in Chinese or Cyrillic - or in Big5, a name with 許, 功 or 蓋, whose
   second byte is 0x5C - made them fail or read nothing.
 - **English defaults follow the user.** `READ_PAGE_LANG` (else the system's language, then English) sets
@@ -174,7 +175,7 @@ while the rows below stood)
   `zh-Hans,zh-CN,zh,en`, and a video with none of them is asked once for the language its info names, the track
   of the user's first language is the one kept). `READ_PAGE_SUB_LANGS` and `READ_PAGE_OCR_LANGS`, when set, win. What
   is sent: `references/engines.md`.
-- tests: `cjk.py` 134 (105 without curl_cffi and charset_normalizer, 131 off Windows; offline, any OS; under a POSIX locale
+- tests: `cjk.py` 136 (107 on Windows without curl_cffi and charset_normalizer, 131 off Windows; offline, any OS; under a POSIX locale
   that is not UTF-8 its folders are ASCII, row 175).
 
 **`readpage.py --setup`**

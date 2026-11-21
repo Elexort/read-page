@@ -588,6 +588,30 @@ else:
     check("narrow paths: an ASCII path stays as it is", ins == [plain] and outs == [plain + ".txt"], str(ins))
     done()
     os.unlink(plain)
+    # a profile named in Chinese on a volume with no 8.3 names: a document is never copied into a folder of the
+    # machine's other users (C:\Users\Public, C:\ProgramData), only into one of this user's own, or nowhere
+    real_cache, real_short, real_home = mod.cache_root, mod.ownenv.ascii_path, mod.ownenv.home
+    no_short = os.path.join(ROOT, "許功蓋", "cache")
+    os.makedirs(no_short, exist_ok=True)
+    try:
+        mod.cache_root = lambda: no_short
+        mod.ownenv.ascii_path = lambda p: p
+        mod.ownenv.home = lambda: os.path.join(ROOT, "許功蓋", "home")
+        shared_root = mod.ascii_stage_root()
+        ins, outs, done = narrow([pdf], [out_txt])
+        done()
+        own_home = os.path.join(ROOT, "ascii-home-%d" % os.getpid())
+        mod.ownenv.home = lambda: own_home
+        home_root = mod.ascii_stage_root()
+    finally:
+        mod.cache_root, mod.ownenv.ascii_path, mod.ownenv.home = real_cache, real_short, real_home
+    shared = [x for x in (os.environ.get("PUBLIC"), os.environ.get("ProgramData")) if x]
+    check("narrow paths: with no ASCII folder of the user's own, nothing is copied into a folder other users read "
+          "(the program gets the path as it is)",
+          shared_root == "" and ins == [pdf] and not any(os.path.normcase(r) in os.path.normcase(ins[0]) for r in shared),
+          "%r %r" % (shared_root, ins))
+    check("... and an environment folder with an ASCII path (READ_PAGE_HOME) is one of the user's own",
+          bool(home_root) and os.path.normcase(home_root).startswith(os.path.normcase(own_home)), home_root)
 
 # ---------------------------------------------------------------- 8. what is sent in the user's name
 sub = getattr(intl, "sub_langs", None)

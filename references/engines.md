@@ -298,7 +298,8 @@ below runs on the standard library alone, so a machine that never ran `--setup` 
   the ANSI code page: a profile folder named in Chinese (a character outside code page 936, an emoji; in Big5
   a name with 許, 功 or 蓋, whose second byte is 0x5C, a backslash to a program that splits on it) or
   Cyrillic made them fail or read nothing. Such a file is linked (copied) into an ASCII folder under the cache
-  - or its 8.3 name, or a public folder of the system - under a name of ours, and the program's output is
+  - or its 8.3 name, or the environment's folder when its path is ASCII; never a folder the machine's other users
+  read, such as C:/Users/Public - under a name of ours, and the program's output is
   moved back. tesserocr reads its picture through Pillow, not through a path.
 - **The MCP server's standard input** is UTF-8 whatever the locale (it was the locale's code page unless
   Python had `-X utf8`: a Chinese URL or folder arrived as other characters).

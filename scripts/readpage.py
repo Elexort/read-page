@@ -582,15 +582,15 @@ def cmd_line(cmd):
 
 
 def ascii_stage_root():
-    """An ASCII-only folder for programs that take their arguments in the ANSI code page (pdftotext, tesseract, lynx):
-    under the cache when its path is ASCII, else its 8.3 short name, else one of the system's own public folders.
-    "" when there is none (not Windows, or no such folder is writable)."""
+    """An ASCII-only folder of this user's own for programs that take their arguments in the ANSI code page
+    (pdftotext, tesseract, lynx): under the cache when its path is ASCII, else its 8.3 short name, else the
+    environment's folder (READ_PAGE_HOME) when its path is ASCII. "" when there is none (not Windows, or none of
+    them is ASCII and writable): a document is never copied into a folder the machine's other users read
+    (C:\\Users\\Public, C:\\ProgramData), and the program then gets the path as it is."""
     if os.name != "nt":
         return ""
-    who = hashlib.sha1(os.path.expanduser("~").encode("utf-8", "replace")).hexdigest()[:8]
     base = cache_root()
-    for root in (base, ownenv.ascii_path(base), os.path.join(os.environ.get("PUBLIC", ""), "read-page-" + who),
-                 os.path.join(os.environ.get("ProgramData", ""), "read-page-" + who)):
+    for root in (base, ownenv.ascii_path(base), os.path.join(ownenv.home(), "cache")):
         if not root or not root.isascii():
             continue
         folder = os.path.join(root, "tmp")
