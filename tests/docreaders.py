@@ -461,8 +461,11 @@ check("200 000 stray end tags in a 6 MB paragraph: its text is not copied again 
       fine(info, 3) and "aaaa" in md, show(info, md))
 epub("feeds.epub", [("c1.xhtml", TRAP + "<p>" + "<a " * 1400000 + "></p>")], nav=False)
 md, info = hostile("feeds.epub", "epub")
+# (the bounds were 3 s and 200 MB: a macOS 26 runner peaked at 201 MB in 1.2 s, a macOS Intel runner took 4.1 s,
+# 2026-11-21. Before the fix the read took 2.5 s on Python 3.13 and 19.7 s on 3.9 (KNOWN-ISSUES 153): the check
+# is that time and memory do not grow with the parser's feeds, not the last megabyte or second of a slow machine)
 check("one tag 4 MB long is not scanned again at every 64 KB the parser is fed",
-      fine(info, 3, 200) and "Before the trap" in md, show(info, md))
+      fine(info, 6, 250) and "Before the trap" in md, show(info, md))
 
 # a run of unclosed ![ is linear, and a book's own Markdown characters stay text
 epub("pics.epub", [("c1.xhtml", TRAP + "<p>" + "![" * 10000 + "</p>")], nav=False)
