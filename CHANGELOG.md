@@ -393,7 +393,10 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   low, three of them fixed above; KNOWN-ISSUES 152-160, and 133). Files of 1-5 KB from
   the web made them take gigabytes or minutes. Each finding has a failing test first
   (`tests/docreaders.py` 42 -> 88, every hostile file built in the test at a small size and read in
-  a child Python killed past its time or memory); before -> after, measured with a probe (the
+  a child Python killed past its time or memory; the "linear, not quadratic" checks compare two
+  sizes on the same machine - a ratio under 8, 4 times the size taking about 4 times as long -
+  instead of a number of seconds, which a slow runner (macOS on Intel) exceeded);
+  before -> after, measured with a probe (the
   reader in a watched child, the converter's 10 s) and through the CLI:
   - **a process of their own**: with pandoc's process gone nothing could stop the converter
     step - the deadline is the read's own, and three CLI reads ended at 62.8, 82.1 and 91.0 s.

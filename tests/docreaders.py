@@ -183,7 +183,7 @@ t0 = time.time()
 md, note = docreaders.read(sys.argv[2], sys.argv[3], t0 + float(sys.argv[4]))
 with open(sys.argv[5], "w", encoding="utf-8", errors="replace") as fh:
     fh.write(md)
-print(json.dumps({"secs": round(time.time() - t0, 2), "note": note[:300], "peak": round(peak() / (1 << 20))}))
+print(json.dumps({"secs": round(time.time() - t0, 3), "note": note[:300], "peak": round(peak() / (1 << 20))}))
 """
 
 
@@ -214,6 +214,60 @@ def fine(info, secs, mb=100):
 
 def show(info, md=""):
     return "%s, %d chars" % (json.dumps(info)[:220], len(md))
+
+
+# "Linear, not quadratic" is a ratio, never a number of seconds: a slow runner (macOS on Intel took 3.2 s
+# for what takes 0.3 s here) makes every time longer, not the ratio between two sizes on the same machine.
+# 4 times the size takes about 4 times as long when the work is linear, 16 times when it is quadratic;
+# a ratio over 8 fails. A time under FLOOR is noise, so the smaller read counts as FLOOR at least. A
+# ratio that fails is measured again, the best of two (a busy machine slows one read, not both). The
+# reader's own time budget is BUDGET, which no machine reaches: it is a guard against a hang, not a bound.
+RATIO, FLOOR, BUDGET = 8.0, 0.05, 60.0
+
+
+def judge(hi, lo):
+    """Whether `hi` seconds, the larger input, is within RATIO times `lo` seconds, the smaller."""
+    return hi <= RATIO * max(lo, FLOOR)
+
+
+def scaled(make, kind, small, big, mb=250):
+    """The files make(big) and make(small) - make(size) writes one and returns its path - read in a child with
+    a budget that cannot cut it: (markdown of the big one, its info plus `small` seconds, `ratio`, `linear`)."""
+    def read(n):
+        return hostile(make(n), kind, BUDGET, BUDGET + 30, mb)
+    md, hi = read(big)
+    _, lo = read(small)
+    runs = [(hi, lo)]
+    if "killed" not in hi and "killed" not in lo and not judge(hi["secs"], lo["secs"]):
+        runs.append((read(big)[1], read(small)[1]))
+        runs = [r for r in runs if "killed" not in r[0] and "killed" not in r[1]] or runs
+    hi = min((r[0] for r in runs), key=lambda i: i.get("secs", 1e9))
+    lo = min((r[1] for r in runs), key=lambda i: i.get("secs", 1e9))
+    if "killed" in hi or "killed" in lo:
+        return md, hi if "killed" in hi else lo
+    info = dict(hi)
+    info.update(small=lo["secs"], ratio=round(hi["secs"] / max(lo["secs"], FLOOR), 1),
+                linear=judge(hi["secs"], lo["secs"]))
+    return md, info
+
+
+def fine_scaled(info, mb=100):
+    """A scaled read that ended by itself, in linear time, inside `mb` MB."""
+    return "killed" not in info and info["linear"] and info["peak"] < mb
+
+
+def scaled_call(fn, make, small, big):
+    """fn(make(small)) and fn(make(big)) in this process: (the big result, "big/small seconds (ratio)", linear)."""
+    def run(arg):
+        t0 = time.perf_counter()
+        out = fn(arg)
+        return out, time.perf_counter() - t0
+    big_arg, small_arg = make(big), make(small)
+    out, hi = run(big_arg)
+    lo = run(small_arg)[1]
+    if not judge(hi, lo):
+        hi, lo = min(hi, run(big_arg)[1]), min(lo, run(small_arg)[1])
+    return out, "%.3fs / %.3fs (ratio %.1f)" % (hi, lo, hi / max(lo, FLOOR)), judge(hi, lo)
 
 
 # ------------------------------------------------ EPUB
@@ -420,66 +474,71 @@ md, info = hostile("repeats.odt", "odt")
 check("an ODT table of rows and cells repeated 64 times each stays small (4.5 KB took 40 s, 164 MB out)",
       fine(info, 3, 120) and "Before the trap" in md and len(md) < 3000000 and "cut" in info.get("note", ""),
       show(info, md))
-cellx = b"".join(b"\\cellx%d" % (20 * (k + 1)) for k in range(3000))
-rtf("cellx.rtf", TRAP_RTF + b"\\trowd\\cellx9000000" + cellx + b"\\intbl a\\cell\\row" * 3000 + b"\\pard after\\par}")
-md, info = hostile("cellx.rtf", "rtf")
+md, info = scaled(lambda n: rtf("cellx.rtf", TRAP_RTF + b"\\trowd\\cellx9000000" +
+                                b"".join(b"\\cellx%d" % (20 * (k + 1)) for k in range(n)) +
+                                b"\\intbl a\\cell\\row" * n + b"\\pard after\\par}"), "rtf", 750, 3000)
 check("an RTF row of 3 000 borders over 3 000 rows is read in linear time (4 000 took 15.9 s)",
-      fine(info, 2, 120) and "Before the trap" in md and "after" in md, show(info, md))
+      fine_scaled(info, 120) and "Before the trap" in md and "after" in md, show(info, md))
 odt("spaces.odt", "<text:p>a%sb</text:p>" % ('<text:s text:c="200"/>' * 50000))
 md, info = hostile("spaces.odt", "odt")
 check("50 000 runs of 200 spaces in an ODT do not make 10 MB of them", fine(info, 3) and len(md) < 2000000,
       show(info, md))
 
 # no scan is quadratic - tags that never close, a long spine, the tree builder's rules
-epub("noteref.epub", [("c1.xhtml", xhtml(TRAP) + "<a " * 10000)], nav=False, raw=True)
-md, info = hostile("noteref.epub", "epub")
+md, info = scaled(lambda n: epub("noteref.epub", [("c1.xhtml", xhtml(TRAP) + "<a " * n)], nav=False, raw=True),
+                  "epub", 2500, 10000)
 check("a chapter ending in 10 000 unclosed <a is read in linear time (100 KB took 87.5 s)",
-      fine(info, 2) and "Before the trap" in md, show(info, md))
-epub("opf.epub", [("c1.xhtml", TRAP)], nav=False, opf='<?xml version="1.0"?><package><manifest>' + "<item " * 40000)
-md, info = hostile("opf.epub", "epub")
+      fine_scaled(info) and "Before the trap" in md, show(info, md))
+md, info = scaled(lambda n: epub("opf.epub", [("c1.xhtml", TRAP)], nav=False,
+                                 opf='<?xml version="1.0"?><package><manifest>' + "<item " * n),
+                  "epub", 10000, 40000)
 check("an OPF of 40 000 unclosed <item is read in linear time (400 KB took 20.6 s)",
-      fine(info, 2) and "Before the trap" in md, show(info, md))
-epub("container.epub", [("c1.xhtml", TRAP)], nav=False,
-     container='<?xml version="1.0"?><container>' + "<rootfile " * 30000)
-md, info = hostile("container.epub", "epub")
+      fine_scaled(info) and "Before the trap" in md, show(info, md))
+md, info = scaled(lambda n: epub("container.epub", [("c1.xhtml", TRAP)], nav=False,
+                                 container='<?xml version="1.0"?><container>' + "<rootfile " * n),
+                  "epub", 7500, 30000)
 check("a container of 30 000 unclosed <rootfile is read in linear time (400 KB took 12.4 s)",
-      fine(info, 2) and "Before the trap" in md, show(info, md))
-items = "".join('<item id="i%d" href="p%d.xhtml" media-type="application/xhtml+xml"/>' % (k, k) for k in range(30000))
-refs = "".join('<itemref idref="i%d"/>' % k for k in range(30000))
-epub("spine.epub", [("p0.xhtml", TRAP)], nav=False,
-     opf='<?xml version="1.0"?><package><manifest>%s</manifest><spine>%s</spine></package>' % (items, refs))
-md, info = hostile("spine.epub", "epub")
+      fine_scaled(info) and "Before the trap" in md, show(info, md))
+
+
+def spine(n):
+    items = "".join('<item id="i%d" href="p%d.xhtml" media-type="application/xhtml+xml"/>' % (k, k) for k in range(n))
+    refs = "".join('<itemref idref="i%d"/>' % k for k in range(n))
+    return epub("spine.epub", [("p0.xhtml", TRAP)], nav=False,
+                opf='<?xml version="1.0"?><package><manifest>%s</manifest><spine>%s</spine></package>' % (items, refs))
+
+
+md, info = scaled(spine, "epub", 7500, 30000)
 check("a spine of 30 000 distinct parts is read in linear time (40 000 took 13.9 s)",
-      fine(info, 2) and "Before the trap" in md, show(info, md))
-epub("button.epub", [("c1.xhtml", TRAP + "<p>open<button>" + "<span>" * 50000 + "<hr>" * 5000)], nav=False)
-md, info = hostile("button.epub", "epub")
+      fine_scaled(info) and "Before the trap" in md, show(info, md))
+md, info = scaled(lambda n: epub("button.epub", [("c1.xhtml", TRAP + "<p>open<button>" + "<span>" * n + "<hr>" * (n // 10))],
+                                 nav=False), "epub", 12500, 50000)
 check("an open <p> under a <button>, 50 000 deep, then 5 000 tags that close a <p> (each walked the stack)",
-      fine(info, 2) and "Before the trap" in md, show(info, md))
-epub("stray.epub", [("c1.xhtml", TRAP + "<p>" + ("a" * 30 + "</x>") * 200000 + "</p>")], nav=False)
-md, info = hostile("stray.epub", "epub")
+      fine_scaled(info) and "Before the trap" in md, show(info, md))
+md, info = scaled(lambda n: epub("stray.epub", [("c1.xhtml", TRAP + "<p>" + ("a" * 30 + "</x>") * n + "</p>")], nav=False),
+                  "epub", 50000, 200000)
 check("200 000 stray end tags in a 6 MB paragraph: its text is not copied again at each of them",
-      fine(info, 3) and "aaaa" in md, show(info, md))
-epub("feeds.epub", [("c1.xhtml", TRAP + "<p>" + "<a " * 1400000 + "></p>")], nav=False)
-md, info = hostile("feeds.epub", "epub")
-# (the bounds were 3 s and 200 MB: a macOS 26 runner peaked at 201 MB in 1.2 s, a macOS Intel runner took 4.1 s,
-# 2026-11-21. Before the fix the read took 2.5 s on Python 3.13 and 19.7 s on 3.9 (KNOWN-ISSUES 153): the check
-# is that time and memory do not grow with the parser's feeds, not the last megabyte or second of a slow machine)
-check("one tag 4 MB long is not scanned again at every 64 KB the parser is fed",
-      fine(info, 6, 250) and "Before the trap" in md, show(info, md))
+      fine_scaled(info) and "aaaa" in md, show(info, md))
+md, info = scaled(lambda n: epub("feeds.epub", [("c1.xhtml", TRAP + "<p>" + "<a " * n + "></p>")], nav=False),
+                  "epub", 350000, 1400000)
+# (it was 3 s and 200 MB, then 6 s and 250 MB: a macOS 26 runner peaked at 201 MB in 1.2 s, a macOS Intel runner took
+# 4.1 s and then 3.2 s of a 3 s budget, 2026-11-21. Before the fix the read took 2.5 s on Python 3.13 and 19.7 s on
+# 3.9 (KNOWN-ISSUES 153): 1 MB and 4 MB are read on the same machine, a ratio near 4 is linear, near 16 is not)
+check("one tag 4 MB long is not scanned again at every 64 KB the parser is fed (4 MB in under 8 times 1 MB)",
+      fine_scaled(info, 250) and "Before the trap" in md, show(info, md))
 
 # a run of unclosed ![ is linear, and a book's own Markdown characters stay text
-epub("pics.epub", [("c1.xhtml", TRAP + "<p>" + "![" * 10000 + "</p>")], nav=False)
-md, info = hostile("pics.epub", "epub")
+md, info = scaled(lambda n: epub("pics.epub", [("c1.xhtml", TRAP + "<p>" + "![" * n + "</p>")], nav=False),
+                  "epub", 2500, 10000)
 check("a paragraph of 10 000 unclosed ![ is read in linear time (40 KB took 32.7 s)",
-      fine(info, 2) and "Before the trap" in md, show(info, md))
-t0 = time.time()
-got = pictures.links("![" * 8000) + pictures.links("![](" * 8000)
+      fine_scaled(info) and "Before the trap" in md, show(info, md))
+got, note, linear = scaled_call(lambda s: pictures.links(s[0]) + pictures.links(s[1]),
+                                lambda n: ("![" * n, "![](" * n), 2000, 8000)
 check("the picture pass is linear on 8 000 unclosed ![ and on 8 000 ![]( (16 KB took 2.2 and 4.5 s)",
-      got == [] and time.time() - t0 < 0.5, "%.2fs" % (time.time() - t0))
-t0 = time.time()
-got = pictures.links("x\n" + "\n" * 30000 + "![a](b.png)")
+      got == [] and linear, note)
+got, note, linear = scaled_call(pictures.links, lambda n: "x\n" + "\n" * n + "![a](b.png)", 7500, 30000)
 check("30 000 blank lines cost the picture pass's fence scan nothing (it was quadratic)",
-      len(got) == 1 and time.time() - t0 < 0.5, "%.2fs" % (time.time() - t0))
+      len(got) == 1 and linear, note)
 p = epub("literal.epub", [("c1.xhtml", '<p><a href="http://example.org/spi"><img src="images/spi.png" alt="SPI"/>'
                                           '</a></p><p>A literal ![x](y), *****, [z] and _w_.</p>')], nav=False)
 md, note = docreaders.read(p, "epub")
@@ -491,18 +550,18 @@ check("a linked picture keeps its address", "[![SPI](OEBPS/images/spi.png)](http
       repr(md[:120]))
 
 # long RTF lists - one join, a level within RTF's 0-8
-rtf("list.rtf", TRAP_RTF + b"\\ls1 " + b"An item of a long list, forty-some characters\\par " * 40000 + b"}")
-md, info = hostile("list.rtf", "rtf")
+md, info = scaled(lambda n: rtf("list.rtf", TRAP_RTF + b"\\ls1 " + b"An item of a long list, forty-some characters\\par " * n +
+                                b"}"), "rtf", 10000, 40000)
 check("an RTF list of 40 000 items is read in linear time (100 000 took 60 s, past the deadline)",
-      fine(info, 2) and md.count("- An item") == 40000, show(info, md))
+      fine_scaled(info) and md.count("- An item") == 40000, show(info, md))
 rtf("ilvl.rtf", TRAP_RTF + b"\\ls1 " + b"".join(b"\\ilvl%d item\\par " % k for k in range(2000)) + b"}")
 md, info = hostile("ilvl.rtf", "rtf")
 check("\\ilvl0 to \\ilvl1999 do not indent 2 000 levels deep (4 000 gave 16 MB of spaces)",
       fine(info, 2) and md.count("item") == 2000 and len(md) < 200000, show(info, md))
-rtf("counters.rtf", TRAP_RTF + b"".join(b"\\pard\\ls%d{\\listtext 1.\\tab}x\\par " % k for k in range(20000)) + b"}")
-md, info = hostile("counters.rtf", "rtf")
+md, info = scaled(lambda n: rtf("counters.rtf", TRAP_RTF + b"".join(b"\\pard\\ls%d{\\listtext 1.\\tab}x\\par " % k
+                                                                    for k in range(n)) + b"}"), "rtf", 5000, 20000)
 check("20 000 numbered lists of their own are counted in linear time (each looked at every other)",
-      fine(info, 2) and md.count("1. x") == 20000, show(info, md))
+      fine_scaled(info) and md.count("1. x") == 20000, show(info, md))
 
 # the DOCTYPE guard through a newline, a BOM, UTF-16, a space; in a formula and in styles.xml
 BODY = ("<office:document-content %s><office:body><office:text>%s<text:p>&i;</text:p></office:text></office:body>"
@@ -580,12 +639,12 @@ check("a part whose reading breaks is named, and the parts around it are read",
 rtf("runs.rtf", b"{\\rtf1\\ansi " + b"x\\b x\\b0 " * 400000 + b"}")
 md, info = hostile("runs.rtf", "rtf")
 check("800 000 runs before one \\par take little memory (2 million took 904 MB)", fine(info, 4, 80), show(info, md))
-got, secs = timed(docreaders._marks, "a" + "\x0e/*\x0f" * 20000 + "\x0e*\x0f" * 20000 + "b")
+got, note, linear = scaled_call(docreaders._marks, lambda n: "a" + "\x0e/*\x0f" * n + "\x0e*\x0f" * n + "b", 5000, 20000)
 check("20 000 levels of emphasis side by side are joined in one pass (it was one pass a level)",
-      got == "ab" and secs < 0.5, "%.2fs %r" % (secs, got[:20]))
-got, secs = timed(docreaders._one_line, " " * 40000 + "x")
-check("a run of 40 000 no-break spaces is one line in linear time (it was quadratic)", got.endswith("x") and
-      secs < 0.5, "%.2fs" % secs)
+      got == "ab" and linear, "%s %r" % (note, got[:20]))
+got, note, linear = scaled_call(docreaders._one_line, lambda n: "\xa0 " * n + "x", 10000, 40000)
+check("a run of 40 000 no-break spaces is one line in linear time (it was quadratic)", got.endswith("x") and linear,
+      note)
 epub("parts.epub", [("p%05d.xhtml" % k, "<p>part %d</p>" % k) for k in range(20000)], nav=False)
 (md, note), secs = timed(docreaders.read, path("parts.epub"), "epub", time.time() - 1)
 check("a book out of time stops at once, and does not promise --download for 0 parts read",
