@@ -44,12 +44,14 @@ DEFUDDLE_VERSION = "0.19.4"
 # A full timestamp, UTC: npm reads a bare date as midnight UTC, and that instant binds defuddle's own
 # version too (a DEFUDDLE_VERSION published after it is not found). The pinned version must exist by it.
 DEFUDDLE_BEFORE = "2026-11-19T00:00:00Z"
-# no markitdown: ~200 MB (magika -> onnxruntime, sympy, numpy; pandas) for
-# what pandoc, the office readers and youtube-transcript-api do as well - the A/B is in
+# no markitdown: ~200 MB (magika -> onnxruntime, sympy, numpy; pandas) for what the office readers
+# and youtube-transcript-api do as well; no pandoc (2026-11-21, after the hardening of our own
+# readers): pypandoc_binary was 41 MB of the download and 226 MB on disk for EPUB, ODT and RTF,
+# which docreaders.py reads with the standard library, and better - both A/Bs are in
 # references/documents.md
 TOP = ["curl_cffi", "trafilatura", "readability-lxml", "lxml", "lxml_html_clean", "html2text",
        "pymupdf", "pymupdf4llm", "python-docx", "openpyxl", "python-pptx", "pillow", "psutil",
-       "youtube-transcript-api", "playwright", "tesserocr", "pypandoc_binary"]
+       "youtube-transcript-api", "playwright", "tesserocr"]
 # yt-dlp is the one engine that is not pinned: its work is to follow the sites,
 # and a pinned one stops reading YouTube within weeks. --setup takes its newest release that has
 # been out YTDLP_AGE_DAYS (a hijacked upload is usually caught sooner), with the challenge solver
@@ -57,7 +59,7 @@ TOP = ["curl_cffi", "trafilatura", "readability-lxml", "lxml", "lxml_html_clean"
 # YTDLP_EVERY_DAYS (ownenv.refresh_ytdlp). Packages it shares with the lock stay at the lock's.
 YTDLP = "yt-dlp[default]"
 YTDLP_AGE_DAYS = 3
-# What floats with it: its tree beyond the lock's 55 packages. Only these are held to the three days;
+# What floats with it: its tree beyond the lock's 54 packages. Only these are held to the three days;
 # the rest of its tree is the lock's (certifi, requests, urllib3, idna, charset-normalizer), and a pin of
 # the lock younger than three days must not make uv go looking for a yt-dlp old enough not to need it.
 YTDLP_FLOATS = ("yt-dlp", "yt-dlp-ejs", "brotli", "mutagen", "pycryptodomex", "websockets")
@@ -128,7 +130,7 @@ NODE_SHA256 = {   # Node 24.22.3's archives, from nodejs.org's SHASUMS256.txt, 2
     "node-v24.22.3-win-x64.zip":
         "e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f",
 }
-# The 55 packages are pinned by content in setup-lock.txt (--generate-hashes). Not checked by content:
+# The 54 packages are pinned by content in setup-lock.txt (--generate-hashes). Not checked by content:
 # yt-dlp and what floats with it (no hash can name a release that is newer than the repository), and
 # Playwright's browser, which Playwright downloads over TLS with a Content-Length check and no hash.
 BROWSER = "chromium-headless-shell"
@@ -872,11 +874,9 @@ class Work:
                     failed.append((top.split("[")[0], out1))
         self.env_rel, self.env_py = rel, py
         self.info.update(env=rel, python=os.path.relpath(py, self.d).replace(os.sep, "/"))
-        pandoc = self._pandoc(env)
-        if pandoc:
-            self.info["pandoc"] = os.path.relpath(pandoc, self.d).replace(os.sep, "/")
+        self.info.pop("pandoc", None)           # an environment of before 2026-11-21 named its pandoc
         for name, why in failed:
-            part = {"tesserocr": "tesseract", "pypandoc_binary": "pandoc", "playwright": "browser",
+            part = {"tesserocr": "tesseract", "playwright": "browser",
                     "readability-lxml": "readability"}.get(name, name)
             nowheel = "no wheel" in why.lower() or "not supported" in why.lower() or "no matching" in why.lower()
             self.lack(part, "%s %s" % (name, "has no build for this machine" if nowheel else
@@ -889,21 +889,6 @@ class Work:
     def _py_version(self, py):
         rc, out = self.sh([py, "-c", "import platform; print(platform.python_version())"], timeout=60)
         return out.split(" | ")[-1].strip() if rc == 0 else "3"
-
-    def _pandoc(self, env):
-        """pypandoc_binary's pandoc: <site-packages>/pypandoc/files/pandoc[.exe]."""
-        if os.name == "nt":
-            sites = [os.path.join(env, "Lib", "site-packages")]
-        else:
-            lib = os.path.join(env, "lib")
-            sites = [os.path.join(lib, n, "site-packages") for n in (os.listdir(lib) if os.path.isdir(lib) else [])
-                     if n.startswith("python")]
-        for site in sites:
-            for name in ("pandoc.exe", "pandoc"):
-                p = os.path.join(site, "pypandoc", "files", name)
-                if os.path.isfile(p):
-                    return p
-        return ""
 
     def ytdlp(self):
         ok, note = ytdlp_update(self.d, self.uv_exe, self.env_py, self.env, self.sh,
@@ -1351,9 +1336,6 @@ def _system_fix(part):
     if part == "browser":
         return ("winget install --id Google.Chrome" if os.name == "nt" else
                 "brew install --cask google-chrome" if sys.platform == "darwin" else "sudo apt install chromium")
-    if part == "pandoc":
-        return ("winget install --id JohnMacFarlane.Pandoc" if os.name == "nt" else
-                "brew install pandoc" if sys.platform == "darwin" else "sudo apt install pandoc")
     return ""
 
 
@@ -1385,16 +1367,14 @@ def check(d, out_path, info_path=""):
     res = {}
     # the engines that run something answer side by side while the imports are checked here
     side = [threading.Thread(target=lambda k=k, f=f: res.__setitem__(k, f(d, info)), daemon=True)
-            for k, f in (("defuddle", _check_defuddle), ("browser", _check_browser), ("tesseract", _check_ocr),
-                         ("pandoc", _check_pandoc))]
+            for k, f in (("defuddle", _check_defuddle), ("browser", _check_browser), ("tesseract", _check_ocr))]
     for t in side:
         t.start()
     mods = (("curl_cffi", "curl_cffi"), ("trafilatura", "trafilatura"), ("readability-lxml", "readability"),
             ("html2text", "html2text"), ("pymupdf", "pymupdf"), ("pymupdf4llm", "pymupdf4llm"),
             ("python-docx", "docx"), ("openpyxl", "openpyxl"), ("python-pptx", "pptx"), ("pillow", "PIL"),
             ("psutil", "psutil"), ("youtube-transcript-api", "youtube_transcript_api"), ("yt-dlp", "yt_dlp"),
-            ("playwright", "playwright"),
-            ("tesserocr", "tesserocr"), ("pypandoc_binary", "pypandoc"))
+            ("playwright", "playwright"), ("tesserocr", "tesserocr"))
     libs, broken = {}, []
     for dist, mod in mods:
         try:
@@ -1405,22 +1385,10 @@ def check(d, out_path, info_path=""):
     res["engines"] = {"ok": not broken, "versions": libs, "why": "; ".join(broken)}
     for t in side:
         t.join(240)
-    for k in ("defuddle", "browser", "tesseract", "pandoc"):
+    for k in ("defuddle", "browser", "tesseract"):
         res.setdefault(k, {"ok": False, "why": "its check did not end in 240 s"})
     _write_json(out_path, res)
     return 0 if all(v.get("ok") for v in res.values()) else 1
-
-
-def _check_pandoc(d, info):
-    pandoc = at(d, info.get("pandoc"))
-    try:
-        if not (pandoc and os.path.isfile(pandoc)):
-            raise OSError("pypandoc_binary's pandoc is not in the environment")
-        p = subprocess.run([pandoc, "--version"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
-        first = p.stdout.decode("utf-8", "replace").splitlines()[0] if p.stdout else ""
-        return {"ok": p.returncode == 0 and first.startswith("pandoc"), "version": first}
-    except (OSError, subprocess.SubprocessError, IndexError) as e:
-        return {"ok": False, "why": str(e)[:120]}
 
 
 def _check_defuddle(d, info):

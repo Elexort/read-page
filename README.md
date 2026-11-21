@@ -154,7 +154,7 @@ http  (curl_cffi, pinned TLS fingerprints, Accept: text/markdown, redirects chec
    -> signals: status, chars, cover = text words / visible words, fragment, block markers, login level
 headless browser (one, 20 s for load and settle by a measured rule; another only if it fails to start)
 readers: firecrawl -> jina -> exa -> tavily -> defuddle.md -> wayback   # only with --allow-external; keyless ones skipped; also for a dead host or a 5xx
-documents: pymupdf (a layout model for a PDF's tables) / office readers / pandoc / pdftotext + OCR     # pdf, docx, pptx, xlsx, epub, odt, rtf, zip
+documents: pymupdf (a layout model for a PDF's tables) / office readers / our EPUB, ODT, RTF readers / pdftotext + OCR   # pdf, docx, pptx, xlsx, epub, odt, rtf, zip
 ```
 
 Every read ends by 55 s, the CLI and MCP alike (MCP harnesses cancel a call at about 60 s), and
@@ -255,8 +255,9 @@ the skill's - `.read-page` in the home folder on Windows (not AppData: a package
 Claude's desktop app gets a private copy of what it writes there, and no other agent would see
 the environment), `~/Library/Application Support/read-page` on macOS, `$XDG_DATA_HOME` or
 `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it. It says first what it will fetch:
-about 430 MB to download on Windows (480 on Linux, 380 on macOS) and 1.2 GB on disk (on Windows:
-the Python engines 695 MB, pandoc 226 of them; the browser 275; Node and defuddle 130; Python 69).
+about 390 MB to download on Windows (445 on Linux, 355 on macOS) and about 0.95 GB on disk (on
+Windows: the Python engines 469 MB; the browser 275; Node and defuddle 130; Python 69 - pandoc's
+226 MB left with it on 2026-11-21, our own readers read EPUB, ODT and RTF).
 From nothing it takes about a minute (65-70 s on a 9 MB/s link, of which ~48 s are downloads; the
 steps side by side were no faster, measured), a check of an environment already up to
 date 8 s. From then on `readpage.py` and the MCP server run under that environment's Python by
@@ -267,7 +268,7 @@ runs in the machine's Python with an `environment:` line saying why, and `--setu
 `--setup` again brings the environment up to the skill's pins and checks every engine; deleting
 the folder removes it.
 
-What it downloads is checked: the 55 packages by the SHA256 of every file in the lock, uv's wheel
+What it downloads is checked: the 54 packages by the SHA256 of every file in the lock, uv's wheel
 and Node's archive by SHA256 pinned in the skill for each platform (a mirror serves the bytes, never
 their checksum). Two are not: yt-dlp, which floats by design, and Playwright's browser, which
 Playwright downloads over TLS with a size check and no hash. uv and Node trust the machine's own
@@ -287,11 +288,11 @@ in the background (`READ_PAGE_SKIP=update` turns that off).
 | `trafilatura`, `readability-lxml`, `html2text` | second opinions and the full-page fallback | 2.2.0, 0.9, 2025.4.15 |
 | headless Chromium | JavaScript pages, hash routes, late mounts | Playwright 1.63's `chromium-headless-shell`; a Chrome or Edge on the machine is used for screenshots |
 | `pymupdf`, `pymupdf4llm` | PDF text, its tables as tables (a small layout model, on the pages that look like they hold one), and the scanned-PDF path | 1.28.2 |
-| `pandoc` | EPUB, RTF, ODT and what the office readers miss, as Markdown | 3.9, in `pypandoc_binary` |
+| our EPUB, ODT and RTF readers | headings, nested lists, tables with merged cells, notes, links, pictures where they stand, code, formulas (ODT), code pages (RTF); against pandoc on 52 files they lost nothing it kept, and kept the endnotes, headings, tables and non-Latin RTF it lost | built in: `scripts/docreaders.py`, the standard library alone, in a process of its own (pandoc left `--setup` on 2026-11-21) |
 | `youtube-transcript-api` | a YouTube transcript when yt-dlp has none | 1.2.5 |
 | OCR | scanned PDFs (3 pages a document) and `--ocr N` | tesseract 5.5.4 in `tesserocr` 2.13, English and Russian from `tessdata_fast` |
 | `yt-dlp` | video subtitles and thumbnails | not pinned: the newest release that has been out three days, looked for again every three days by a video read |
-| `pillow`, `psutil`, `python-docx`, `openpyxl`, `python-pptx` | pictures for MCP, Office files | pinned in `scripts/setup-lock.txt` with all 55 packages |
+| `pillow`, `psutil`, `python-docx`, `openpyxl`, `python-pptx` | pictures for MCP, Office files | pinned in `scripts/setup-lock.txt` with all 54 packages |
 
 What `--setup` cannot do, it says, with this OS's command: OCR on Windows on ARM and macOS 14 or
 older (no `tesserocr` build: `winget`/`brew install tesseract`), the browser's system libraries on a
@@ -372,7 +373,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | The 226-page check (2026-11-06), pages picked to be hard | **202 ok, 6 blocked, 4 login_required, 5 not_found, 7 error, 2 empty**, each with its reason; p50 2.1 s, max 22.9 s on a fast machine, p50 4.8 s, max 30.9 s on an emulated weak laptop |
 | A set read the way `SKILL.md` says (2026-11-07): `--allow-external` first, advice followed, the outline to jump | a 34-page set **34 of 34**, 37 held-out pages no rule was tuned on **37 of 37** (each fact taken from a real Chrome; walls and paywalls by an honest status or through a reader); **1.10 calls** a question; every answer within 9 911 bytes and 309 lines, no CR; from the cache p50 0.22 s, max 0.26; UTF-8 whole in cmd, PowerShell 5.1 and 7, Git Bash and WSL under five code pages |
 | Contract | every manifest in the suite validated against `references/manifest-schema.json` (17 manifests, 0 errors) |
-| Tests | answer contract **84**, statuses **43**, timeouts **15**, deadline **22**, formats **76** (73 off Windows), reading **19**, sources **42**, blocks **26**, images **48**, speed **8**, MCP parallel **14**, security **42** (38 on Windows), props **82**, fixes **154**, channel **9**, setup audit **35**, environment **102** (94 off Windows), MCP **28**, office **3**, browser live **32**; against the real services: sources live **20** |
+| Tests | answer contract **84**, statuses **43**, timeouts **15**, deadline **22**, formats **76** (73 off Windows), reading **19**, sources **42**, blocks **26**, images **48**, speed **8**, MCP parallel **14**, security **42** (38 on Windows), props **82**, fixes **154**, channel **9**, setup audit **36**, environment **102** (94 off Windows), MCP **28**, office **3**, our EPUB/ODT/RTF readers **88** (89 on Linux), browser live **32**; against the real services: sources live **20** |
 | CI | ubuntu (3.9 and 3.12), windows, macOS; plus a browser job on all three |
 | Coverage | 65 % of the engine's statements |
 
@@ -411,12 +412,11 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (149 rows: 100 fixed, 11 planned, 38 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (165 rows: 114 fixed, 13 planned, 38 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License
 
 MIT. `--setup` fetches each engine from its own source under its own license (html2text GPL-3.0+,
-PyMuPDF, pymupdf4llm and its layout model AGPL-3.0 or Artifex's commercial license, pandoc
-GPL-2.0+, the rest permissive); the skill ships none of
-them.
+PyMuPDF, pymupdf4llm and its layout model AGPL-3.0 or Artifex's commercial license, the rest
+permissive); the skill ships none of them.

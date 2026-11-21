@@ -16,14 +16,15 @@ STATE_SCHEMA = 1
 
 
 def _size_note():
-    """What --setup downloads and keeps: the pinned wheels by
+    """What --setup downloads and keeps (without markitdown and pandoc): the pinned wheels by
     PyPI's sizes and the Python, Node and browser archives by their Content-Length; on disk as
-    measured on Windows and on Linux (WSL). macOS is counted, not measured."""
+    measured on Windows and on Linux (WSL), less pandoc's installed size there (226 and 162 MB).
+    macOS is counted, not measured."""
     if os.name == "nt":
-        return "downloads about 430 MB, takes 1.2 GB on disk, no admin rights"
+        return "downloads about 390 MB, takes about 0.95 GB on disk, no admin rights"
     if sys.platform == "darwin":
-        return "downloads about 380 MB, takes about 1.1 GB on disk, no admin rights"
-    return "downloads about 480 MB, takes 1.3 GB on disk, no admin rights"
+        return "downloads about 355 MB, takes about 1.0 GB on disk, no admin rights"
+    return "downloads about 445 MB, takes about 1.1 GB on disk, no admin rights"
 
 
 SIZE_NOTE = _size_note()
@@ -428,9 +429,8 @@ def _tools(d, info):
     """Inside the environment: its programs before the machine's, its browsers and OCR data."""
     env = at(d, info.get("env"))
     add = [os.path.join(env, "Scripts" if os.name == "nt" else "bin")]
-    for key in ("node_bin", "pandoc"):
-        if info.get(key):
-            add.append(os.path.dirname(at(d, info[key])))
+    if info.get("node_bin"):                     # (an environment of before 2026-11-21 named a pandoc too)
+        add.append(os.path.dirname(at(d, info["node_bin"])))
     if info.get("npm"):
         npm = at(d, info["npm"])
         add.append(npm if os.name == "nt" else os.path.join(npm, "bin"))
