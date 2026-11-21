@@ -36,7 +36,7 @@ git-ignored, so a contributor may keep a file of their own under that name.
   the skill's folder) and
   `uvx vermin --target=3.8- --violations --no-tips --eval-annotations scripts tests`.
 - CI: `tests.yml` on every push (Ubuntu with Python 3.9 and 3.12, Windows, a browser job, lint);
-  `macos.yml` by hand before a release (`gh workflow run macos.yml --ref main`), not on every push.
+  `macos.yml` on every push to dev (macOS 15, arm64), or by hand from the Actions tab.
   Every suite runs even when an earlier one failed, so read all of a red run.
 - Bugs that belong to one OS (sockets and processes on Linux, paths and subprocesses on Windows)
   show only there: CI's Ubuntu and Windows jobs, and its oldest Python (3.9), are the check.

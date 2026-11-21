@@ -1,8 +1,10 @@
 name: macos
 
 # The offline suites on macOS (macos-15, arm64): paths, subprocesses and browser discovery differ
-# there. It is started by hand before a release (`gh workflow run macos.yml --ref main`), not on every push.
+# there. It runs on every push to dev, and can be started by hand from the Actions tab.
 on:
+  push:
+    branches: [dev]
   workflow_dispatch:
 
 jobs:

@@ -8,6 +8,8 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- CI: the repository is public, so `macos.yml` runs on every push to dev, as `tests.yml` does.
+
 **`readpage.py --setup`**
 - **one command installs every engine** into the skill's own environment, one folder of the user's
   (`.read-page` in the home folder on Windows, `~/Library/Application Support/read-page`,
