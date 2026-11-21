@@ -4,7 +4,7 @@ Measured on 2026-10-29/31. Times are warm, one page, one Windows machine.
 
 | Engine | Does | Costs | Fails at |
 |---|---|---|---|
-| `curl_cffi` (a pinned browser fingerprint, see below) | HTTP with a Chrome/Firefox/Safari TLS+HTTP2 fingerprint; decompresses gzip/br. The encoding: a BOM, then the header (latin-1 counts as unsaid), `<meta>`, UTF-8 - each kept only when the text reads like its script - then the bytes (`charset_normalizer`): KOI8-R, windows-1251, Shift_JIS, GBK, EUC-KR, UTF-16 all read right | 0.2-1.5 s | JavaScript pages; some sites challenge the newest `chrome` profile |
+| `curl_cffi` (a pinned browser fingerprint, see below) | HTTP with a Chrome/Firefox/Safari TLS+HTTP2 fingerprint; decompresses gzip/br. The encoding: a BOM, then the header (latin-1 counts as unsaid), `<meta>`, UTF-8 - each kept only when the text reads like its script - then the bytes themselves (`scripts/intl.py`, below): GBK, Big5, Shift_JIS, EUC-JP, EUC-KR, KOI8-R, windows-1251, UTF-16 all read right, with or without `charset_normalizer` | 0.2-1.5 s | JavaScript pages; some sites challenge the newest `chrome` profile |
 | system `curl` | the same without the TLS fingerprint, with `--compressed`; also used for internal hosts | 0.1-0.6 s | walls that read the fingerprint (npm: 403) |
 | `urllib` (standard library) | the last HTTP channel, when neither curl_cffi nor curl is there: the same redirect checks and bounds | 0.1-0.6 s | the same walls as curl |
 | `defuddle` (Node) | main content + metadata; best coverage on framework docs. Inline elements lose their ids before it sees the page (a footnote's stays): its clutter list ("next-" among ~590 words) removed term links inside sentences, the WHATWG specs' among them. An inline SVG it passes through as markup becomes `[diagram: its labels]` | +0.9 s | JS shells, walls; an inline element whose class holds a clutter word |
@@ -251,6 +251,58 @@ them the screens come one by one and `improve:` names Pillow. Nothing is scaled.
 - **Pin more than one fingerprint.** Sites add rules against the freshest Chrome profile: on 2026-10-30
   npm returned 403 for `impersonate="chrome"` and 200 for `chrome124`, `chrome120`, `safari17_0`.
   The client walks `IMPERSONATIONS` on a refused 4xx instead of giving up, then plain curl once.
+
+## Language and encoding outside English (`scripts/intl.py`)
+
+A reader that is used in Chinese, Japanese, Korean or Russian meets what a Latin-1 habit gets wrong. Everything
+below runs on the standard library alone, so a machine that never ran `--setup` has it, and `tests/cjk.py`
+(offline) is its suite.
+
+- **The bytes of a page.** After the BOM, the header and `<meta>` (a declared `gb2312`, `gbk` or `x-gbk` is read
+  as gb18030, `big5` as Big5-HKSCS, `shift_jis` as Windows-31J and `euc-kr` as Windows-949, as a browser does:
+  the strict codecs stop at the first character outside their set, and most Chinese pages that say gb2312 hold
+  one) and strict UTF-8 (a character cut in two by the size limit stays UTF-8), a body that says nothing is read
+  as each of GB18030, Big5-HKSCS, Shift_JIS, EUC-JP, EUC-KR, windows-1251 and KOI8-R, and the reading whose
+  non-ASCII characters are most often the common ones of its script wins (about 800 ideographs of both
+  variants, the kana, the 150 Hangul syllables a Korean text is three quarters made of; a Cyrillic reading
+  also needs lower-case words). Ideographs alone cannot tell GBK from Big5 - both decode every pair of bytes
+  into ideographs - the common ones can. Ties go to the codec of the machine's ANSI code page, or its user's
+  language. `charset_normalizer`, when installed, is a second opinion for what this does not recognise (Western
+  text, mostly): on 10 to 20 characters of GBK it answered cp949, cp932 or cp1006.
+- **A guess says so.** `url.charset` names the codec. When the page named none, `signals.charset_guess` holds
+  it - with ` (doubtful)` when the reading rests on under ten characters, or two readings are alike, or
+  Cyrillic and Chinese compete - and the answer's first line says `charset gb18030 (guessed)` (`guessed,
+  doubtful`); a doubtful reading also becomes the `advice` when there is none. Nothing is said for a page that
+  named its charset or is UTF-8.
+- **Addresses.** A raw `https://例子.测试/页面?q=中文` is turned from an IRI into a URI - the host to punycode, the
+  rest percent-encoded as UTF-8, what is already escaped untouched - at every place an address leaves the
+  program: curl_cffi, curl (argv: Git's curl, older Windows curls and package-manager builds take the ANSI
+  code page, and sent the path in GBK), urllib, a picture, the archive's snapshot. The address the user gave
+  is what the manifest and the cache key keep.
+- **What is sent in the user's name.** `READ_PAGE_LANG` (`zh-CN`, `zh-TW`, `ja`, `ru`, or a list `zh-CN,en`) is
+  the user's language; unset, it is the operating system's list - the language the machine is set to first (Windows'
+  user locale; elsewhere `LC_ALL`, `LC_MESSAGES`, `LANG`, `LANGUAGE`; a Mac's own setting), then the others the
+  user put in it (`ownenv.system_languages`) - then English. From it: `Accept-Language` on every HTTP channel
+  (`zh-CN,zh;q=0.9,en;q=0.8`, `en-US,en;q=0.9,ru;q=0.8` for an English first language with Russian after it; for an English or unknown user curl and urllib send `en-US,en;q=0.9` and
+  curl_cffi leaves its impersonation's own header, the same), the browser's locale (`zh-CN`, `en-US` for
+  English) with the same header, the subtitle tracks asked of yt-dlp when `READ_PAGE_SUB_LANGS` is not set
+  (`zh-Hans,zh-CN,zh,en`; `ru,en`; `en`; a video with none of them is asked once more for the language its
+  own info names) and the OCR language packs (below). `READ_PAGE_SUB_LANGS` and `READ_PAGE_OCR_LANGS`,
+  when set, are the user's own word and win.
+- **OCR languages.** The packs asked for are `READ_PAGE_OCR_LANGS` (`eng`), the pack of the text's script
+  (`chi_sim` or `chi_tra` by the characters only one of them has, `jpn` where there is kana, `kor` for Hangul,
+  `rus` for Cyrillic) and, unless the variable is set, the packs of the user's languages (at most three) - each only if installed. A
+  pack the text called for and the machine lacks is `signals.ocr_missing_langs` and an `improve` line; the
+  user's own language's pack is named when a scan gives no text, and `--ocr N` names it on its `ocr:` line.
+- **Programs with narrow arguments.** On Windows pdftotext, tesseract's command and lynx get their arguments in
+  the ANSI code page: a profile folder named in Chinese (a character outside code page 936, an emoji; in Big5
+  a name with 許, 功 or 蓋, whose second byte is 0x5C, a backslash to a program that splits on it) or
+  Cyrillic made them fail or read nothing. Such a file is linked (copied) into an ASCII folder under the cache
+  - or its 8.3 name, or the environment's folder when its path is ASCII; never a folder the machine's other users
+  read, such as C:/Users/Public - under a name of ours, and the program's output is
+  moved back. tesserocr reads its picture through Pillow, not through a path.
+- **The MCP server's standard input** is UTF-8 whatever the locale (it was the locale's code page unless
+  Python had `-X utf8`: a Chinese URL or folder arrived as other characters).
 
 ## Every timeout, retry and fallback: one deadline, a fuse per step
 

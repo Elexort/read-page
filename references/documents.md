@@ -109,7 +109,7 @@ command - the same pages are OCR'd side by side and the result becomes the text 
 document:ocr`, `signals.ocr_pages`), so a text-only pipeline gets words instead of a picture.
 Measured on a synthetic scan: "SCANNED REPORT / Total 42 units" read back correctly. Languages
 follow `READ_PAGE_OCR_LANGS` (`eng` by default, and in the environment English plus the packs `--setup` fetched for the user's languages - `eng+chi_sim` on a Chinese Windows; with `eng+deu` the next
-`--setup` fetches German; `--ocr N` adds `rus` by itself on a page written in it),
+`--setup` fetches German; outside the environment the packs of the user's own languages (`READ_PAGE_LANG`, else the system's list) are added when installed and `READ_PAGE_OCR_LANGS` is not set; `--ocr N` adds the pack of a page's script - `rus`, `chi_sim`/`chi_tra`, `jpn`, `kor` - by itself, and a pack a scan or a page needs and the machine lacks is named in `improve`),
 `READ_PAGE_TESSDATA` points at a data folder outside the install (the environment sets its own). Without OCR nothing changes: the answer names the fix, and
 a vision model can still read `files.pages` more accurately than OCR.
 

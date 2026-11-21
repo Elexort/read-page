@@ -184,6 +184,11 @@ def header(manifest, view, total_lines, text_bytes):
     if stamp:
         first.append("archive copy of %s-%s-%s" % (stamp[:4], stamp[4:6], stamp[6:8]) if len(stamp) >= 8
                      else "archive copy")
+    guess = str(signals.get("charset_guess") or "")
+    if guess:
+        # the page named no encoding and the text was read by a guess: the reader of the answer may need to know
+        first.append("charset %s" % (guess.replace(" (doubtful)", "") + (" (guessed, doubtful)" if "(doubtful)" in guess
+                                                                          else " (guessed)")))
     first.append("%s %s, %d line%s" % (view, _human(text_bytes), total_lines, "" if total_lines == 1 else "s"))
     if m.get("cache") in ("hit", "revalidated"):
         first.append("from cache" if m["cache"] == "hit" else "from cache, revalidated")
@@ -237,6 +242,8 @@ def header(manifest, view, total_lines, text_bytes):
         else:
             parts += [x for x in (o.get("engine"), o.get("langs"), o.get("pass") and "%s pass" % o["pass"]) if x]
             parts.append("%.1f s" % float(o.get("seconds") or 0))
+            if o.get("note"):
+                parts.append(str(o["note"]))               # a language pack the text called for and this machine lacks
         rows.append(("ocr: " + " · ".join(p.strip() for p in parts))[:300])
     if m.get("advice"):
         rows.append("advice: " + str(m["advice"])[:400])

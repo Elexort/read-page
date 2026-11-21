@@ -314,7 +314,12 @@
           "type": "array",
           "items": {
             "type": "string"
-          }
+          },
+          "description": "language packs the read wanted (named in READ_PAGE_OCR_LANGS, or chosen by the user's language or the text's script) that tesseract does not have; the answer's `improve` names them"
+        },
+        "charset_guess": {
+          "type": "string",
+          "description": "the page said nothing about its encoding, so its text was read by a guess: the codec, with \"(doubtful)\" when the reading may be wrong (little text, or two readings alike). Absent when the page named its encoding or is UTF-8"
         },
         "env_failed": {
           "type": "string",

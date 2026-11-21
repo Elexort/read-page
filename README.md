@@ -321,7 +321,7 @@ name of its data folder where the volume makes one, else by the folder's own nam
 OCR languages: `--setup` fetches English and the packs of the user's own languages - the one the
 machine is set to (Windows' user locale, else `LC_ALL`/`LANG`) and the others in the user's list (Windows'
 language list, `LANGUAGE`, a Mac's AppleLanguages), at most three; Chinese goes by script - and a read in the
-environment reads with them beside English (Russian keeps its own rule: a Cyrillic page). Any other language: name it in `READ_PAGE_OCR_LANGS`
+environment reads with them beside English; the script of the page or the picture decides too - `chi_sim` or `chi_tra`, `jpn`, `kor`, `rus` when the text is Chinese, Japanese, Korean or Russian - and a pack the text needs and the machine lacks is named in `improve`. Any other language: name it in `READ_PAGE_OCR_LANGS`
 (`eng+deu`), then `--setup` again; the variable also decides what a read uses. Without the environment the skill uses whatever the machine
 has, as before. Behind a proxy it uses the machine's (`HTTPS_PROXY`, or Windows' own setting); a
 company's package mirror named in `UV_DEFAULT_INDEX` or `PIP_INDEX_URL` is used for the Python
@@ -338,6 +338,18 @@ mirror each: `UV_DEFAULT_INDEX` (Python packages), `UV_PYTHON_INSTALL_MIRROR` (o
 a `uv.toml`, an `.npmrc`, a `pip.conf`, `NODE_TLS_REJECT_UNAUTHORIZED=0` - is named at the top of the setup's
 log and in the setup report (credentials left out); `UV_NO_VERIFY_HASHES` is not passed on, so the lock's
 hashes always decide. An offline machine gets a clear message and nothing changes.
+
+### Another language, another alphabet
+
+`READ_PAGE_LANG` (`zh-CN`, `zh-TW`, `ja`, `ru`, or a list `zh-CN,en`; unset: the system's languages in the user's order, then English)
+is what the reader sends in the user's name: `Accept-Language` on every HTTP channel, the browser's locale, the
+subtitle tracks yt-dlp is asked for (`READ_PAGE_SUB_LANGS` still wins) and the OCR language pack. A page, a text
+file or a CSV that names no encoding is read by what its characters are - GBK, Big5, Shift_JIS, EUC-KR, KOI8-R,
+with or without `charset_normalizer` - and such a reading is named a guess in the manifest and the answer's first
+line (`charset gb18030 (guessed)`), a doubtful one too. A raw address with Chinese in it
+(`https://例子.测试/页面`) goes out as UTF-8 through every channel, and the MCP server's standard input is UTF-8
+whatever the code page is. The reader prints UTF-8 whatever the console's code page is: set `PYTHONUTF8=1` (or
+`chcp 65001`) where a program reads its output as the console's code page. Details: `references/engines.md`.
 
 ### Keys, and what they cost
 
@@ -409,7 +421,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | The 226-page check (2026-11-06), pages picked to be hard | **202 ok, 6 blocked, 4 login_required, 5 not_found, 7 error, 2 empty**, each with its reason; p50 2.1 s, max 22.9 s on a fast machine, p50 4.8 s, max 30.9 s on an emulated weak laptop |
 | A set read the way `SKILL.md` says (2026-11-07): `--allow-external` first, advice followed, the outline to jump | a 34-page set **34 of 34**, 37 held-out pages no rule was tuned on **37 of 37** (each fact taken from a real Chrome; walls and paywalls by an honest status or through a reader); **1.10 calls** a question; every answer within 9 911 bytes and 309 lines, no CR; from the cache p50 0.22 s, max 0.26; UTF-8 whole in cmd, PowerShell 5.1 and 7, Git Bash and WSL under five code pages |
 | Contract | every manifest in the suite validated against `references/manifest-schema.json` (17 manifests, 0 errors) |
-| Tests | answer contract **84**, statuses **43**, timeouts **15**, deadline **22**, formats **93** (90 off Windows), reading **19**, sources **42**, blocks **26**, images **53**, speed **8**, MCP parallel **14**, security **42** (38 on Windows), props **82**, fixes **154**, channel **9**, setup audit **39**, environment **175** (168 off Windows), MCP **28**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **122** (121 on macOS), browser live **32**; against the real services: sources live **20** |
+| Tests | answer contract **84**, statuses **43**, timeouts **15**, deadline **22**, formats **93** (90 off Windows), reading **19**, sources **42**, blocks **26**, images **53**, speed **8**, MCP parallel **14**, security **42** (38 on Windows), props **82**, fixes **154**, channel **9**, setup audit **39**, environment **175** (168 off Windows), MCP **28**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **122** (121 on macOS), Chinese, Japanese and Korean input **136** (131 off Windows, 107 without curl_cffi and charset_normalizer), browser live **32**; against the real services: sources live **20** |
 | CI | the offline suites on ubuntu (3.9 and 3.12), windows, macOS; a browser job on all three; and a real install - `--setup` from nothing into a folder with a space and Cyrillic in its path, every engine checked, the suites and a scanned PDF read through OCR under the environment's Python, `--setup` again with nothing to fetch - on Linux, Windows and macOS, x64 and arm64, a user's own clone-and-read, a bare Python, and containers of Alpine, Ubuntu 20.04 and 24.04, Debian 11, Rocky Linux 8, Fedora, Arch and openSUSE, a proxy that inspects TLS (Linux, Windows, macOS), a Windows whose Python has the code page 936 or 950 in a profile named in Chinese, README's ZIP, and the suites in a GBK locale on Linux (`install.yml`) |
 | Coverage | 65 % of the engine's statements |
 
@@ -448,7 +460,7 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (179 rows: 136 fixed, 4 planned, 39 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (188 rows: 144 fixed, 4 planned, 40 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License

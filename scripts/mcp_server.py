@@ -37,6 +37,14 @@ PROTOCOL = "2025-06-18"
 # agent); readpage then points the cache of its own modules and of every read's process out of it
 sys.dont_write_bytecode = True
 sys.path.insert(0, HERE)
+# The wire is UTF-8 (JSON-RPC's), whatever the locale: a Chinese Windows reads standard input as GBK unless Python
+# was started with -X utf8, and the JSON line of a client's config rarely says so - a Chinese URL or folder
+# arrived as other characters. Before anything is read or written, and not as a side effect of an import.
+for _stream, _kw in ((sys.stdin, {}), (sys.stdout, {"newline": "\n"})):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace", **_kw)
+    except (AttributeError, OSError, ValueError):
+        pass
 import ownenv                        # noqa: E402
 if __name__ == "__main__":
     # the skill's own environment (readpage.py --setup): the server, and so every read it starts,
