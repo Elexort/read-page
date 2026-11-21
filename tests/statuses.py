@@ -189,6 +189,135 @@ for lang, (phrase, sentence) in WALLS.items():
     prose = " ".join([FILLER[lang]] * 12)
     r_["/article/" + lang] = (200, H, page("Article " + lang, "<article><h1>Article</h1><p>%s</p></article>" % prose))
 
+# What a sign-in wall says, one sentence a language, as walls word it ("sign in to continue"), and a
+# sentence of prose that quotes it. A wall is the sentence on a page of a few words; an article that
+# quotes it is not one.
+SIGNIN = {
+    "en": ("Sign in to continue", "Many sites show a box that says sign in to continue, and that is all the page they send."),
+    "ru": ("Войдите, чтобы продолжить", "Многие сайты показывают окно «войдите, чтобы продолжить», и это всё, что они отдают."),
+    "uk": ("Увійдіть, щоб продовжити", "Багато сайтів показують вікно «увійдіть, щоб продовжити», і це все, що вони віддають."),
+    "de": ("Melden Sie sich an, um fortzufahren", "Viele Seiten zeigen ein Fenster mit melden Sie sich an, um fortzufahren, und mehr nicht."),
+    "fr": ("Connectez-vous pour continuer", "Beaucoup de sites affichent une fenêtre qui dit connectez-vous pour continuer, et rien de plus."),
+    "es": ("Inicia sesión para continuar", "Muchos sitios muestran un cuadro que dice inicia sesión para continuar, y nada más."),
+    "pt": ("Faça login para continuar", "Muitos sites mostram uma caixa que diz faça login para continuar, e nada mais."),
+    "it": ("Accedi per continuare", "Molti siti mostrano una finestra che dice accedi per continuare, e nient'altro."),
+    "nl": ("Log in om verder te gaan", "Veel sites tonen een venster met log in om verder te gaan, en verder niets."),
+    "pl": ("Zaloguj się, aby kontynuować", "Wiele stron pokazuje okno z napisem zaloguj się, aby kontynuować, i nic więcej."),
+    "cs": ("Pro pokračování se přihlaste", "Mnoho stránek ukazuje okno s větou pro pokračování se přihlaste, a nic víc."),
+    "tr": ("Devam etmek için giriş yapın", "Birçok site devam etmek için giriş yapın yazan bir pencere gösterir, başka bir şey değil."),
+    "sv": ("Logga in för att fortsätta", "Många sajter visar en ruta som säger logga in för att fortsätta, och inget mer."),
+    "ja": ("続きを読むにはログインしてください", "多くのサイトは続きを読むにはログインしてくださいと書かれた枠を出し、それ以外は何も渡さない。"),
+    "zh": ("请登录后查看全文", "许多网站会显示一个写着请登录后查看全文的框，除此之外什么也不给。"),
+    "ko": ("계속 읽으려면 로그인이 필요합니다", "많은 사이트가 계속 읽으려면 로그인이 필요합니다라고 적힌 상자만 보여 준다."),
+    "ar": ("يرجى تسجيل الدخول للمتابعة", "تعرض مواقع كثيرة مربعا يقول يرجى تسجيل الدخول للمتابعة ولا شيء غير ذلك."),
+    "hi": ("जारी रखने के लिए लॉग इन करें", "कई साइटें एक बॉक्स दिखाती हैं जिसमें जारी रखने के लिए लॉग इन करें लिखा होता है, बस।"),
+    "id": ("Masuk untuk melanjutkan", "Banyak situs menampilkan kotak yang berbunyi masuk untuk melanjutkan, dan tidak lebih."),
+    "vi": ("Đăng nhập để tiếp tục", "Nhiều trang hiển thị một khung ghi đăng nhập để tiếp tục, và không gì hơn."),
+}
+# a subscription wall: the sentence a paywall puts where the article was
+SUBSCRIBE = {
+    "en": "Subscribe to read the full story", "ru": "Материал доступен только для подписчиков",
+    "de": "Dieser Artikel ist nur für Abonnenten", "fr": "Article réservé aux abonnés",
+    "es": "Contenido exclusivo para suscriptores", "pt": "Conteúdo exclusivo para assinantes",
+    "it": "Questo articolo è riservato agli abbonati", "ja": "この記事は有料会員限定です", "zh": "订阅后阅读全文",
+    "ko": "이 기사는 구독자 전용입니다", "ar": "هذا المحتوى للمشتركين فقط", "id": "Konten ini khusus pelanggan",
+}
+# the label of a sign-in form, and the language names a form of this kind lists beside it
+FORM = {
+    "en": "Log in to your account", "ru": "Войти в аккаунт", "uk": "Увійти до облікового запису",
+    "de": "Bei Ihrem Konto anmelden", "fr": "Se connecter à votre compte", "es": "Iniciar sesión en tu cuenta",
+    "pt": "Entrar na sua conta", "it": "Accedi a Facebook", "nl": "Inloggen op uw account", "pl": "Zaloguj się do konta",
+    "cs": "Přihlášení k účtu", "tr": "Hesabınıza giriş yapın", "sv": "Logga in på ditt konto", "ja": "アカウントにログイン",
+    "zh": "登录您的账户", "ko": "계정에 로그인", "ar": "تسجيل الدخول إلى حسابك", "hi": "अपने खाते में लॉग इन करें",
+    "id": "Masuk ke akun Anda", "vi": "Đăng nhập vào tài khoản",
+}
+LANGNAMES = ("English Español Français Deutsch Русский Português Italiano Nederlands Polski Čeština Türkçe Svenska "
+             "日本語 中文 한국어 العربية हिन्दी Bahasa Tiếng ")
+
+
+def form_page(label, extra=""):
+    return page(label, "<h1>%s</h1><p>%s</p><form action='/x' method='post'><input type='email' name='e'>"
+                       "<input type='password' name='p'></form><p>%s</p>" % (label, LANGNAMES * 2, extra))
+
+
+# "page not found", a template's sentence a language; a 404 page with menus around it; an article that quotes it
+NOTFOUND = {
+    "en": "Page cannot be found", "ru": "Страница не найдена", "uk": "Сторінку не знайдено", "de": "Seite nicht gefunden",
+    "fr": "Page introuvable", "es": "Página no encontrada", "pt": "Página não encontrada", "it": "Pagina non trovata",
+    "nl": "Pagina niet gevonden", "pl": "Strona nie istnieje", "cs": "Stránka nenalezena", "tr": "Sayfa bulunamadı",
+    "sv": "Sidan hittades inte", "ja": "ページが見つかりません", "zh": "页面不存在", "ko": "페이지를 찾을 수 없습니다",
+    "ar": "الصفحة غير موجودة", "hi": "पृष्ठ नहीं मिला", "id": "Halaman tidak ditemukan", "vi": "Không tìm thấy trang",
+}
+ZH_NOTFOUND = ("找不到页面", "您访问的页面不存在", "404 页面", "頁面不存在", "找不到網頁", "您訪問的頁面不存在")
+QUOTING = ("A server may answer 200 and print «%s» on a page: this article explains how soft 404 pages are made, "
+           "why crawlers read them as pages, and what a client can do to tell them from the real ones. ")
+MENU = ("Home News Sport Weather Shop Contact About Careers Help Terms Privacy Cookies Sitemap Search Login Basket " * 8)
+for lang in SIGNIN:
+    wall, quoted = SIGNIN[lang]
+    r_["/signin/" + lang] = (200, H, page(wall, "<h1>%s</h1><p>%s</p>" % (wall, wall)))
+    r_["/signin-article/" + lang] = (200, H, page("Article", "<article><h1>Article</h1><p>%s</p></article>"
+                                                  % (" ".join([quoted] * 12))))
+    r_["/form/" + lang] = (200, H, form_page(FORM[lang]))
+    r_["/missing/" + lang] = (200, H, page(NOTFOUND[lang], "<h1>%s</h1><p>%s</p>" % (NOTFOUND[lang], NOTFOUND[lang])))
+    r_["/missing-menu/" + lang] = (200, H, page(NOTFOUND[lang] + " | Example", "<nav>%s</nav><h1>%s</h1>" % (MENU, NOTFOUND[lang])))
+    r_["/missing-article/" + lang] = (200, H, page("Article", "<article><h1>Article</h1><p>%s</p></article>"
+                                                   % ((QUOTING % NOTFOUND[lang]) * 6)))
+for lang, sentence in SUBSCRIBE.items():
+    r_["/subscribe/" + lang] = (200, H, page(sentence, "<h1>%s</h1><p>%s</p>" % (sentence, sentence)))
+for i, phrase in enumerate(ZH_NOTFOUND):
+    r_["/missing-zh/%d" % i] = (200, H, page(phrase, "<h1>%s</h1><p>%s</p>" % (phrase, phrase)))
+# a password field and a short page of prose that is not about signing in: no wall; a long page with a login box: no wall
+r_["/form-other"] = (200, H, form_page("Newsletter settings", "Choose how often we write to you and which topics you "
+                                       "want: the weekly digest, the monthly report, or nothing at all."))
+r_["/form-other-ja"] = (200, H, form_page("設定", "ニュースレターの配信頻度と話題を選んでください。週刊、月刊、または配信なし。"))
+r_["/form-long"] = (200, H, page("Shop", "<header><a href='/login'>Log in</a><form><input type='password'></form></header>"
+                                 "<article><h1>Shop</h1><p>" + LONG_EN + "</p></article>"))
+r_["/missing-long-title"] = (200, H, page("Page not found: a short history of 404 pages",
+                                          "<article><h1>Page not found: a short history of 404 pages</h1><p>"
+                                          + LONG_EN + "</p></article>"))
+# a page of the shell kind: the server sends no words, a script draws "Страница не найдена"
+r_["/missing-js"] = (200, H, page("App", "<div id='app'></div><script>document.getElementById('app').innerHTML="
+                                  "'<h1>Страница не найдена</h1><p>Вернитесь на главную.</p>'</script>"))
+
+
+def ld(node, body="", head=""):
+    """A page whose JSON-LD is `node` and whose body is an article."""
+    return page("Story", "%s<script type='application/ld+json'>%s</script><article><h1>Story</h1><p>%s</p></article>"
+                % (head, json.dumps(node), body or LONG_EN))
+
+
+# a paywall written in JavaScript: the article is in the HTML, the schema says it is not free
+ART = {"@context": "https://schema.org", "@type": "NewsArticle", "headline": "Story"}
+r_.update({
+    "/pw-ld": (200, H, ld(dict(ART, isAccessibleForFree=False))),
+    "/pw-string": (200, H, ld(dict(ART, isAccessibleForFree="False"))),
+    "/pw-part": (200, H, ld(dict(ART, isAccessibleForFree="False", hasPart={
+        "@type": "WebPageElement", "isAccessibleForFree": "False", "cssSelector": ".paywall"}))),
+    "/pw-graph": (200, H, ld({"@context": "https://schema.org", "@graph": [
+        {"@type": "WebSite", "name": "Site"}, dict(ART, isAccessibleForFree=False)]})),
+    "/pw-micro": (200, H, page("Story", "<article itemscope itemtype='https://schema.org/NewsArticle'>"
+                                        "<meta itemprop='isAccessibleForFree' content='False'><h1>Story</h1><p>"
+                                        + LONG_EN + "</p></article>")),
+    # the first 100 words of a story and a box under them: the text is there, cut
+    "/pw-teaser": (200, H, ld(dict(ART, isAccessibleForFree=False),
+                              LONG_EN[:700] + " Subscribe to continue reading this article.")),
+    # a short article between two long menus: a fragment of the page as well as paywalled; the advice says both
+    "/pw-fragment": (200, H, page("Story", "<script type='application/ld+json'>%s</script><header><nav><ul>%s</ul></nav>"
+                                           "</header><article><h1>Story</h1><p>%s</p></article><footer><ul>%s</ul></footer>"
+                                  % (json.dumps(dict(ART, isAccessibleForFree=False)), "<li><a href='/p'>Section of the "
+                                     "site menu and its sub pages</a></li>" * 400, LONG_EN[:700],
+                                     "<li><a href='/p'>Section of the site menu and its sub pages</a></li>" * 400))),
+    "/pw-free": (200, H, ld(dict(ART, isAccessibleForFree=True))),
+    "/pw-event": (200, H, ld({"@context": "https://schema.org", "@type": "MusicEvent", "name": "Concert",
+                              "isAccessibleForFree": False})),
+    "/pw-code": (200, H, page("Marking a paywall", "<article><h1>Marking a paywall</h1><p>Mark a paywalled page like this:"
+                                                   "</p><pre><code>{&quot;isAccessibleForFree&quot;: false, &quot;hasPart&quot;: "
+                                                   "{&quot;cssSelector&quot;: &quot;.paywall&quot;}}</code></pre><p>"
+                              + LONG_EN + "</p></article>")),
+    "/pw-class": (200, H, page("Story", "<div class='paywall'></div><div class='meteredContent'></div><article><h1>Story"
+                                        "</h1><p>" + LONG_EN + "</p></article>")),
+})
+
 try:
     # ------------------------------------------------ a cut transfer says so
     for path in ("/truncated", "/stall"):
@@ -255,6 +384,96 @@ try:
     check("a wall is blocked in all %d languages" % len(WALLS), not walls_missed, "missed: %s" % walls_missed)
     check("an article that quotes the wall is ok in all %d languages" % len(WALLS), not articles_hit,
           "wrong: %s" % articles_hit)
+
+    # ------------------------------------------------ a sign-in wall in twenty languages
+    walls_missed = [lang for lang in SIGNIN if status(run_read(s.public.url("/signin/" + lang))) != "login_required"]
+    check("\"sign in to continue\" is login_required in all %d languages" % len(SIGNIN), not walls_missed,
+          "missed: %s" % walls_missed)
+    walls_missed = [lang for lang in SUBSCRIBE
+                    if status(run_read(s.public.url("/subscribe/" + lang))) != "login_required"]
+    check("\"for subscribers only\" is login_required in %d languages" % len(SUBSCRIBE), not walls_missed,
+          "missed: %s" % walls_missed)
+    # Facebook's form is 55-66 words and Instagram's 40-48: a password field and the form's own sign-in
+    # label, on a page of a few dozen words. Two of them in the twenty languages read as `ok` before.
+    walls_missed = [lang for lang in FORM if status(run_read(s.public.url("/form/" + lang))) != "login_required"]
+    check("a password form and its sign-in label are login_required in all %d languages" % len(FORM), not walls_missed,
+          "missed: %s" % walls_missed)
+    for path, what in (("/form-other", "a password field and a page about newsletter settings"),
+                       ("/form-other-ja", "a password field and Japanese prose that does not say sign in"),
+                       ("/form-long", "a shop's page with a login box in its header")):
+        r = run_read(s.public.url(path))
+        check("%s is a page, not a sign-in wall" % what, status(r) == "ok", "%s: %s" % (status(r), reason(r)[:60]))
+    for lang in ("en", "zh"):
+        r = run_read(s.public.url("/signin-article/" + lang))
+        check("an article that quotes \"%s\" is ok (%s)" % (SIGNIN[lang][0], lang), status(r) == "ok",
+              "%s: %s" % (status(r), reason(r)[:60]))
+
+    # ------------------------------------------------ a page that says it is not there, twenty languages and Chinese
+    missed = [lang for lang in NOTFOUND if status(run_read(s.public.url("/missing/" + lang))) != "not_found"]
+    check("a soft 404 (200, a few words, \"page not found\") is not_found in all %d languages" % len(NOTFOUND),
+          not missed, "missed: %s" % missed)
+    missed = [p for p in ZH_NOTFOUND if status(run_read(s.public.url("/missing-zh/%d" % ZH_NOTFOUND.index(p)))) != "not_found"]
+    check("Chinese soft 404s (找不到页面, 您访问的页面不存在, 404 页面, 頁面不存在, ...) are not_found", not missed,
+          "missed: %s" % missed)
+    for lang in ("ru", "zh", "ar"):
+        r = run_read(s.public.url("/missing-menu/" + lang))
+        check("a 404 template under its menu (140 words) is not_found when its title says so (%s)" % lang,
+              status(r) == "not_found", "%s: %s" % (status(r), reason(r)[:60]))
+    for lang in ("en", "ja"):
+        r = run_read(s.public.url("/missing-article/" + lang))
+        check("an article that quotes \"%s\" is ok" % NOTFOUND[lang], status(r) == "ok",
+              "%s: %s" % (status(r), reason(r)[:60]))
+    r = run_read(s.public.url("/missing-long-title"))
+    check("a long article titled \"Page not found: ...\" is an article", status(r) == "ok",
+          "%s: %s" % (status(r), reason(r)[:60]))
+    # a shell the server sends with no words: the page is "not found" only once a script has drawn it
+    r = run_read(s.public.url("/missing-js"))
+    tried = " ".join((r.manifest.get("chain") or {}).get("tried") or [])
+    if "browser" not in tried:
+        check.skip("a soft 404 a script draws", "no browser here (%s)" % tried)
+    else:
+        check("a soft 404 that only the browser's page says is not_found", status(r) == "not_found",
+              "%s: %s | %r" % (status(r), reason(r)[:60], r.file("content.md")[:60]))
+
+    # ------------------------------------------------ the same words, decided in the process
+    spec_w = importlib.util.spec_from_file_location("rp_status_walls", SCRIPT)
+    mod_w = importlib.util.module_from_spec(spec_w)
+    spec_w.loader.exec_module(mod_w)
+    fp_login = [lang for lang, (_w, quoted) in SIGNIN.items()
+                if mod_w.login_state("", " ".join([quoted] * 12), 200, "http://x/", "http://x/")[0]]
+    check("an article that quotes the sign-in sentence gets no login state at all, in all %d languages" % len(SIGNIN), not fp_login,
+          "wrong: %s" % fp_login)
+    fp_404 = [lang for lang in NOTFOUND
+              if mod_w.soft_404_marker("Article", "Article", (QUOTING % NOTFOUND[lang]) * 6,
+                                       mod_w.words_of((QUOTING % NOTFOUND[lang]) * 6))]
+    check("an article that quotes the not-found sentence is no 404, in all %d languages" % len(NOTFOUND), not fp_404,
+          "wrong: %s" % fp_404)
+    check("a page about a word is not a 404: a dictionary entry for `404` is 150 words of prose",
+          not mod_w.soft_404_marker("404 - Wiktionary", "404", "404 is a number. " * 50, 150))
+
+    # ------------------------------------------------ a paywall written in JavaScript
+    for path, want in (("/pw-ld", ""), ("/pw-string", ""), ("/pw-part", ".paywall"), ("/pw-graph", ""), ("/pw-micro", ""),
+                       ("/pw-teaser", "")):
+        r = run_read(s.public.url(path))
+        sig = str((r.manifest.get("signals") or {}).get("paywall") or "")
+        check("%s: the article is there (ok), and the answer says the page is paywalled" % path,
+              status(r) == "ok" and "isAccessibleForFree" in sig and want in sig
+              and "paywalled" in (r.manifest.get("advice") or ""),
+              "%s | %s | %s" % (status(r), sig[:70], (r.manifest.get("advice") or "")[:50]))
+    r = run_read(s.public.url("/pw-fragment"))
+    check("a paywalled page that is also a fragment of its page: the advice says both",
+          "paywalled" in (r.manifest.get("advice") or "") and "of the visible text" in (r.manifest.get("advice") or ""),
+          (r.manifest.get("advice") or "")[:120])
+    r = run_read(s.public.url("/pw-ld"))
+    check("a paywalled page keeps its text: content.md has the article, not a stub",
+          "servers lie about what they send" in r.file("content.md"), r.file("content.md")[:60])
+    for path, what in (("/pw-free", "isAccessibleForFree: true"), ("/pw-event", "a ticketed event (isAccessibleForFree: false)"),
+                       ("/pw-code", "an article that prints the markup in a <pre>"),
+                       ("/pw-class", "a container named paywall and no schema")):
+        r = run_read(s.public.url(path))
+        check("%s is no paywall" % what, status(r) == "ok" and not (r.manifest.get("signals") or {}).get("paywall")
+              and "paywall" not in (r.manifest.get("advice") or ""),
+              "%s | %s" % (status(r), (r.manifest.get("signals") or {}).get("paywall")))
 
     # ------------------------------------------------ an archived PDF goes through the document path
     spec = importlib.util.spec_from_file_location("rp_status_a8", SCRIPT)

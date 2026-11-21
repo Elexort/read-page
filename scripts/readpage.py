@@ -219,7 +219,64 @@ def impersonations():
 
 SKIP = engines.SKIP           # READ_PAGE_SKIP: one set, shared with the extractors' module
 
+# A page that says in its title, its heading or its first lines that it is not there, and has
+# few words: a soft 404 (the server answers 200). `404` and the English words count on a page under
+# SOFT_404_WORDS; the phrases of NOTFOUND_PHRASES, in about twenty languages, are a template's own
+# sentence, so a title or heading that says one counts on a page up to SOFT_404_TITLE_WORDS (a 404
+# page often carries a menu: Tweakers 62 words, Taobao 123, Almasry Alyoum 173 of the probes).
 NOTFOUND_MARKERS = ("page not found", "not found", "404", "does not exist", "no longer available")
+SOFT_404_WORDS = 40
+SOFT_404_TITLE_WORDS = 200
+NOTFOUND_PHRASES = (
+    # en
+    "page cannot be found", "page can't be found", "page could not be found", "page you requested",
+    "page you are looking for", "page you're looking for", "this page doesn't exist", "this page isn't available",
+    "we couldn't find that page", "we can't find that page",
+    # ru, uk
+    "страница не найдена", "страница не существует", "страницы не существует", "страницы нет", "такой страницы нет",
+    "запрашиваемая страница не найдена", "запрашиваемой страницы не существует", "ошибка 404",
+    "сторінку не знайдено", "сторінка не знайдена", "сторінки не існує", "сторінка не існує", "такої сторінки немає",
+    "помилка 404",
+    # de, fr, es, pt, it, nl
+    "seite nicht gefunden", "seite wurde nicht gefunden", "seite konnte nicht gefunden werden", "seite existiert nicht",
+    "seite gibt es nicht", "seite ist nicht mehr verfügbar", "fehler 404", "404-fehler",
+    "page introuvable", "page non trouvée", "cette page n'existe pas", "la page demandée n'existe pas",
+    "page inexistante", "erreur 404", "cette page est introuvable",
+    "página no encontrada", "la página no existe", "esta página no existe", "página no disponible",
+    "no se ha encontrado la página", "no se encontró la página", "no se pudo encontrar la página", "error 404",
+    "página não encontrada", "página não existe", "esta página não existe", "página inexistente",
+    "não foi possível encontrar a página", "página indisponível", "erro 404",
+    "pagina non trovata", "la pagina non esiste", "questa pagina non esiste", "pagina inesistente",
+    "pagina non disponibile", "errore 404",
+    "pagina niet gevonden", "pagina kon niet worden gevonden", "pagina kan helaas niet worden gevonden",
+    "pagina kon niet gevonden worden", "pagina bestaat niet", "deze pagina bestaat niet", "pagina is niet gevonden",
+    "pagina niet beschikbaar", "pagina kon niet geladen worden", "fout 404",
+    # pl, cs, tr, sv
+    "strona nie została znaleziona", "nie znaleziono strony", "strona nie istnieje", "ta strona nie istnieje",
+    "strona nie jest dostępna", "błąd 404",
+    "stránka nenalezena", "stránka nebyla nalezena", "stránku se nepodařilo najít", "stránka neexistuje",
+    "tato stránka neexistuje", "chyba 404",
+    "sayfa bulunamadı", "sayfa bulunamadi", "sayfa mevcut değil", "sayfa mevcut degil", "aradığınız sayfa",
+    "aradiginiz sayfa", "hata 404", "404 hatası",
+    "sidan hittades inte", "sidan kunde inte hittas", "sidan finns inte", "sidan existerar inte", "fel 404",
+    # ja, zh, ko
+    "ページが見つかりません", "お探しのページ", "お探しのコンテンツ", "ページが表示できません", "ページにアクセスできません", "ページは存在しません", "ページが存在しません", "存在しないページ",
+    "エラー404", "404エラー",
+    "页面不存在", "找不到页面", "找不到该页面", "找不到此页面", "页面未找到", "页面找不到", "没有找到页面", "页面无法访问",
+    "页面走丢", "页面没有找到", "您访问的页面", "你访问的页面", "404 页面", "404页面", "404 错误", "404错误", "网页不存在", "文章不存在",
+    "数据不存在",
+    "頁面不存在", "找不到頁面", "找不到網頁", "頁面未找到", "您訪問的頁面", "404 頁面", "404頁面", "404 錯誤", "404錯誤",
+    "網頁不存在",
+    "페이지를 찾을 수 없", "페이지가 없어요", "페이지가 존재하지 않", "존재하지 않는 페이지", "요청하신 페이지", "삭제되었거나 존재하지 않",
+    "404 오류", "에러 404",
+    # ar, hi, id, vi
+    "الصفحة غير موجودة", "لم يتم العثور على الصفحة", "الصفحة المطلوبة غير", "الصفحه المطلوبه غير", "الصفحة التي تبحث عنها", "الصفحة غير متاحة", "الصفحه غير متاحه",
+    "تعذر العثور على الصفحة", "خطأ 404",
+    "पृष्ठ नहीं मिला", "पेज नहीं मिला", "पृष्ठ मौजूद नहीं", "पेज मौजूद नहीं", "त्रुटि 404",
+    "halaman tidak ditemukan", "halaman yang anda cari", "halaman tidak tersedia", "halaman tidak ada",
+    "halaman yang diminta tidak", "kesalahan 404",
+    "không tìm thấy trang", "trang không tồn tại", "trang không được tìm thấy", "trang bạn tìm không", "nội dung không tìm thấy", "nội dung không tồn tại", "lỗi 404",
+)
 
 # Walls. First what a server says without words: a header, a challenge in the markup.
 WALL_HEADERS = (("cf-mitigated", "challenge"), ("x-vercel-mitigated", ""), ("x-amzn-waf-action", ""))
@@ -330,6 +387,32 @@ def fold(s):
 _WALL_STRONG = tuple(fold(p) for p in WALL_STRONG)
 _WALL_WEAK = tuple(fold(p) for p in WALL_WEAK)
 _WALL_COOKIES = tuple(fold(p) for p in WALL_COOKIES)
+_NOTFOUND_MARKERS = tuple(fold(p) for p in NOTFOUND_MARKERS)
+_NOTFOUND_PHRASES = tuple(fold(p) for p in NOTFOUND_PHRASES)
+
+
+def _lead(text, n):
+    """The first n characters of a text as a reader sees them: a picture marker and a link's address left out."""
+    t = pictures.MARK.sub(" ", (text or "")[:2000])
+    t = re.sub(r"\]\([^)\s]*(?:\s+\"[^\"]*\")?\)", "]", t)
+    return fold(re.sub(r"\s+", " ", t).strip()[:n])
+
+
+def soft_404_marker(title, heading, text, words):
+    """The phrase that makes a 200 answer a page that is not there ("" when none does): a marker in
+    the title, the heading or the first lines of a page under SOFT_404_WORDS, or a phrase of a 404
+    template there, or in the first lines, of a page under SOFT_404_TITLE_WORDS."""
+    if words >= SOFT_404_TITLE_WORDS:
+        return ""
+    t, hd = fold(title), fold(heading)
+    if words < SOFT_404_WORDS:
+        first, marks = _lead(text, 160), _NOTFOUND_MARKERS + _NOTFOUND_PHRASES
+    else:
+        first, marks = _lead(text, 300), _NOTFOUND_PHRASES
+    for m in marks:
+        if m in t or m in hd or m in first:
+            return m
+    return ""
 
 
 def words_of(text):
@@ -6695,14 +6778,109 @@ def docx_notes(data):
 
 
 LOGIN_URL = re.compile(r"(^|/)(login|log-in|signin|sign-in|auth|sso|session)(/|$|\?)|accounts\.google\.com", re.I)
-LOGIN_PHRASE = re.compile(r"(sign in to continue|log in to continue|sign in to view|log in to view|"
-                          r"sign in to read|log in to read|subscribe to continue|subscribe to read|"
-                          r"already a subscriber|create an account to continue|"
-                          r"войдите, чтобы|войдите чтобы|требуется вход)", re.I)
-LOGIN_HINT = re.compile(r"(sign in|log in|login|sign up|войти|зарегистрир|"
-                        r"ログイン|会員登録|お申し込み|有料会員|登录|订阅|"
-                        r"anmelden|iniciar sesión|se connecter)", re.I)
+# What a wall says in a sentence, in about twenty languages: "sign in to continue", "subscribe to read",
+# "for subscribers only". Not a word that prose uses: they count on a page of under LOGIN_PHRASE_WORDS
+# words (a teaser and a subscribe box are one; an article that quotes one is not).
+LOGIN_PHRASE_WORDS = 80
+LOGIN_PHRASES = (
+    # en
+    "sign in to continue", "log in to continue", "login to continue", "sign in to view", "log in to view",
+    "sign in to read", "log in to read", "sign in to see", "log in to see", "sign in to access", "log in to access",
+    "subscribe to continue", "subscribe to read", "subscribe to unlock", "subscribe to keep reading",
+    "unlock this article", "already a subscriber", "already a paid subscriber", "create an account to continue",
+    "create a free account to continue", "register to continue", "register to read", "sign up to read",
+    "for subscribers only", "this article is for subscribers", "this post is for paid subscribers",
+    "you must be logged in", "you must be signed in", "you must log in", "you need to log in", "you need to sign in",
+    "login required",
+    "please log in", "please sign in",
+    # ru, uk
+    "войдите, чтобы", "войдите чтобы", "требуется вход", "авторизуйтесь, чтобы", "авторизуйтесь чтобы",
+    "для продолжения войдите", "для продолжения необходимо войти", "необходимо авторизоваться", "требуется авторизация",
+    "необходима авторизация", "только для подписчиков", "доступно по подписке", "подпишитесь, чтобы",
+    "оформите подписку, чтобы",
+    "увійдіть, щоб", "увійдіть щоб", "авторизуйтесь, щоб", "потрібна авторизація", "необхідно авторизуватися",
+    "лише для передплатників", "тільки для передплатників", "передплатіть, щоб", "підпишіться, щоб",
+    # de, fr, es, pt, it, nl
+    "melden sie sich an, um", "melden sie sich an um", "loggen sie sich ein, um", "bitte melden sie sich an",
+    "bitte loggen sie sich ein", "nur für abonnenten", "sie müssen angemeldet sein",
+    "sie müssen eingeloggt sein", "jetzt weiterlesen mit",
+    "connectez-vous pour continuer", "connectez-vous pour accéder", "connectez-vous pour voir",
+    "connectez-vous pour lire", "identifiez-vous pour", "veuillez vous connecter", "vous devez être connecté",
+    "abonnez-vous pour lire", "abonnez-vous pour continuer", "réservé aux abonnés", "article réservé aux",
+    "inicia sesión para", "iniciar sesión para continuar", "debes iniciar sesión", "necesitas iniciar sesión",
+    "suscríbete para", "solo para suscriptores", "exclusivo para suscriptores", "regístrate para continuar",
+    "faça login para", "faça o login para", "entre para continuar", "assine para ler", "assine para continuar",
+    "exclusivo para assinantes", "para continuar lendo", "já é assinante", "você precisa estar logado",
+    "inicie sessão para",
+    "accedi per continuare", "accedi per leggere", "accedi per visualizzare", "effettua l'accesso per",
+    "abbonati per leggere", "abbonati per continuare", "riservato agli abbonati", "per continuare a leggere",
+    "devi effettuare l'accesso", "registrati per continuare",
+    "log in om verder", "log in om te", "inloggen om", "meld u aan om", "word abonnee om", "alleen voor abonnees",
+    "bent u abonnee", "ben je al abonnee", "u moet ingelogd zijn", "je moet ingelogd zijn",
+    # pl, cs, tr, sv
+    "zaloguj się, aby", "zaloguj się, żeby", "zaloguj się aby", "tylko dla prenumeratorów", "tylko dla subskrybentów",
+    "wykup dostęp", "musisz być zalogowany",
+    "přihlaste se pro pokračování", "pro pokračování se přihlaste", "přihlaste se, abyste", "pouze pro předplatitele",
+    "musíte být přihlášeni",
+    "devam etmek için giriş", "devam etmek için oturum", "görüntülemek için giriş", "okumak için giriş",
+    "okumak için abone", "abonelere özel", "yalnızca abonelere", "giriş yapmanız gerekiyor",
+    "logga in för att", "bli prenumerant", "endast för prenumeranter", "prenumerera för att", "du måste logga in",
+    # ja, zh, ko
+    "ログインして続き", "ログインしてください", "ログインが必要", "続きを読むには", "続きをみるには", "会員登録が必要",
+    "会員限定", "有料会員限定", "有料記事", "購読者限定", "この記事は有料",
+    "登录后查看", "登录后可见", "登录后阅读", "登录后继续", "登录查看", "请先登录", "请登录后", "登入後", "請先登入",
+    "請登入後", "付费阅读", "付費閱讀", "订阅后阅读", "訂閱後閱讀", "仅限订阅", "僅限訂閱", "会员专享", "會員專享",
+    "仅限会员", "僅限會員", "开通会员", "解锁全文", "解鎖全文", "付费内容", "付費內容",
+    "로그인이 필요", "로그인 후", "로그인하세요", "로그인해 주세요", "로그인하시기 바랍니다", "구독 후", "구독자 전용",
+    "구독자만", "유료 회원", "회원 전용", "유료 콘텐츠", "프리미엄 콘텐츠",
+    # ar, hi, id, vi
+    "سجل الدخول للمتابعة", "سجّل الدخول للمتابعة", "سجل دخولك", "يرجى تسجيل الدخول", "يجب تسجيل الدخول",
+    "للمشتركين فقط", "اشترك للقراءة", "اشترك للاستمرار", "محتوى حصري للمشتركين",
+    "जारी रखने के लिए लॉग इन", "पढ़ना जारी रखने के लिए", "आगे पढ़ने के लिए", "देखने के लिए लॉग इन", "सब्सक्राइबर्स के लिए",
+    "केवल सदस्यों के लिए", "लॉगिन करना होगा",
+    "masuk untuk melanjutkan", "login untuk melanjutkan", "login untuk melihat", "masuk untuk melihat", "silakan masuk",
+    "silakan login", "berlangganan untuk membaca", "berlangganan untuk melanjutkan", "khusus pelanggan",
+    "hanya untuk pelanggan", "anda harus login", "anda harus masuk",
+    "đăng nhập để tiếp tục", "đăng nhập để xem", "đăng nhập để đọc", "vui lòng đăng nhập", "bạn cần đăng nhập",
+    "bạn phải đăng nhập", "đăng ký để đọc", "dành cho thành viên",
+)
+# The words of a sign-in form, one language by one: weak on a page of a few words by themselves,
+# medium beside a password field (a form of Facebook's is 55-66 words, Instagram's 40-48).
+LOGIN_FORM_WORDS = 120
+LOGIN_HINTS = (
+    "sign in", "log in", "login", "sign up", "log into",
+    "войти", "войдите", "авторизуйтесь", "зарегистрир", "забыли пароль",
+    "увійти", "увійдіть", "авторизуйтесь", "зареєстру", "забули пароль",
+    "anmelden", "einloggen", "registrieren", "passwort vergessen",
+    "se connecter", "connectez-vous", "identifiez-vous", "s'identifier", "mot de passe oublié",
+    "iniciar sesión", "inicia sesión", "iniciar sesion", "regístrate", "olvidaste tu contraseña",
+    "fazer login", "faça login", "iniciar sessão", "esqueceu a senha", "entrar no", "entrar na",
+    "accedi a", "accedi con", "accedi o registrati", "effettua l'accesso", "password dimenticata",
+    "inloggen", "aanmelden", "wachtwoord vergeten",
+    "zaloguj", "nie pamiętasz hasła",
+    "přihlásit", "přihlášení", "přihlaste", "zapomenuté heslo",
+    "giriş yap", "oturum aç", "üye ol", "şifremi unuttum",
+    "logga in", "inloggning", "glömt lösenord",
+    "ログイン", "サインイン", "会員登録", "新規登録", "お申し込み", "有料会員",
+    "登录", "登錄", "登入", "登录/注册", "注册/登录", "免费注册", "立即注册", "订阅", "忘记密码", "忘記密碼",
+    "로그인", "회원가입", "비밀번호 찾기",
+    "تسجيل الدخول", "تسجيل دخول", "إنشاء حساب", "نسيت كلمة",
+    "लॉग इन", "लॉगिन", "साइन इन", "साइन अप", "पासवर्ड भूल",
+    "masuk ke", "lupa kata sandi", "lupa password", "daftar akun", "daftar sekarang",
+    "đăng nhập", "đăng ký tài khoản", "quên mật khẩu",
+)
+_LOGIN_PHRASES = tuple(fold(p) for p in LOGIN_PHRASES)
+_LOGIN_HINTS = tuple(fold(p) for p in LOGIN_HINTS)
 PASSWORD = re.compile(r"(?is)<input[^>]+type\s*=\s*[\"']?password")
+
+
+def login_words(text):
+    """The size of a short text for the sign-in rules: Chinese and Japanese count two characters to a word,
+    as a sign-in form of 70 words is 140 characters of either (words_of counts each: a 2 000-character
+    article must not look short, and the rules here are about pages that are)."""
+    t = text or ""
+    cjk = len(_CJK.findall(t))
+    return len(_CJK.sub(" ", t).split()) + (cjk + 1) // 2
 
 
 def login_state(html, text, status, final, requested):
@@ -6712,19 +6890,94 @@ def login_state(html, text, status, final, requested):
     if final and requested and final != requested and LOGIN_URL.search(final):
         return "strong", "redirected to " + final[:100]
     body = text or ""
-    words = len(body.split())
+    words = login_words(body)
     pwd = bool(PASSWORD.search(html or ""))
     if pwd and words < 40:
         return "medium", "password form and little text"
-    if words < 80 and LOGIN_PHRASE.search(body):
+    low = fold(body) if words < max(LOGIN_PHRASE_WORDS, LOGIN_FORM_WORDS) else ""
+    if words < LOGIN_PHRASE_WORDS and any(p in low for p in _LOGIN_PHRASES):
         return "medium", "text asks to sign in or subscribe"
-    head = body[:max(1, len(body) // 4)]
+    if pwd and words < LOGIN_FORM_WORDS and any(p in low for p in _LOGIN_HINTS):
+        return "medium", "a password form and a sign-in phrase on a short page"
     # A password field or a "sign in" note on a long page is a header modal, not a wall: 27 835
     # characters of a shop came with a login dialog and the advice "text may be partial" was noise.
     # The same rule keeps a newsletter page (a form plus 90 words) out of `login_required`.
-    if (pwd or LOGIN_HINT.search(head)) and words < 40:
-        return "weak", "login mentioned on a short page"
+    if words < 40:
+        head = fold(body[:max(1, len(body) // 4)])
+        if pwd or any(p in head for p in _LOGIN_HINTS):
+            return "weak", "login mentioned on a short page"
     return "", ""
+
+
+# A paywall written in JavaScript hides text the server sent: the HTML carries the article, a script
+# covers it. What the HTML says about it is in the words schema.org gave publishers (Google asks a
+# paywalled page for `isAccessibleForFree: false`, and for `hasPart` with the `cssSelector` of the part
+# that is hidden). A container's class (`paywall`, `meteredContent`, `piano`) is no such word: free
+# pages carry them too (NPR's `piano`, Bhaskar's `paywallBlockedContent`, Le Monde's comment wall).
+_LD_JSON = re.compile(r"(?is)<script\b[^>]*\btype\s*=\s*[\"']?application/ld\+json[\"']?[^>]*>(.*?)</script\s*>")
+_FREE_ATTR = re.compile(r"(?is)<[a-z]+\b[^>]*\bitemprop\s*=\s*[\"']isAccessibleForFree[\"'][^>]*>")
+_FREE_WORD = re.compile(r"(?i)isAccessibleForFree")
+_FREE_FALSE = re.compile(r"(?i)isAccessibleForFree[\"']?\s*:\s*[\"']?\s*false")
+_CONTENT_FALSE = re.compile(r"(?i)\bcontent\s*=\s*[\"']\s*false\s*[\"']")
+_WORK_TYPES = frozenset(("CreativeWork", "Report", "Review", "Recipe", "Course", "Book", "Episode", "Clip",
+                         "VideoObject", "AudioObject", "MediaObject", "ImageObject", "Dataset", "Comment"))
+PAYWALL_SCAN = 4000000                 # characters of a page looked at
+
+
+def _not_free(v):
+    return v is False or (isinstance(v, str) and v.strip().lower() == "false")
+
+
+def _is_work(types):
+    """A creative work (an article, a page, a video): schema.org's isAccessibleForFree is also
+    an Event's and a Place's, where false means a ticket, not a paywall."""
+    kinds = [types] if isinstance(types, str) else [t for t in (types or []) if isinstance(t, str)]
+    return not kinds or any(t in _WORK_TYPES or t.endswith(("Article", "Posting", "Page", "PageElement"))
+                            for t in kinds)
+
+
+def _ld_nodes(x, depth=0):
+    if depth > 8:
+        return
+    if isinstance(x, list):
+        for i in x[:400]:
+            yield from _ld_nodes(i, depth + 1)
+    elif isinstance(x, dict):
+        yield x
+        for v in x.values():
+            if isinstance(v, (dict, list)):
+                yield from _ld_nodes(v, depth + 1)
+
+
+def paywall_signal(html):
+    """Why a page says it is paywalled ("" when it does not): schema.org's `isAccessibleForFree: false`
+    on a creative work in the page's JSON-LD or microdata, with the selectors of the hidden parts."""
+    page = (html or "")[:PAYWALL_SCAN]
+    if not _FREE_WORD.search(page):
+        return ""
+    marked, parts = False, []
+    for blob in _LD_JSON.findall(page):
+        if not _FREE_WORD.search(blob):
+            continue
+        try:
+            data = json.loads(blob.strip().strip("﻿"), strict=False)
+        except ValueError:
+            # a script the publisher wrote by hand: its own word is still its own word
+            marked = marked or bool(_FREE_FALSE.search(blob))
+            continue
+        for node in _ld_nodes(data):
+            if _not_free(node.get("isAccessibleForFree")) and _is_work(node.get("@type")):
+                marked = True
+                sel = node.get("cssSelector")
+                for one in ([sel] if isinstance(sel, str) else sel if isinstance(sel, list) else []):
+                    if isinstance(one, str) and one.strip() and one.strip()[:60] not in parts:
+                        parts.append(one.strip()[:60])
+    if not marked:
+        marked = any(_CONTENT_FALSE.search(tag) for tag in _FREE_ATTR.findall(page))
+    if not marked:
+        return ""
+    return "the page says it is paywalled (schema.org isAccessibleForFree: false%s)" % (
+        "; hidden part: " + ", ".join(parts[:3]) if parts else "")
 
 
 def google_export(url):
@@ -8486,9 +8739,7 @@ def read(args):
         manifest["signals"]["blocked_http"] = True
     if f["status"] and f["status"] >= 400:
         manifest["signals"]["http_status"] = f["status"]
-    soft_hit = any(m in (title or "").lower() or m in (h1 or "").lower()
-                   or m in (text or "")[:160].lower() for m in NOTFOUND_MARKERS)
-    if f["status"] in (404, 410) or (f["status"] == 200 and word_count < 40 and soft_hit):
+    if f["status"] in (404, 410) or (f["status"] == 200 and soft_404_marker(title, h1, text, word_count)):
         manifest["signals"]["soft_404"] = True
 
 
@@ -8772,6 +9023,13 @@ def read(args):
                            title_of(html) if html else title, first_heading(html) if html else h1,
                            text, word_count)
     by_code = code_status(source_code)
+    # the same, from the final text: a page that is a script's shell to the server and says "page
+    # not found" only once the browser has drawn it (Kinopoisk, Taobao, Tencent) has no marker in
+    # the first text
+    soft_final = bool(source in ("http", "browser") and source_code == 200 and html
+                      and soft_404_marker(title_of(html), first_heading(html), text, word_count))
+    if soft_final:
+        manifest["signals"]["soft_404"] = True
     if wall_why:
         manifest["signals"]["block_text"] = True      # the status came from the page, not the code
     manifest["signals"]["blocked"] = bool(wall_why) or by_code == "blocked"
@@ -8823,6 +9081,7 @@ def read(args):
     trace("login", state=state or "-", why=why)
     if state == "weak":
         manifest["signals"]["login_hint"] = why
+    pay_why = paywall_signal(html) if is_page and html else ""
 
     # ---------------------------------------------------------------- a PDF's tables
     # the read's documents together - the PDF itself, the PDFs of an archive, an archived copy:
@@ -8861,7 +9120,7 @@ def read(args):
         # 3 200-character navigation frame, and the listing fallback happily extracted it.
         # With a working archive copy the page *is* readable, and `archive` says where it came from.
         manifest["status"] = "not_found"
-    elif manifest["signals"].get("soft_404") and word_count < 40:
+    elif soft_final or (manifest["signals"].get("soft_404") and word_count < SOFT_404_WORDS):
         manifest["status"] = "not_found"
     elif by_code == "error":
         manifest["status"] = "error"
@@ -8879,6 +9138,9 @@ def read(args):
     else:
         manifest["status"] = "ok"
 
+    if pay_why and manifest["status"] == "ok":
+        # the text is there and may be cut: a signal, and the advice says so; not a wall
+        manifest["signals"]["paywall"] = pay_why
     reasons = {
         "error": error_why or "the host did not answer",
         "login_required": "a login was detected: " + (why or "account wall"),
@@ -8985,6 +9247,13 @@ def read(args):
     elif cut:
         manifest["advice"] = ("%s, so the text may stop early: --refresh tries again, --download "
                               "waits as long as the server takes" % cut_said(f, size))
+    elif manifest["signals"].get("paywall"):
+        manifest["advice"] = ("the page says it is paywalled (schema.org isAccessibleForFree: false): the text is what "
+                              "the server sent and may be only the part open to everyone, or the whole article a "
+                              "script hides; this skill cannot subscribe")
+        if fragment:
+            manifest["advice"] += "; content.md holds %d%% of the visible text, so the answer shows page.md" % int(
+                round((cover or 0) * 100))
     elif fragment:
         manifest["advice"] = "content.md holds %d%% of the visible text, so the answer shows page.md" % int(
             round((cover or 0) * 100))

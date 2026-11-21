@@ -207,6 +207,9 @@
         "login_hint": {
           "type": "string"
         },
+        "paywall": {
+          "type": "string"
+        },
         "network": {
           "type": "string"
         },

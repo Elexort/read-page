@@ -8,6 +8,32 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **Sign-in, subscription and "not found" words in twenty languages, a soft 404 judged on the final page, and a
+  paywall named** (KNOWN-ISSUES 13, 191-193). The wall words covered twenty languages; the login and not-found
+  words covered seven. `LOGIN_PHRASES` (a wall's sentence: "sign in to continue", "for subscribers only", "войдите,
+  чтобы", "请登录后", "会員限定"), `LOGIN_HINTS` (the words of a sign-in form) and `NOTFOUND_PHRASES` (a 404
+  template's sentence: 页面不存在, 找不到页面, 您访问的页面不存在, 404 页面, ページが見つかりません, 페이지를 찾을 수
+  없습니다, الصفحة غير موجودة ...) cover en, ru, uk, de, fr, es, pt, it, nl, pl, cs, tr, sv, ja, zh, ko, ar, hi, id and vi,
+  matched as the wall words are (case, accents and marks folded). Three rules use them: a password field with a sign-in
+  word on a page of up to 120 words is `login_required` (the rule stopped at 40: Facebook's form is 55-66 words,
+  Instagram's 40-48, GitHub's 76), a wall's sentence on a page under 80 words is too (as before, in more languages), and a
+  404 template's sentence in the title, the heading or the first 300 characters of a page up to 200 words is `not_found`
+  (it was under 40 words, and judged on the server's text before the browser ran: Kinopoisk's, Tencent's, 36Kr's and
+  Almasry Alyoum's missing pages read `ok`). Chinese and Japanese count two characters a word in these rules
+  (`login_words`): a long article that quotes 登录 no longer reads "login mentioned". Measured on 1 368 real pages in
+  20 languages, the same URLs read before and after: 187 sign-in probes `login_required` 61 -> 92, 5 of the 25 missing
+  addresses that read `ok` are `not_found`, the wording of real 404 pages is recognised on 143 of 186 (88), a marker
+  changed no answer of 685 ordinary pages (89 of them under 80 words); the per-language counts and what was left out
+  (a title with a sign-in word, container classes, `LOGIN_URL`) are in row 13 and row 191.
+- **A paywall in JavaScript is named** (KNOWN-ISSUES 13). A page whose HTML carries the article and whose script covers
+  it says so in schema.org's words: `isAccessibleForFree: false` on a creative work in the JSON-LD (an `@graph` too) or
+  in microdata, and `hasPart` with the `cssSelector` of the hidden part. The answer stays `ok` - the text is there and
+  may be cut - and carries `signals.paywall` (with the selector) and an advice that says the page is paywalled and the
+  skill cannot subscribe. 87 of 285 articles of paywalled publishers (Washington Post, Financial Times,
+  The Atlantic, Business Insider, Le Monde, Le Figaro, Mediapart, NZZ, Handelsblatt, DN, Repubblica, Nikkei ...) and 4 of
+  165 free-news pages carry it, none of 520 Wikipedia and Wiktionary pages; an Event's `isAccessibleForFree: false` is a
+  ticket, not a paywall, and the markup printed in a `<pre>` is not the page's. A container's class is no signal: it
+  fired on 49 pages with no marker, among them 3 free news pages.
 - **An archive cut, damaged or no ZIP** (KNOWN-ISSUES 167) was answered "no converter for this file type",
   after a machine's markitdown had spent its 4 s on it. A cut or damaged archive is read member by member from
   the members' own headers (`zip_whole`, `zip_salvage`), the whole ones read as the archive would be: a DOCX
