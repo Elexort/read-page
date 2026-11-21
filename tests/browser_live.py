@@ -385,9 +385,14 @@ if can_bind(PRIVATE):
           "refused %s" % sorted(set(refused)))
     before = inner_hits()
     mg, tg = read_public(outer.url("/s3-hop-refresh"), env_extra={"READ_PAGE_SKIP": "playwright"})
-    check("Chrome's --dump-dom path goes through the guard too",
-          MARK not in tg and inner_hits() == before and "cli" in str((mg.get("chain") or {}).get("tried")),
-          "%s, %s, inner hits +%d" % (mg.get("status"), (mg.get("chain") or {}).get("tried"), inner_hits() - before))
+    # --dump-dom is a Chrome's path: where the only browser is Playwright's headless shell (a Linux arm64 runner
+    # after --setup: no Chrome on the image) the read did not try it (chain.tried: http, extract), 2026-11-21
+    if any(b.get("path") and b.get("name") != "playwright-shell" for b in caps.get("browsers") or []):
+        check("Chrome's --dump-dom path goes through the guard too",
+              MARK not in tg and inner_hits() == before and "cli" in str((mg.get("chain") or {}).get("tried")),
+              "%s, %s, inner hits +%d" % (mg.get("status"), (mg.get("chain") or {}).get("tried"), inner_hits() - before))
+    else:
+        skip("Chrome's --dump-dom path goes through the guard too", "no Chrome, Chromium or Edge here (only Playwright's shell)")
     mg, tg = read_public(outer.url("/s3-hop-refresh"), env_extra={
         "HTTPS_PROXY": "http://127.0.0.1:9", "HTTP_PROXY": "http://127.0.0.1:9",
         "NO_PROXY": "127.0.0.1,127.0.0.2,localhost"})

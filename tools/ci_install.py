@@ -174,10 +174,11 @@ def nic_rx():
             return total
         if os.name == "nt":
             # the adapters' 64-bit counters (netstat -e has 32-bit ones, which wrap after 4 GB and read
-            # negative across a 500 MB download on a machine that has been up a while)
+            # negative across a 500 MB download on a machine that has been up a while). The busiest adapter
+            # alone: adding all of them counted every byte twice on a Windows runner (862 MB for a 430 MB set)
             for shell in ("powershell", "pwsh"):
                 p = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command",
-                                    "(Get-NetAdapterStatistics | Measure-Object -Property ReceivedBytes -Sum).Sum"],
+                                    "(Get-NetAdapterStatistics | Measure-Object -Property ReceivedBytes -Maximum).Maximum"],
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
                 got = p.stdout.decode("utf-8", "replace").strip()
                 if p.returncode == 0 and got.isdigit():
