@@ -434,8 +434,33 @@ yt-dlp - not pinned - by TLS. urllib trusts the machine's certificate store; uv 
 (`UV_SYSTEM_CERTS=1`, `NODE_USE_SYSTEM_CA=1`, checked in uv 0.13.9's and Node 24's own help: 153 system
 roots beside Node's 118 bundled ones on the measured machine) unless the user set them, so a proxy that inspects TLS with
 its root in the OS store works for every download; a step that fails on a certificate says so once.
-A little lands outside the folder: `node-compile-cache` and the skill's Python bytecode (`pycache`) in the
-temp folder, the read cache (`read-page` there), and yt-dlp's `~/.cache/yt-dlp`.
+Inside the folder besides the engines: `cache/node-compile` (npm's compiled modules, `NODE_COMPILE_CACHE`),
+`cache/pycache` (the skill's Python bytecode while a read runs in the environment; `sys.pycache_prefix`),
+`cache/yt-dlp` (the environment's yt-dlp is given `--cache-dir`) and `cache/uv`. uv's cache holds every wheel
+the environment was built from, hard-linked into it, so it costs the disk what its files have no other name
+for (the closing line and the report give both numbers; on macOS uv clones rather than links, and that second
+number is an upper bound). Plain `uv cache prune` removes nothing of what an update leaves (measured with
+uv 0.13.9: the wheels of a deleted environment stay reachable, "No unused entries found"), so an update
+runs `uv cache clean` for the packages whose pin moved - before it installs the new ones, which a clean
+afterwards would take out too - and a yt-dlp update does it for yt-dlp and yt-dlp-ejs; where an older
+environment's lock was not kept, `uv cache prune --ci` removes every wheel (527 MB to 15 MB measured; the
+environment keeps its files by their links, and the next update fetches what it needs again). Outside the
+folder: the read cache (`read-page` in the temp folder) and, for a read that does not run in the
+environment, the skill's bytecode there.
+
+Where the installers fetch from can be redirected - by variables, a `uv.toml`, an `.npmrc`, a `pip.conf` -
+and the setup names each such setting at the top of its log, with its value (credentials left out), and keeps
+the lines in `setup.json` for the report. uv is run with `UV_NO_CONFIG=1` unless the user set it: uv looks
+for a `uv.toml` (or a `pyproject.toml` with `[tool.uv]`) in the working folder's parents, the user's and the
+system's configuration folders, and measured with uv 0.13.9 a `uv.toml` in a parent of the folder sent the
+install to the index it named, so what is installed would depend on where the folder is and on files nobody
+told about it. `UV_NO_CONFIG=1` ignores all of them (user-level too) and still honours the environment's
+variables (`UV_DEFAULT_INDEX`, `UV_EXTRA_INDEX_URL`, ...) and an explicit `UV_CONFIG_FILE` (also measured):
+a company's mirror is one variable. A `uv.toml` that names an index is listed as not read, with that advice,
+and a failed `pypi.org` check names it as the likely cause. `NODEJS_ORG_MIRROR` must be `https://`; a
+plain-http one is not used (nodejs.org is), though the archive's SHA256 is pinned either way.
+`UV_NO_VERIFY_HASHES` would switch off the lock's hash check: it is not passed on. `NODE_TLS_REJECT_UNAUTHORIZED=0`
+and the like are named, not undone.
 
 `caps()` - what this machine has - costs ~0.3 s on Windows (every tool name against every PATH
 folder and PATHEXT ending), so it is kept for an hour in `caps.json` in the cache and asked again

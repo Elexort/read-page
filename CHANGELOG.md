@@ -9,6 +9,25 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
 - CI: the repository is public, so `macos.yml` runs on every push to dev, as `tests.yml` does.
+- **The installer's open rows** (KNOWN-ISSUES 142-145, 151):
+  - Sources: every setting that sends an installer elsewhere than its default or skips a check - uv's index,
+    find-links, mirror and insecure-host variables, `PIP_INDEX_URL`, `NODEJS_ORG_MIRROR`, npm's registry and TLS
+    settings (environment and `~/.npmrc`), pip's configuration, Playwright's download host, extra CA files,
+    `NODE_TLS_REJECT_UNAUTHORIZED=0` - is named at the top of the setup's log and in the setup report, with its
+    value (credentials of an address left out); the step lines say where they fetched from. A plain-`http://`
+    mirror for Node is not used. uv runs with `UV_NO_CONFIG=1` (measured: a `uv.toml` in a parent of the folder
+    redirected the install; the environment's variables and `UV_CONFIG_FILE` still work); a `uv.toml` that names an
+    index is listed as not read, with the variable to use. `UV_NO_VERIFY_HASHES` is not passed on.
+  - The check: `setup-check.json` is removed first; a check that wrote nothing is "did not finish", a problem with a
+    fix; a failed step says `FAILED:` on its line.
+  - `tidy()` sees an environment in use on POSIX (arguments of the processes in `/proc` on Linux, `ps` on macOS):
+    an MCP server under an older environment keeps it across pin moves.
+  - uv's cache: an update cleans the packages whose pin moved before it installs, a yt-dlp update cleans yt-dlp,
+    a cache with more than 150 MB in no environment (or an older environment whose lock was not kept) is pruned
+    whole; its size and what of it is in no environment are in the closing line and the report. Plain
+    `uv cache prune` removes nothing here (measured).
+  - Files outside the folder: `NODE_COMPILE_CACHE`, the Python bytecode of a read in the environment and the
+    environment's yt-dlp cache are in the folder (`cache/`); a read's start is as fast (0.441 -> 0.434 s).
 - **CI: real installs** (`.github/workflows/install.yml`, on dev and ci-install pushes and by hand; the helper
   is `tools/ci_install.py`). Every standard runner a public repository gets free: `--setup` from nothing into
   a folder with a space and Cyrillic in its path on Linux, Windows and macOS (x64 and arm64) - its time, the

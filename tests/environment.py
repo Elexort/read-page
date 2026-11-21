@@ -1446,6 +1446,388 @@ if os.name != "nt":
 else:
     print("SKIP the POSIX stamp (Windows has no exec: every run is a child, asked each time)")
 
+# ---------------------------------------------------------------- the installer's open rows (KNOWN-ISSUES 142-145, 151)
+def attempt(name, fn):
+    """A check whose subject may not exist yet: an exception is a FAIL with its text, not the end of the suite."""
+    try:
+        good, detail = fn()
+    except Exception as e:                                     # noqa: BLE001
+        good, detail = False, "%s: %s" % (type(e).__name__, str(e)[:160])
+    check(name, good, detail)
+
+
+def work_in(prefix):
+    d_ = tempfile.mkdtemp(prefix=prefix)
+    junk.append(d_)
+    return d_, envsetup.Work(d_, "rx", "test")
+
+
+# 142: sources redirected by the environment or by configuration
+user142 = tempfile.mkdtemp(prefix="rp-env-user-")
+junk.append(user142)
+folder142 = os.path.join(user142, "projects", "read-page-home")
+os.makedirs(folder142)
+os.makedirs(os.path.join(user142, ".config", "uv"))
+os.makedirs(os.path.join(user142, ".config", "pip"))
+os.makedirs(os.path.join(user142, "pip"))
+os.makedirs(os.path.join(user142, "AppData", "uv"))
+with open(os.path.join(user142, ".config", "uv", "uv.toml"), "w", encoding="utf-8") as fh_:
+    fh_.write('index-url = "https://uvuser:uvsecret@uv-user.example/simple"\n')
+with open(os.path.join(user142, "AppData", "uv", "uv.toml"), "w", encoding="utf-8") as fh_:
+    fh_.write('index-url = "https://uvuser:uvsecret@uv-user.example/simple"\n')
+with open(os.path.join(user142, "projects", "uv.toml"), "w", encoding="utf-8") as fh_:
+    fh_.write('[[index]]\nurl = "https://parent.example/simple"\nexclude-newer = "2020-01-01T00:00:00Z"\n')
+with open(os.path.join(user142, ".npmrc"), "w", encoding="utf-8") as fh_:
+    fh_.write("registry=https://npmuser:npmsecret@npm.example/\nstrict-ssl=false\n"
+              "//npm.example/:_authToken=TOKEN-NOT-FOR-THE-LOG\n; a comment\n")
+with open(os.path.join(user142, ".config", "pip", "pip.conf"), "w", encoding="utf-8") as fh_:
+    fh_.write("[global]\nindex-url = https://pipuser:pipsecret@pip.example/simple\ntrusted-host = pip.example\n")
+with open(os.path.join(user142, "pip", "pip.ini"), "w", encoding="utf-8") as fh_:
+    fh_.write("[global]\nindex-url = https://pipuser:pipsecret@pip.example/simple\ntrusted-host = pip.example\n")
+env142 = {"UV_DEFAULT_INDEX": "https://bob:hunter2@mirror.example/simple", "UV_EXTRA_INDEX_URL": "https://extra.example/simple",
+          "UV_INSECURE_HOST": "mirror.example", "UV_NO_VERIFY_HASHES": "1", "NODEJS_ORG_MIRROR": "http://nodes.example/dist",
+          "NODE_TLS_REJECT_UNAUTHORIZED": "0", "PIP_INDEX_URL": "https://pip-env.example/simple",
+          "npm_config_registry": "https://reg:regsecret@registry.example/", "APPDATA": os.path.join(user142, "AppData")}
+lines142 = []
+
+
+def over():
+    global lines142
+    lines142 = envsetup.source_overrides(env142, user142, folder142, system=False)
+    text = "\n".join(lines142)
+    named = all(any(ln.startswith(n + "=") for ln in lines142) for n in (
+        "UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL", "UV_INSECURE_HOST", "NODEJS_ORG_MIRROR", "NODE_TLS_REJECT_UNAUTHORIZED",
+        "PIP_INDEX_URL", "npm_config_registry"))
+    return named and "mirror.example/simple" in text, "%d lines" % len(lines142)
+
+
+attempt("every setting that redirects an installer is named, with its value", over)
+attempt("... and no address gives away its user name or password, nor a token of an .npmrc",
+        lambda: (not any(x in "\n".join(lines142) for x in ("hunter2", "regsecret", "uvsecret", "npmsecret", "pipsecret",
+                                                          "TOKEN-NOT-FOR-THE-LOG")) and bool(lines142), ""))
+attempt("an http:// mirror for Node is named as not used, an https:// one as used",
+        lambda: (any("NODEJS_ORG_MIRROR=http://nodes.example/dist - not used" in x for x in lines142)
+                 and any("Node comes from it" in x for x in envsetup.source_overrides(
+                     {"NODEJS_ORG_MIRROR": "https://nodes.example/dist"}, user142, folder142, system=False)), ""))
+attempt("a setting that would switch off the lock's hash check is named as not passed on",
+        lambda: (any(x.startswith("UV_NO_VERIFY_HASHES") and "not passed on" in x for x in lines142), ""))
+attempt("TLS switched off for Node is named",
+        lambda: (any(x.startswith("NODE_TLS_REJECT_UNAUTHORIZED=0") and "does not verify TLS" in x for x in lines142), ""))
+attempt("uv's configuration files (the user's, and a uv.toml in a parent of the folder) are named as not read",
+        lambda: (sum(1 for x in lines142 if "uv.toml sets" in x and "not read" in x) >= 2
+                 and any(os.path.join("projects", "uv.toml") in x and "[[index]]" in x and "exclude-newer" in x
+                         for x in lines142), [x[:90] for x in lines142 if "uv.toml" in x]))
+attempt("the user's .npmrc and pip's configuration are named by their registry, index and TLS setting",
+        lambda: (any(".npmrc: registry=https://npm.example/" in x for x in lines142)
+                 and any(".npmrc: strict-ssl=false" in x for x in lines142)
+                 and any(x.startswith(os.path.join(user142, ".config", "pip", "pip.conf") if os.name != "nt" else
+                                      os.path.join(user142, "pip", "pip.ini")) and "index-url=https://pip.example/simple" in x
+                         for x in lines142), [x[:100] for x in lines142 if "npmrc" in x or "pip." in x]))
+attempt("nothing set, nothing said",
+        lambda: (envsetup.source_overrides({}, user142 + "-none", tempfile.mkdtemp(prefix="rp-env-bare-"),
+                                           system=False) == [], ""))
+os.environ.pop("UV_NO_CONFIG", None)
+os.environ.pop("UV_CONFIG_FILE", None)
+e_cfg = envsetup.net_env()
+os.environ["UV_NO_CONFIG"] = "0"
+try:
+    e_cfg_user = envsetup.net_env()
+finally:
+    os.environ.pop("UV_NO_CONFIG", None)
+os.environ["UV_DEFAULT_INDEX"] = "https://company.example/simple"
+os.environ["UV_NO_VERIFY_HASHES"] = "1"
+try:
+    e_idx = envsetup.net_env()
+finally:
+    os.environ.pop("UV_DEFAULT_INDEX", None)
+    os.environ.pop("UV_NO_VERIFY_HASHES", None)
+attempt("uv reads no configuration file (UV_NO_CONFIG=1), unless the user set it - where the folder is does not change "
+        "what is installed - and the variables that name a mirror still reach it",
+        lambda: (e_cfg.get("UV_NO_CONFIG") == "1" and e_cfg_user.get("UV_NO_CONFIG") == "0"
+                 and e_idx.get("UV_DEFAULT_INDEX") == "https://company.example/simple" and e_idx.get("UV_NO_CONFIG") == "1",
+                 str(e_cfg.get("UV_NO_CONFIG"))))
+attempt("the variable that switches the lock's hash check off is not handed to uv",
+        lambda: ("UV_NO_VERIFY_HASHES" not in e_idx, ""))
+node_asked = []
+real_fetch142 = envsetup.fetch
+
+
+def note_fetch(url, dest, sha=None, timeout=60):
+    node_asked.append(url)
+    raise RuntimeError("stop")
+
+
+envsetup.fetch = note_fetch
+try:
+    for mirror, label in (("http://nodes.example/dist", "http"), ("https://nodes.example/dist/", "https"), ("", "none")):
+        d_, w_ = work_in("rp-env-nodemirror-")
+        w_.env["NODEJS_ORG_MIRROR"] = mirror
+        try:
+            w_._node_official()
+        except (RuntimeError, ValueError):
+            pass
+finally:
+    envsetup.fetch = real_fetch142
+if ownenv.machine() in ("x64", "arm64") and not ownenv.musl():
+    attempt("Node from a plain-http mirror is refused: nodejs.org is used; an https mirror is used as named",
+            lambda: (len(node_asked) == 3 and node_asked[0].startswith("https://nodejs.org/dist/")
+                     and node_asked[1].startswith("https://nodes.example/dist/v") and node_asked[2].startswith("https://nodejs.org/dist/")
+                     and not any(u.startswith("http://") for u in node_asked), str(node_asked)))
+os.environ["UV_DEFAULT_INDEX"] = "https://carol:s3cret@corp.example/simple"
+try:
+    d142, w142 = work_in("rp-env-note-")
+    w142.note_sources()
+finally:
+    os.environ.pop("UV_DEFAULT_INDEX", None)
+log142 = open(os.path.join(d142, "setup.log"), encoding="utf-8").read()
+attempt("with a mirror set, the log names it before any step, and the state keeps the lines for the report",
+        lambda: ("sources set here" in log142 and "UV_DEFAULT_INDEX=https://corp.example/simple" in log142
+                 and "s3cret" not in log142 and any("corp.example" in x for x in w142.info.get("sources") or []), log142[:160]))
+rep_home = tempfile.mkdtemp(prefix="rp-env-rep-")
+junk.append(rep_home)
+with open(os.path.join(rep_home, "setup.json"), "w", encoding="utf-8") as fh_:
+    json.dump(dict(info, problems=[], sources=["UV_DEFAULT_INDEX=https://corp.example/simple - the Python packages come "
+                                              "from it, not from pypi.org"],
+                   disk={"folder": 1100 * 1048576, "cache": 450 * 1048576, "cache_alone": 20 * 1048576}), fh_)
+rc, out, err = run([], dict(base, READ_PAGE_HOME=rep_home))
+attempt("the setup report names the sources of the last --setup, and the disk it takes with uv's cache",
+        lambda: ("UV_DEFAULT_INDEX=https://corp.example/simple" in out and "sources" in out
+                 and "uv's cache is 450 MB, 20 MB of it in no environment" in out and "1.1 GB in the folder" in out,
+                 [ln for ln in out.splitlines() if "sources" in ln or "disk" in ln][:3] or (out + err)[-200:]))
+
+# 143: the check shows this run's results, and a step that failed says so
+d143, w143 = work_in("rp-env-chk-")
+w143.env_py = sys.executable
+stale = os.path.join(d143, "setup-check.json")
+with open(stale, "w", encoding="utf-8") as fh_:
+    json.dump({"engines": {"ok": True}, "defuddle": {"ok": True}, "browser": {"ok": True}, "tesseract": {"ok": True}}, fh_)
+w143.sh = lambda cmd, timeout=900, env=None, cwd=None: (-1, "(timed out)")          # the check is cut off: it writes nothing
+ok143, note143 = w143.check()
+attempt("a check that did not finish is not the last run's answer: it says so, names it, and holds no old result",
+        lambda: (ok143 is False and "did not finish" in note143 and not w143.info.get("checked")
+                 and any(p["part"] == "check" and "did not finish" in p["why"] and p["fix"] for p in w143.problems)
+                 and not os.path.exists(stale), note143))
+d143b, w143b = work_in("rp-env-chk2-")
+w143b.env_py = sys.executable
+
+
+def sh_writes(cmd, timeout=900, env=None, cwd=None):
+    with open(os.path.join(d143b, "setup-check.json"), "w", encoding="utf-8") as fh2:
+        json.dump({"engines": {"ok": True}, "defuddle": {"ok": True}, "browser": {"ok": False, "why": "no libs", "fix": "x"},
+                   "tesseract": {"ok": True}}, fh2)
+    return 1, ""
+
+
+w143b.sh = sh_writes
+ok143b, note143b = w143b.check()
+attempt("a check that ran still reports each engine as before",
+        lambda: (ok143b is False and note143b == "3 of 4 answer; not: browser" and w143b.info["checked"]["engines"]["ok"], note143b))
+d143c, w143c = work_in("rp-env-step-")
+w143c.step("uv", lambda: (False, "no uv: nothing answered"))
+w143c.step("python", lambda: (True, "python 3.13"))
+w143c.step("engines", lambda: (False, "skipped: no python"), need="python")
+w143c.step("node", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+log143 = open(os.path.join(d143c, "setup.log"), encoding="utf-8").read().splitlines()
+attempt("a step that did not work is marked FAILED on its own line, one that did is not, and a skipped step says skipped",
+        lambda: ("FAILED: no uv" in log143[0] and "FAILED" not in log143[1] and "python 3.13" in log143[1]
+                 and "FAILED" not in log143[2] and "skipped: no python" in log143[2] and "FAILED: failed: RuntimeError" in log143[3],
+                 log143))
+
+# 144: an environment in use is seen on POSIX too
+proc_root = tempfile.mkdtemp(prefix="rp-env-proc-")
+junk.append(proc_root)
+env_a = os.path.join(proc_root, "home dir", "envs", "py3.13.18-aaaaaaaaaa")
+env_b = os.path.join(proc_root, "home dir", "envs", "py3.13.18-aaaaaaaaaabb")
+for pid_, args_ in (("101", [os.path.join(env_a, "bin", "python"), "-E", "-X", "utf8", "/skill/scripts/mcp_server.py"]),
+                    ("102", ["/usr/bin/python3", "/skill/scripts/readpage.py", "--setup"]),
+                    ("103", [os.path.join(env_b, "bin", "python"), "-E", "-c", "pass"]),
+                    ("104", ["/bin/sleep", env_b])):
+    os.makedirs(os.path.join(proc_root, pid_))
+    with open(os.path.join(proc_root, pid_, "cmdline"), "wb") as fh_:
+        fh_.write(b"\0".join(a_.encode("utf-8") for a_ in args_) + b"\0")
+os.makedirs(os.path.join(proc_root, "self"))                       # not a process number
+os.makedirs(os.path.join(proc_root, "105"))                        # one that ended: no cmdline
+got_cmds = envsetup._proc_cmdlines(proc_root)
+attempt("/proc is read for the arguments of every process (a path with a space stays one argument)",
+        lambda: (got_cmds is not None and len(got_cmds) == 4 and [os.path.join(env_a, "bin", "python"), "-E", "-X", "utf8",
+                                                                 "/skill/scripts/mcp_server.py"] in got_cmds, str(got_cmds)[:120]))
+attempt("a process that runs from an environment's folder is found; a sibling whose name starts the same way is not",
+        lambda: (envsetup.uses_folder(env_a, got_cmds) and envsetup.uses_folder(env_b, got_cmds)
+                 and not envsetup.uses_folder(env_a + "x", [[os.path.join(env_a, "bin", "python")]])
+                 and not envsetup.uses_folder(os.path.join(proc_root, "home dir", "envs", "py3.13.18-aaaaaaaaaa"),
+                                              [c_ for c_ in got_cmds if c_[0] != os.path.join(env_a, "bin", "python")
+                                               and c_[0] != "/bin/sleep" and c_[0] != "/usr/bin/python3"]), ""))
+attempt("a line of `ps` (macOS) is judged the same way: the whole line, a space in the path included",
+        lambda: (envsetup.uses_folder(env_a, ["%s -E -X utf8 /skill/scripts/mcp_server.py" % os.path.join(env_a, "bin", "python"),
+                                              "/usr/bin/python3 /skill/scripts/readpage.py"])
+                 and not envsetup.uses_folder(env_a, ["/usr/bin/python3 /skill/scripts/readpage.py --setup"])
+                 and not envsetup.uses_folder(env_a, ["%s/bin/python -c pass" % (env_a + "x")]), ""))
+if os.name != "nt":
+    live_env = os.path.join(tempfile.mkdtemp(prefix="rp-env-live-"), "envs", "py-live")
+    junk.append(os.path.dirname(os.path.dirname(live_env)))
+    os.makedirs(os.path.join(live_env, "bin"))
+    sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", os.path.join(live_env, "bin", "python")])
+    try:
+        time.sleep(0.3)
+        seen_live = envsetup.env_in_use(live_env)
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+    seen_gone = envsetup.env_in_use(live_env)
+    attempt("POSIX: a real process that runs from the folder makes it in use; once it has ended the folder is free",
+            lambda: (seen_live is True and seen_gone is False, "%s then %s" % (seen_live, seen_gone)))
+else:
+    print("SKIP the real process of an environment in use (Windows decides by a program that cannot be opened for writing: "
+          "_running, tested where it is told)")
+d144 = tempfile.mkdtemp(prefix="rp-env-tidy-")
+junk.append(d144)
+for n_ in ("py3.13.18-old0000001", "py3.13.18-old0000002", "py3.13.18-prev000003", "py3.13.18-cur0000004"):
+    os.makedirs(os.path.join(d144, "envs", n_))
+w144 = envsetup.Work(d144, "r44", "test")
+w144.prev = {"env": "envs/py3.13.18-prev000003"}
+w144.info = {"env": "envs/py3.13.18-cur0000004"}
+real_in_use = envsetup.env_in_use
+envsetup.env_in_use = lambda p: True if p.endswith("old0000001") else (None if p.endswith("old0000002") else False)
+try:
+    w144.tidy()
+finally:
+    envsetup.env_in_use = real_in_use
+left = sorted(os.listdir(os.path.join(d144, "envs")))
+attempt("tidy keeps the environment in use, and one it cannot tell about, besides the current and the previous; "
+        "it deletes the rest",
+        lambda: (left == ["py3.13.18-cur0000004", "py3.13.18-old0000001", "py3.13.18-old0000002", "py3.13.18-prev000003"],
+                 str(left)))
+envsetup.env_in_use = lambda p: False
+try:
+    w144.tidy()
+finally:
+    envsetup.env_in_use = real_in_use
+attempt("... and when none runs, only the current and the previous stay",
+        lambda: (sorted(os.listdir(os.path.join(d144, "envs"))) == ["py3.13.18-cur0000004", "py3.13.18-prev000003"], ""))
+
+# 145: uv's cache
+lock_old = "a==1 \\\n    --hash=sha256:%s\nb==2.0\nc[x]==3 ; sys_platform == 'win32'\nPillow==10\nold_pkg==1\n" % ("0" * 64)
+lock_new = "a==1 \\\n    --hash=sha256:%s\nb==2.1\nc[x]==3 ; sys_platform == 'win32'\npillow==10\nnew-pkg==9\n" % ("0" * 64)
+attempt("the packages an update leaves in uv's cache are the ones whose pin moved or went (names as pip compares them)",
+        lambda: (envsetup.lock_pins(lock_old) == {"a": "1", "b": "2.0", "c": "3", "pillow": "10", "old-pkg": "1"}
+                 and envsetup.moved_pins(lock_old, lock_new) == ["b", "old-pkg"] and envsetup.moved_pins(lock_new, lock_new) == [],
+                 str(envsetup.moved_pins(lock_old, lock_new))))
+d145, w145 = work_in("rp-env-cache-")
+os.makedirs(os.path.join(d145, "envs", "prev"))
+with open(os.path.join(d145, "envs", "prev", envsetup.ENV_LOCK), "w", encoding="utf-8") as fh_:
+    fh_.write(lock_old)
+w145.uv_exe = "UV"
+w145.prev = {"env": "envs/prev"}
+sh_calls = []
+w145.sh = lambda cmd, timeout=900, env=None, cwd=None: (sh_calls.append(list(cmd)) or (0, "Removed 3 files"))
+w145.drop_stale_pins(lock_new, "envs/new")
+attempt("an update drops the old pins of the packages that moved from uv's cache, before it installs",
+        lambda: (sh_calls == [["UV", "cache", "clean", "b", "old-pkg"]] and not getattr(w145, "cache_unknown", False), str(sh_calls)))
+del sh_calls[:]
+w145.drop_stale_pins(lock_old, "envs/prev")
+attempt("... and does nothing when the environment is the same one", lambda: (not sh_calls, str(sh_calls)))
+w145.prev = {"env": "envs/older-without-its-lock"}
+w145.drop_stale_pins(lock_new, "envs/new")
+attempt("... and where the old environment's lock was not kept (which wheels are stale is not known) the cache is pruned "
+        "whole after the update",
+        lambda: (not sh_calls and w145.cache_unknown is True, str(sh_calls)))
+os.makedirs(os.path.join(d145, "cache", "uv"))
+w145.info = {"env": "envs/new"}
+w145.prev = {"env": "envs/older-without-its-lock"}
+w145.tidy()
+attempt("... by `uv cache prune --ci` (plain `uv cache prune` finds nothing to remove: measured)",
+        lambda: (["UV", "cache", "prune", "--ci"] in sh_calls, str(sh_calls)))
+del sh_calls[:]
+w145.cache_unknown = False
+real_cb = envsetup.cache_bytes
+sizes_seen = [(500 << 20, 300 << 20), (200 << 20, 10 << 20)]
+envsetup.cache_bytes = lambda p, seconds=20.0: sizes_seen.pop(0)
+try:
+    w145.tidy()
+finally:
+    envsetup.cache_bytes = real_cb
+attempt("... and where more than 150 MB of it is in no environment (an index was changed, a version that did not clean), "
+        "except on macOS (uv clones there: every file looks so), and the size reported is the one after",
+        lambda: ((["UV", "cache", "prune", "--ci"] in sh_calls) == (sys.platform != "darwin")
+                 and w145.cache_size == ((200 << 20, 10 << 20) if sys.platform != "darwin" else (500 << 20, 300 << 20)),
+                 "%s %s" % (sh_calls, w145.cache_size)))
+cache_dir = tempfile.mkdtemp(prefix="rp-env-cachesz-")
+junk.append(cache_dir)
+for n_, size_ in (("only.whl", 3000), ("shared.whl", 5000)):
+    with open(os.path.join(cache_dir, n_), "wb") as fh_:
+        fh_.write(b"x" * size_)
+try:
+    os.link(os.path.join(cache_dir, "shared.whl"), os.path.join(cache_dir, "env-copy.whl"))
+    linked = True
+except OSError:
+    linked = False
+tot145, alone145 = envsetup.cache_bytes(cache_dir)
+attempt("the cache's size counts what no environment holds apart from what is hard-linked into one",
+        lambda: ((tot145, alone145) == ((13000, 3000) if linked else (8000, 8000)), "%s %s linked=%s" % (tot145, alone145, linked)))
+check("... and the closing line gives it",
+      envsetup.Work.cache_note(13000, 3000) == " (uv's cache is 12.7 KB, 2.9 KB of it in no environment: the rest is "
+                                                "hard-linked into it)" and envsetup.Work.cache_note(0, 0) == ""
+      and "mostly hard-linked" in envsetup.Work.cache_note(13000, None), envsetup.Work.cache_note(13000, 3000))
+del sh_calls[:]
+real_ytv = envsetup._ytdlp_version
+vs_ = ["2026.10.26", "2026.11.2"]
+envsetup._ytdlp_version = lambda py: vs_.pop(0)
+try:
+    ud_ok, ud_note = envsetup.ytdlp_update(d145, "uv", "py", {}, lambda cmd, timeout=600, env=None: (sh_calls.append(list(cmd)) or (0, "ok")),
+                                          lock="ENV-LOCK")
+finally:
+    envsetup._ytdlp_version = real_ytv
+attempt("a yt-dlp update that brought a new release drops the old releases from uv's cache (one every three days)",
+        lambda: (ud_ok and ["uv", "cache", "clean", "yt-dlp", "yt-dlp-ejs"] in sh_calls and sh_calls[0][:3] == ["uv", "pip", "install"],
+                 str(sh_calls)[:200]))
+
+# 151: the files that landed outside the folder land inside it
+attempt("npm's compiled modules go to a folder of ours (node-compile-cache was left in the temp folder)",
+        lambda: (w145.env.get("NODE_COMPILE_CACHE") == os.path.join(d145, "cache", "node-compile"), str(w145.env.get("NODE_COMPILE_CACHE"))))
+rp151 = load_rp("pycache")
+saved_status = dict(ownenv._STATUS)
+py_home = tempfile.mkdtemp(prefix="rp-env-pyc-")
+junk.append(py_home)
+try:
+    ownenv._STATUS.update(used=False, home=py_home)
+    outside = rp151._pycache_home()
+    ownenv._STATUS.update(used=True, home=py_home)
+    inside = rp151._pycache_home()
+finally:
+    ownenv._STATUS.clear()
+    ownenv._STATUS.update(saved_status)
+attempt("in the environment Python's bytecode goes to its folder (cache/pycache); without one, to the temp folder as before",
+        lambda: (inside == os.path.join(py_home, "cache", "pycache") and os.path.isdir(inside)
+                 and outside and not outside.startswith(py_home) and outside.startswith(tempfile.gettempdir()),
+                 "%s | %s" % (inside, outside)))
+yt_home = tempfile.mkdtemp(prefix="rp-env-ytc-")
+junk.append(yt_home)
+rp151b = load_rp("ytcache")
+seen_cmds = []
+rp151b.run = lambda cmd, timeout=120, **kw: (seen_cmds.append(list(cmd)) or (1, b"", b""))
+caps151 = rp151b.caps()
+del seen_cmds[:]                                    # (caps asked tesseract what it reads)
+yt_ours = os.path.join(yt_home, "envs", "x", "Scripts" if os.name == "nt" else "bin", "yt-dlp")
+saved_env_var, saved_cache = os.environ.get("READ_PAGE_ENV"), os.environ.get("READ_PAGE_CACHE")
+try:
+    os.environ["READ_PAGE_CACHE"] = os.path.join(yt_home, "cache-test")
+    os.environ["READ_PAGE_ENV"] = yt_home
+    caps151["cli"]["yt-dlp"] = yt_ours
+    rp151b.video_text("https://example.com/v", caps151, tempfile.mkdtemp(prefix="rp-env-ytw-"))
+    caps151["cli"]["yt-dlp"] = "/usr/bin/yt-dlp"
+    rp151b.video_text("https://example.com/v", caps151, tempfile.mkdtemp(prefix="rp-env-ytw-"))
+finally:
+    for k_, v_ in (("READ_PAGE_ENV", saved_env_var), ("READ_PAGE_CACHE", saved_cache)):
+        if v_ is None:
+            os.environ.pop(k_, None)
+        else:
+            os.environ[k_] = v_
+attempt("the environment's yt-dlp keeps its own cache in the folder; another yt-dlp is left to its defaults",
+        lambda: (len(seen_cmds) == 2 and "--cache-dir" in seen_cmds[0]
+                 and seen_cmds[0][seen_cmds[0].index("--cache-dir") + 1] == os.path.join(yt_home, "cache", "yt-dlp")
+                 and "--cache-dir" not in seen_cmds[1], str([c_[:3] for c_ in seen_cmds])))
+
+
 for d in junk:
     shutil.rmtree(d, ignore_errors=True)
 print("\n%d ok, %d failed" % (ok, failed))
