@@ -909,24 +909,9 @@ def _caps_now():
 
 
 def os_install(what):
-    """The command a user on *this* OS would actually type, not a Windows line everywhere."""
-    table = {
-        "curl": ("winget install --id cURL.cURL", "brew install curl",
-                 "sudo apt install curl"),
-        "chromium": ("winget install --id Google.Chrome",
-                     "brew install --cask google-chrome",
-                     "sudo apt install chromium-browser  (or sudo snap install chromium)"),
-        "poppler": ("winget install --id oschwartz10612.Poppler",
-                    "brew install poppler",
-                    "sudo apt install poppler-utils"),
-        "tesseract": ("winget install --id UB-Mannheim.TesseractOCR",
-                      "brew install tesseract",
-                      "sudo apt install tesseract-ocr"),
-        "lynx": ("choco install lynx", "brew install lynx",
-                 "sudo apt install lynx"),
-    }
-    win, mac, linux = table[what]
-    return win if os.name == "nt" else (mac if sys.platform == "darwin" else linux)
+    """The command a user on *this* OS would actually type, not a Windows line everywhere: winget, brew,
+    or the Linux's own package manager (ownenv.system_install)."""
+    return ownenv.system_install(what)
 
 
 SETUP = "readpage.py --setup"
@@ -3909,17 +3894,17 @@ def _tess_ready():
         return None, "", [], ""
     td = os.environ.get("READ_PAGE_TESSDATA") or ""
     try:
-        api_dir = _tess_dir(td)
-        if td and not api_dir:
-            raise OSError(ownenv.NONASCII_WHY % td)
-        where, have = tesserocr.get_languages(api_dir) if td else tesserocr.get_languages()
-        have = [x for x in have if x]
-        if not have:
-            raise OSError("no language data in %s" % (td or "its default folder"))
-        lang = "eng" if "eng" in have else next((x for x in have if x != "osd"), have[0])
-        with tesserocr.PyTessBaseAPI(path=where, lang=lang):
-            pass
-        return tesserocr, where, have, ""
+        with ownenv.tess_dir(td) as api_dir:          # where a narrow path cannot open it, from its parent
+            if td and not api_dir:
+                raise OSError(ownenv.NONASCII_WHY % td)
+            where, have = tesserocr.get_languages(api_dir) if td else tesserocr.get_languages()
+            have = [x for x in have if x]
+            if not have:
+                raise OSError("no language data in %s" % (td or "its default folder"))
+            lang = "eng" if "eng" in have else next((x for x in have if x != "osd"), have[0])
+            with tesserocr.PyTessBaseAPI(path=where, lang=lang):
+                pass
+        return tesserocr, td or where, have, ""        # the folder itself: every start goes through tess_dir
     except Exception as e:                                    # noqa: BLE001
         debuglog.exc("ocr: tesserocr start", e)
         why = " ".join(str(e).split())[:200] or type(e).__name__
@@ -4023,12 +4008,12 @@ def ocr_picture(path, page_text=""):
         if passes and passes[0][1] is not None:
             # the path as tesserocr opens it (Windows, outside ASCII: the short name); an installed
             # tesserocr that cannot start is said so below, not taken for a missing one
-            api_dir = _tess_dir(tessdata)
-            if tessdata and not api_dir:
-                raise OSError(ownenv.NONASCII_WHY % tessdata)
-            where, have = tesserocr.get_languages(api_dir) if tessdata else tesserocr.get_languages()
-            langs = _ocr_langs(have, page_text)
-            api = tesserocr.PyTessBaseAPI(path=where, lang="+".join(langs))
+            with ownenv.tess_dir(tessdata) as api_dir:
+                if tessdata and not api_dir:
+                    raise OSError(ownenv.NONASCII_WHY % tessdata)
+                where, have = tesserocr.get_languages(api_dir) if tessdata else tesserocr.get_languages()
+                langs = _ocr_langs(have, page_text)
+                api = tesserocr.PyTessBaseAPI(path=where, lang="+".join(langs))
             try:
                 for name, img in passes:
                     api.SetImage(img)
@@ -4149,7 +4134,9 @@ def ocr_pages(paths):
         # tesserocr (--setup's OCR) in-process: it lets the other threads run while it reads, and
         # its own clock stops a page at the step's seconds
         try:
-            with lib[0].PyTessBaseAPI(path=lib[1], lang="+".join(use)) as api:
+            with ownenv.tess_dir(lib[1]) as tdir:            # started from the folder's parent where a narrow path fails
+                api = lib[0].PyTessBaseAPI(path=tdir, lang="+".join(use))
+            with api:
                 api.SetImageFile(png)
                 try:
                     api.Recognize(int(secs * 1000))

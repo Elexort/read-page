@@ -9,6 +9,38 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
 - CI: the repository is public, so `macos.yml` runs on every push to dev, as `tests.yml` does.
+- **CI: real installs** (`.github/workflows/install.yml`, on dev and ci-install pushes and by hand; the helper
+  is `tools/ci_install.py`). Every standard runner a public repository gets free: `--setup` from nothing into
+  a folder with a space and Cyrillic in its path on Linux, Windows and macOS (x64 and arm64) - its time, the
+  bytes that came in, the disk it took, every step and engine checked, reads (a local file, a public page, a
+  scanned PDF through OCR), the offline suites and the browser suite under the environment's own Python,
+  then `--setup` again (nothing to fetch, so quick); a user's own install by README's commands (the public
+  repository cloned into the skills folder, `--setup`, a read: main, and the pushed commit); a bare Python
+  with no `--setup`; Alpine and a bare Ubuntu with Python and git only. What a platform lacks for want of
+  wheels or system libraries is a floor listed in its matrix row: an unlisted gap turns the job red, and every
+  gap must be named with a reason and a fix.
+- CI: the first runs on the public repository were red for three reasons, none in the skill's reading:
+  `tests/formats.py` timed a slow page with the real layout model, which a runner lays out in 2 s (the stand-in
+  is slow now, the same everywhere); the compiled-module checks of `tests/environment.py` looked at what is
+  beside the scripts, where earlier suites leave a `__pycache__` (they look at what the code under test
+  changes; the workflows set `PYTHONDONTWRITEBYTECODE`); and `envsetup.unpack` without tar filters made a link
+  with "/" in its target, which a Windows link does not resolve, so Node's own `bin/npm` looked to lead out of the
+  folder (made with the OS's separators; the check asks what `os.symlink` is given, which needs no right to
+  make links); and on the slowest runner (macOS Intel) an archive that stalls took 22.7 s against a check of
+  22 (it allows 26).
+- **OCR under a home with letters outside ASCII, on a volume that makes no short names** (a GitHub Windows
+  runner's `D:`, a dev drive): the real install there reproduced what the review's H1 had fixed only where
+  Windows makes an 8.3 name - `--setup` said "set READ_PAGE_HOME to an ASCII-only path", and every scan read
+  `empty`. The data folder's own name, which is ASCII, is now given to tesserocr from its parent, with the working
+  directory moved there while tesseract starts (`ownenv.tess_dir`; it reads its data at the start; measured on
+  code page 1252 against a Cyrillic folder: the absolute path fails, the relative one reads). Only a data folder
+  whose own name is outside ASCII still needs an ASCII `READ_PAGE_HOME`.
+- `--setup` on a machine with no build of a package (Alpine, Windows on ARM): the reason is whole ("pymupdf4llm
+  has no build for musl Linux on x64"), the fix is what a user can do - the machine's own program for OCR
+  and PDF text, else a plain "none here" with what still reads - not `readpage.py --setup`, which cannot
+  give it; an engine is named once (the browser step and the check no longer repeat it); the package manager is
+  the machine's (apk, dnf, zypper, pacman, apt, by its os-release; no `sudo` for root, which a container does not
+  have); the note for Node on musl says nodejs.org has no build for it.
 
 **`readpage.py --setup`**
 - **one command installs every engine** into the skill's own environment, one folder of the user's

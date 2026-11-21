@@ -258,11 +258,13 @@ try:
           dt < 14 and "READER-PART" in (text or "") and note.startswith("cut:"), "%.1f s %s" % (dt, note[:60]))
     mod.WAYBACK_URL = slow_url
     out, dt = timed(mod.archived_text, "https://example.com/a", mod.caps(), tempfile.mkdtemp(prefix="rp-arch-"))
-    check("an archive that stalls costs at most ~20 s", dt < 22 and not out[0], "%.1f s" % dt)
+    # 20 s is the step's own bound; the rest is a machine's overhead (a macOS Intel runner took 22.7 s for the
+    # second, 2026-11-21): the check is that the step is bounded, not that the machine is fast
+    check("an archive that stalls costs at most ~20 s", dt < 26 and not out[0], "%.1f s" % dt)
     mod.WAYBACK_URL = slow_arch_url
     out, dt = timed(mod.archived_text, "https://example.com/a", mod.caps(), tempfile.mkdtemp(prefix="rp-arch-"))
     check("a snapshot that stalled after half a page: the half is read, marked partial",
-          dt < 22 and "ARCHIVE-PART" in (out[0] or "") and out[5].endswith(":partial"),
+          dt < 26 and "ARCHIVE-PART" in (out[0] or "") and out[5].endswith(":partial"),
           "%.1f s %s" % (dt, out[5]))
 
     # ------------------------------------------------ one entry per browser that exists

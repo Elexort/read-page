@@ -43,6 +43,7 @@ OFFLINE = ["reading", "sources", "blocks", "images", "speed", "mcp_parallel", "t
            "setup_audit", "environment"]
 # the one suite that needs the installed browser, not a third party: the setup's own Chromium, on every system
 BROWSER_SUITE = "browser_live"
+NO_COUNT = ("office_fixtures",)       # it prints a line a file and ends by its exit code: no "N ok, M failed"
 # the status line's `ok` is what the contract promises; the page the CI reads is the IANA example
 PUBLIC_URL = "https://example.com"
 PUBLIC_WORDS = "documentation examples"          # in the page's text, whichever extractor kept its title or not
@@ -146,11 +147,20 @@ def nic_rx():
     difference around a command is its download (plus a little of the runner's own traffic)."""
     try:
         if sys.platform.startswith("linux"):
+            # the interface the default route leaves by: a runner's accelerated network has a second one
+            # (a virtual function) whose packets the first already counts, so adding them all doubled it
+            via = ""
+            with open("/proc/net/route", encoding="utf-8") as fh:
+                for ln in fh.read().splitlines()[1:]:
+                    f = ln.split()
+                    if len(f) > 2 and f[1] == "00000000":
+                        via = f[0]
+                        break
             total = 0
             with open("/proc/net/dev", encoding="utf-8") as fh:
                 for ln in fh.read().splitlines()[2:]:
                     name, _, rest = ln.partition(":")
-                    if name.strip() != "lo" and rest.split():
+                    if rest.split() and ((name.strip() == via) if via else (name.strip() != "lo")):
                         total += int(rest.split()[0])
             return total
         if sys.platform == "darwin":
@@ -315,13 +325,19 @@ def cmd_setup(a):
 
 
 # ---------------------------------------------------------------- check
-# which problem names a step or an engine that did not work
-ALIASES = {"ocr data": ("ocr-langs", "tesseract"), "tesseract": ("tesseract", "tesserocr", "ocr-langs"),
-           "network": ("disk",), "check": ()}
+# the part of the report a package belongs to (envsetup.PARTS), and which problem names a step or a check that did not work
+PARTS = {"tesserocr": "tesseract", "playwright": "browser", "readability-lxml": "readability"}
+ALIASES = {"ocr data": ("ocr-langs", "tesseract"), "tesseract": ("tesseract", "ocr-langs"), "network": ("disk",),
+           "node": ("defuddle",), "check": ()}
 
 
 def named(gap, problems):
-    return [p for p in problems if p.get("part") == gap or p.get("part") in ALIASES.get(gap, ())]
+    return [p for p in problems if p.get("part") in (PARTS.get(gap, gap),) + ALIASES.get(gap, ())]
+
+
+def broken_engines(why):
+    """The packages a check found broken ("dist (reason); dist (reason)")."""
+    return [x.split(" (")[0].strip() for x in str(why or "").split("; ") if x.strip()]
 
 
 def cmd_check(a):
@@ -341,8 +357,10 @@ def cmd_check(a):
         if isinstance(v, dict):
             print("  %-9s %-5s %s" % (name, "ok" if v.get("ok") else "FAIL",
                                       (v.get("version") or v.get("why") or "")[:150]))
+    # a gap is a step that did not work, an engine the check found dead, or - for the imports - each package
     gaps = sorted(set([k for k, v in parts.items() if not v.get("ok") and k != "check"]
-                      + [k for k, v in checked.items() if isinstance(v, dict) and not v.get("ok")]))
+                      + [k for k, v in checked.items() if isinstance(v, dict) and not v.get("ok") and k != "engines"]
+                      + broken_engines((checked.get("engines") or {}).get("why"))))
     want = expected(a)
     print("\nnot working: %s" % (", ".join(gaps) or "nothing"))
     print("expected    : %s" % (", ".join(want) or "nothing"))
@@ -480,6 +498,18 @@ def cmd_suites(a):
     print("suites run under %s" % py)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     env.pop("READ_PAGE_SETUP_WAIT", None)
+    # what a read going into the environment would have: its programs first on PATH, its browsers and OCR data.
+    # The suites also import the skill in-process, under the environment's Python but with no hop to set that up
+    # (browser_live found no browser and skipped: it passed, testing nothing)
+    d = home_of(a)
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, os.path.join(skill_dir(a), "scripts"))
+    import ownenv
+    keep = dict(os.environ)
+    ownenv._tools(d, load_json(os.path.join(d, "setup.json")))
+    env.update({k: v for k, v in os.environ.items() if keep.get(k) != v})
+    os.environ.clear()
+    os.environ.update(keep)
     res, bad = {}, []
     for n in names:
         path = os.path.join(ROOT, "tests", n + ".py")
@@ -492,12 +522,21 @@ def cmd_suites(a):
             m = RESULT_LINE.search(ln)
             if m:
                 break
-        ok_n, failed_n = (int(m.group(1)), int(m.group(2))) if m else (0, -1)
-        good = m is not None and failed_n == 0 and rc == 0
-        res[n] = {"ok": ok_n, "failed": failed_n, "rc": rc, "seconds": round(time.time() - t0)}
-        print("%-5s %-16s %s  (%d s)" % ("ok" if good else "FAIL", n,
-                                         ("%d ok, %d failed" % (ok_n, failed_n)) if m else "no result line, exit %s" % rc,
-                                         time.time() - t0))
+        if m is None and rc == 0 and n in NO_COUNT:
+            m_ok, m_failed = 0, 0                     # prints a line a file, no count: its exit code is its verdict
+        else:
+            m_ok, m_failed = (int(m.group(1)), int(m.group(2))) if m else (0, -1)
+        good = (m is not None or n in NO_COUNT) and m_failed == 0 and rc == 0
+        skips = [ln for ln in out.splitlines() if ln.startswith("SKIP")]
+        res[n] = {"ok": m_ok, "failed": m_failed, "rc": rc, "seconds": round(time.time() - t0), "skipped": len(skips)}
+        print("%-5s %-16s %s  (%d s)%s" % ("ok" if good else "FAIL", n,
+                                           ("%d ok, %d failed" % (m_ok, m_failed)) if (m or n in NO_COUNT) and rc == 0
+                                           else "no result line, exit %s" % rc, time.time() - t0,
+                                           ("  %d skipped" % len(skips)) if skips else ""))
+        for ln in skips[:6]:
+            print("      " + ln[:200])
+        if m_ok == 0 and good and n not in NO_COUNT:
+            print("      (nothing was checked: %s)" % out.strip().splitlines()[-2:])
         if not good:
             bad.append(n)
             print("".join(ln + "\n" for ln in out.splitlines() if ln.startswith("FAIL"))[-3000:] or out[-1500:])

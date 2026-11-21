@@ -743,6 +743,7 @@ class Work:
                      "must be in this machine's own store (uv and Node are told to use it, unless UV_SYSTEM_CERTS or "
                      "NODE_USE_SYSTEM_CA is set); a file holding the root can also be named in SSL_CERT_FILE and "
                      "NODE_EXTRA_CA_CERTS")
+        self.full = out                         # the whole of it, for what the last three lines cannot say
         tail = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
         return rc, " | ".join(tail[-3:])[-400:]
 
@@ -874,17 +875,13 @@ class Work:
                 rc1, out1 = self.sh([self.uv_exe, "pip", "install", "--python", py, top, "-c", LOCK_FILE,
                                      "--only-binary", ":all:"])
                 if rc1 != 0:
-                    failed.append((top.split("[")[0], out1))
+                    failed.append((top.split("[")[0], self.full))
         self.env_rel, self.env_py = rel, py
         self.info.update(env=rel, python=os.path.relpath(py, self.d).replace(os.sep, "/"))
         self.info.pop("pandoc", None)           # an environment of before 2026-11-21 named its pandoc
-        for name, why in failed:
-            part = {"tesserocr": "tesseract", "playwright": "browser",
-                    "readability-lxml": "readability"}.get(name, name)
-            nowheel = "no wheel" in why.lower() or "not supported" in why.lower() or "no matching" in why.lower()
-            self.lack(part, "%s %s" % (name, "has no build for this machine" if nowheel else
-                                       "did not install: " + why[-160:]), _system_fix(part))
-        failed = [name for name, _why in failed]
+        for name, full in failed:
+            self.lack(*package_problem(name, full))
+        failed = [name for name, _full in failed]
         n = lock_packages(lock)
         return not failed or len(failed) < len(TOP), (
             "%d packages, python %s" % (n, pyver) + ("; not here: %s" % ", ".join(failed) if failed else ""))
@@ -915,7 +912,7 @@ class Work:
             self.log("nodejs.org: %s" % e)
             try:
                 self.node_bin = self._node_wheel()
-                src = "nodejs-wheel-binaries from PyPI: nodejs.org did not answer (%s)" % str(e)[:80]
+                src = "nodejs-wheel-binaries from PyPI (nodejs.org gave none: %s)" % str(e)[:80]
             except Exception as e2:                            # noqa: BLE001
                 self.lack("defuddle", "no Node: nodejs.org (%s) and PyPI (%s) failed" % (str(e)[:80], str(e2)[:80]),
                           "install Node.js (nodejs.org), then readpage.py --setup")
@@ -994,6 +991,8 @@ class Work:
         py = getattr(self, "env_py", "")
         if not py:
             return False, "no environment, so no browser"
+        if any(p.get("part") == "browser" for p in self.problems):      # playwright itself did not install
+            return False, "skipped: playwright is not installed here (said above)"
         self.info["browsers"] = "browsers"
         rc, out = self.sh([py, "-E", "-m", "playwright", "install", BROWSER], timeout=1200)
         if rc != 0:
@@ -1050,10 +1049,11 @@ class Work:
                 "  tesserocr.PyTessBaseAPI(path=sys.argv[1], lang=lang).End()\n except Exception as e:\n"
                 "  print('BAD', lang, ' '.join(str(e).split())[:100])\n")
         self.log("$ tesserocr starts with: %s" % " ".join(langs))
+        path, cwd = ownenv.tess_arg(td)             # a path outside ASCII: its short name, or its name from its parent
         try:
-            p = subprocess.run([py, "-E", "-X", "utf8", "-c", code, ownenv.ascii_path(td) or td] + list(langs),
+            p = subprocess.run([py, "-E", "-X", "utf8", "-c", code, path or td] + list(langs),
                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                               timeout=120, env=self.env)
+                               timeout=120, env=self.env, cwd=cwd or self.d)
             out = p.stdout.decode("utf-8", "replace")
         except (OSError, subprocess.SubprocessError) as e:
             self.log("the packs could not be tried: %s" % e)
@@ -1079,6 +1079,8 @@ class Work:
         self.info["checked"] = res
         bad = sorted(k for k, v in res.items() if isinstance(v, dict) and not v.get("ok"))
         for k in bad:
+            if k == "engines" and engines_covered(res[k].get("why"), self.problems):
+                continue                                       # each of them was named when it did not install
             if not any(p["part"] == k for p in self.problems):
                 self.lack(k, res[k].get("why") or "it did not answer", res[k].get("fix") or "")
         good = sorted(k for k, v in res.items() if isinstance(v, dict) and v.get("ok"))
@@ -1331,15 +1333,65 @@ def _running(exe):
         return False
 
 
+# the part a package belongs to in the report: the program or tier it gives (the others are named as they are)
+PARTS = {"tesserocr": "tesseract", "playwright": "browser", "readability-lxml": "readability"}
+
+
 def _system_fix(part):
     """The machine's own install, for what our environment cannot carry here."""
+    what = {"tesseract": "tesseract", "browser": "chromium"}.get(part)
+    return ownenv.system_install(what) if what else ""
+
+
+def no_build(out):
+    """uv's own word that a package has no wheel for this OS and CPU: "has no wheels with a matching platform
+    tag (e.g. `musllinux_1_2_x86_64`)", or "Wheels are required for X because building from source is
+    disabled" where only a source release exists."""
+    return bool(re.search(r"no wheels? with a matching platform tag|wheels are required for|no matching distribution",
+                          out or "", re.I))
+
+
+def first_error(out):
+    """What went wrong, from an installer's whole output: its first `error` line and the cause under it."""
+    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    for i, ln in enumerate(lines):
+        if re.match(r"(?i)(error|×)", ln):
+            return " ".join(lines[i:i + 2])
+    return lines[-1] if lines else ""
+
+
+def no_build_fix(part):
+    """What a user can do where a package has no build for their machine: the machine's own program for the
+    engines that are programs (the skill uses a tesseract on PATH), else the honest line - what is not here,
+    and what still reads."""
     if part == "tesseract":
-        return ("winget install --id UB-Mannheim.TesseractOCR" if os.name == "nt" else
-                "brew install tesseract" if sys.platform == "darwin" else "sudo apt install tesseract-ocr")
+        return _system_fix(part)
+    if part == "pymupdf":
+        return "%s (PDF text then comes from pdftotext)" % ownenv.system_install("poppler")
+    if part == "pymupdf4llm":
+        return ("none here: the tables of a PDF stay one cell a line, its text reads; Linux (glibc), macOS and "
+                "Windows on x64 have the layout model")
     if part == "browser":
-        return ("winget install --id Google.Chrome" if os.name == "nt" else
-                "brew install --cask google-chrome" if sys.platform == "darwin" else "sudo apt install chromium")
-    return ""
+        return ("none here: no headless browser, so JavaScript pages and hash routes stay unread; Linux (glibc), "
+                "macOS and Windows have one")
+    return "none here: the skill reads without it"
+
+
+def package_problem(name, full):
+    """(part, why, fix) for a package that did not install, from the installer's whole output: a package that
+    has no build for this OS and CPU says so (and what to do instead); any other failure says what it was."""
+    part = PARTS.get(name, name)
+    if no_build(full):
+        return part, "%s has no build for %s" % (name, ownenv.platform_name()), no_build_fix(part)
+    return part, "%s did not install: %s" % (name, first_error(full)[:200]), _system_fix(part)
+
+
+def engines_covered(why, problems):
+    """Whether every package the check found broken ("dist (reason); dist (reason)") has its problem already:
+    each is said once, when it did not install, not again as "engines"."""
+    names = [x.split(" (")[0].strip() for x in str(why or "").split("; ") if x.strip()]
+    parts = set(p.get("part") for p in problems)
+    return bool(names) and all(PARTS.get(n, n) in parts for n in names)
 
 
 def pick_wheel(files):
@@ -1454,7 +1506,7 @@ def browser_libs_fix(out):
             break
     if not names or not all(re.fullmatch(r"[a-z0-9][a-z0-9+.:-]*", n) for n in names):
         return ""
-    return "sudo apt-get install " + " ".join(names)
+    return ownenv.sudo() + "apt-get install " + " ".join(names)
 
 
 def _browser_libs_fix():
@@ -1484,24 +1536,26 @@ def _check_ocr(d, info):
         ImageDraw.Draw(img).text((20, 20), "Setup check 2026", fill=0, font=font)
         td = at(d, info.get("tessdata") or "tessdata")
         # tesserocr opens a path in the system's narrow code page: under a profile named in another
-        # alphabet it goes by its 8.3 short name, and where there is none OCR cannot start
-        api_dir = ownenv.ascii_path(td)
-        if not api_dir:
-            return {"ok": False, "why": ownenv.NONASCII_WHY % td, "fix": ownenv.NONASCII_FIX}
+        # alphabet it goes by its 8.3 short name, where there is none by its own name from its parent
+        # (the working directory is moved there for the start), and where even that cannot be, OCR cannot start
         langs = sorted(n[:-12] for n in os.listdir(td) if n.endswith(".traineddata"))
-        with tesserocr.PyTessBaseAPI(path=api_dir, lang="+".join(x for x in langs if x in ("eng", "rus"))
-                                     or "eng") as api:
+        broken = []                       # every pack must start: one cut short lists fine and fails at its first page
+        with ownenv.tess_dir(td) as api_dir:
+            if not api_dir:
+                return {"ok": False, "why": ownenv.NONASCII_WHY % td, "fix": ownenv.NONASCII_FIX}
+            api = tesserocr.PyTessBaseAPI(path=api_dir, lang="+".join(x for x in langs if x in ("eng", "rus"))
+                                          or "eng")
+            for lang in langs:
+                if lang == "osd":
+                    continue
+                try:
+                    with tesserocr.PyTessBaseAPI(path=api_dir, lang=lang):
+                        pass
+                except Exception:                              # noqa: BLE001
+                    broken.append(lang)
+        with api:
             api.SetImage(img)
             txt = api.GetUTF8Text()
-        broken = []                       # every pack must start: one cut short lists fine and fails at its first page
-        for lang in langs:
-            if lang == "osd":
-                continue
-            try:
-                with tesserocr.PyTessBaseAPI(path=api_dir, lang=lang):
-                    pass
-            except Exception:                                  # noqa: BLE001
-                broken.append(lang)
         why = "read %r" % txt.strip()[:60] if "2026" not in txt else ""
         if broken:
             why = "a language pack does not start: %s" % ", ".join(broken)

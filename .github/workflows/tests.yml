@@ -27,8 +27,8 @@ jobs:
         shell: bash
         run: |
           python -m pip install --quiet --disable-pip-version-check ruff vermin
-          ruff check --select F scripts tests
-          vermin --target=3.8- --violations --no-tips --eval-annotations scripts tests
+          ruff check --select F scripts tests tools
+          vermin --target=3.8- --violations --no-tips --eval-annotations scripts tests tools
 
   offline:
     # The suites that need no network: they pin the contract, the setup advice and every 0.4.x fix.

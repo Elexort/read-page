@@ -32,12 +32,21 @@ git-ignored, so a contributor may keep a file of their own under that name.
   themselves); in-process checks use the Python the suite runs in. `READ_PAGE_SKIP=env` runs a
   suite without it; CI has none.
 - While working, run the suites a change touches; before a commit, all of them (about 13 minutes).
-- Lint as CI does: `python -m ruff check --no-cache --select F scripts tests` (no `.ruff_cache` in
+- Lint as CI does: `python -m ruff check --no-cache --select F scripts tests tools` (no `.ruff_cache` in
   the skill's folder) and
-  `uvx vermin --target=3.8- --violations --no-tips --eval-annotations scripts tests`.
+  `uvx vermin --target=3.8- --violations --no-tips --eval-annotations scripts tests tools`.
 - CI: `tests.yml` on every push (Ubuntu with Python 3.9 and 3.12, Windows, a browser job, lint);
   `macos.yml` on every push to dev (macOS 15, arm64), or by hand from the Actions tab.
   Every suite runs even when an earlier one failed, so read all of a red run.
+  `install.yml` (pushes to dev and ci-install, and by hand) is the real install: `--setup` into a folder
+  with a space and Cyrillic in its path, the suites under the environment's Python, then a user's
+  clone-and-read, a bare Python, and Alpine and Ubuntu containers, on every free runner (Linux, Windows,
+  macOS; x64 and arm64). `tools/ci_install.py` is what the jobs run; a matrix row's `expect` lists what
+  its platform lacks for want of wheels (a floor), and any other gap is red. A run takes about 20 minutes
+  (the suites); a read of a failed job: `gh run view <id> --log-failed`, or the artifacts
+  `install-logs-*` (setup.log, setup-detail.log, setup.json, each suite's log).
+  The workflows live on dev only (`main` is the skill alone): `gh workflow run <file> --ref <branch>` works
+  from a branch that has the file, though the default branch has no workflow.
 - Bugs that belong to one OS (sockets and processes on Linux, paths and subprocesses on Windows)
   show only there: CI's Ubuntu and Windows jobs, and its oldest Python (3.9), are the check.
 

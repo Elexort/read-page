@@ -39,7 +39,8 @@ jobs:
           - {name: linux-x64, os: ubuntu-24.04, expect: ""}
           - {name: linux-arm64, os: ubuntu-24.04-arm, expect: ""}
           - {name: windows-x64, os: windows-2025, expect: ""}
-          - {name: windows-arm64, os: windows-11-arm, expect: ""}
+          # Windows on ARM has no wheel of pymupdf-layout (PDF tables) or tesserocr (OCR)
+          - {name: windows-arm64, os: windows-11-arm, expect: "pymupdf4llm,tesserocr,tesseract"}
           - {name: macos-15-arm64, os: macos-15, expect: ""}
           - {name: macos-26-arm64, os: macos-26, expect: ""}
           - {name: macos-15-x64, os: macos-15-intel, expect: ""}
@@ -197,10 +198,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {arch: x64, os: ubuntu-24.04, image: "alpine:latest", expect: ""}
-          - {arch: x64, os: ubuntu-24.04, image: "ubuntu:24.04", expect: ""}
-          - {arch: arm64, os: ubuntu-24.04-arm, image: "alpine:latest", expect: ""}
-          - {arch: arm64, os: ubuntu-24.04-arm, image: "ubuntu:24.04", expect: ""}
+          # what each lacks is a floor (no wheel, or no system library): README's Engines names them
+          - {arch: x64, os: ubuntu-24.04, image: "alpine:latest", expect: "pymupdf4llm,playwright,browser"}
+          - {arch: x64, os: ubuntu-24.04, image: "ubuntu:24.04", expect: "browser"}
+          - {arch: arm64, os: ubuntu-24.04-arm, image: "alpine:latest", expect: "pymupdf,pymupdf4llm,playwright,tesserocr,browser,tesseract"}
+          - {arch: arm64, os: ubuntu-24.04-arm, image: "ubuntu:24.04", expect: "browser"}
     steps:
       - uses: actions/checkout@v4
 
@@ -216,7 +218,10 @@ jobs:
       - name: summary
         if: ${{ always() }}
         shell: bash
-        run: cat "$RUNNER_TEMP/ci-logs/summary.md" >> "$GITHUB_STEP_SUMMARY" || true
+        run: |
+          # root made these in the container: the runner's own user must read them to upload
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/ci-logs"
+          cat "$RUNNER_TEMP/ci-logs/summary.md" >> "$GITHUB_STEP_SUMMARY" || true
 
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}

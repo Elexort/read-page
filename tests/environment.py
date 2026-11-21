@@ -413,8 +413,9 @@ def with_tesserocr(fake, tessdata, fn):
 rp1 = load_rp("ocr")
 rp1.which = lambda name: None                # no tesseract command on PATH: tesserocr alone
 got = with_tesserocr(fake_tesserocr(), cyr_td, lambda: rp1._tesserocr())
-check("tesserocr starts on tessdata under a path outside ASCII (the short path, where Windows needs it)",
-      bool(got) and got[2] == ["eng"] and (os.name != "nt" or got[1].isascii()), str(got and got[1:]))
+check("tesserocr starts on tessdata under a path outside ASCII (by the short path, where Windows needs it), and "
+      "what it hands back is the folder itself: every later start goes through ownenv.tess_dir",
+      bool(got) and got[2] == ["eng"] and got[1] == cyr_td, str(got and got[1:]))
 caps_ok = with_tesserocr(fake_tesserocr(), cyr_td, lambda: rp1.caps(fresh=True))
 check("caps counts OCR as working only once it starts: here it does",
       caps_ok["libs"].get("tesserocr") is True and "eng" in caps_ok["ocr_langs"] and not caps_ok.get("ocr_error"),
@@ -428,16 +429,45 @@ check("the setup report shows OCR as missing, with why - not under 'works now'",
       rows.get("tesseract") and rows["tesseract"][1] is False and "does not start" in rows["tesseract"][3],
       str(rows.get("tesseract")))
 real_ascii = ownenv.ascii_path
-ownenv.ascii_path = lambda p: ""                # a volume that makes no short names
+ownenv.ascii_path = lambda p: ""                # a volume that makes no short names (a CI runner's D:)
+cwd_before = os.getcwd()
 try:
+    arg_rel, cwd_rel = ownenv.tess_arg(cyr_td)
+    with ownenv.tess_dir(cyr_td) as inside:
+        moved = (inside, os.path.samefile(os.getcwd(), cyr))
     caps_nos = with_tesserocr(fake_tesserocr(), cyr_td, lambda: rp1.caps(fresh=True))
+    got_nos = with_tesserocr(fake_tesserocr(), cyr_td, lambda: rp1._tesserocr())
+    # a tessdata folder whose own name is outside ASCII has no such way: the one fix that works is said
+    odd_td = os.path.join(cyr, "".join(chr(c) for c in (0x434, 0x430, 0x43D, 0x43D, 0x44B, 0x435)))
+    os.makedirs(odd_td)
+    shutil.copy2(os.path.join(cyr_td, "eng.traineddata"), odd_td)
+    arg_odd = ownenv.tess_arg(odd_td)
+    caps_odd = with_tesserocr(fake_tesserocr(), odd_td, lambda: rp1.caps(fresh=True))
 finally:
     ownenv.ascii_path = real_ascii
-rows = {r[0]: r for r in rp1.setup_rows(dict(caps_nos, keys={}))}
-check("... and with no short name the fix is the one that works: READ_PAGE_HOME on an ASCII path",
-      caps_nos["libs"].get("tesserocr") is False and "outside ASCII" in (caps_nos.get("ocr_error") or "")
+check("with no short name the folder's own name goes from its parent (ASCII; the working directory is moved for the "
+      "start and put back)",
+      arg_rel == "tessdata" and cwd_rel == os.path.abspath(cyr) and moved == ("tessdata", True)
+      and os.getcwd() == cwd_before, str((arg_rel, cwd_rel, moved)))
+check("... and OCR starts that way, and counts as working (before: dead without a word, on a volume with no short names)",
+      bool(got_nos) and got_nos[1] == cyr_td and got_nos[2] == ["eng"] and caps_nos["libs"].get("tesserocr") is True
+      and "eng" in caps_nos["ocr_langs"] and not caps_nos.get("ocr_error"), str(got_nos and got_nos[1:]))
+rows = {r[0]: r for r in rp1.setup_rows(dict(caps_odd, keys={}))}
+check("... and when the folder's own name is outside ASCII too the fix is the one that works: READ_PAGE_HOME on an ASCII path",
+      arg_odd == ("", None) and caps_odd["libs"].get("tesserocr") is False
+      and "outside ASCII" in (caps_odd.get("ocr_error") or "")
       and rows["tesseract"][2] == ownenv.NONASCII_FIX and "READ_PAGE_HOME" in ownenv.NONASCII_FIX,
-      str(rows["tesseract"][2:3]))
+      str((arg_odd, rows["tesseract"][2:3])))
+ownenv.ascii_path = lambda p: ""
+try:
+    try:
+        with ownenv.tess_dir(cyr_td):
+            raise RuntimeError("the start failed")
+    except RuntimeError:
+        pass
+finally:
+    ownenv.ascii_path = real_ascii
+check("... and a start that fails puts the working directory back all the same", os.getcwd() == cwd_before, os.getcwd())
 # a scanned PDF through all of it: `missing: ocr` with the reason, never a bare `empty`
 try:
     from PIL import Image
@@ -463,11 +493,15 @@ except ImportError:
 real_info = ownenv.load(ownenv.home())
 real_py = ownenv.at(ownenv.home(), real_info.get("python"))
 real_eng = os.path.join(ownenv.at(ownenv.home(), real_info.get("tessdata") or "tessdata"), "eng.traineddata")
-if real_py and os.path.isfile(real_py) and os.path.isfile(real_eng):
+has_tesserocr = bool(real_py and os.path.isfile(real_py)) and subprocess.run(
+    [real_py, "-E", "-c", "import tesserocr"], capture_output=True, timeout=120).returncode == 0
+if has_tesserocr and os.path.isfile(real_eng):             # (Windows on ARM: an environment with no tesserocr in it)
     shutil.copy2(real_eng, os.path.join(cyr_td, "eng.traineddata"))
     probe = ("import os, sys, tempfile\n"
              "sys.path.insert(0, %r)\n"
-             "import envsetup, readpage\n"
+             "import envsetup, readpage, ownenv\n"
+             "if os.environ.get('RP_NO_SHORT'):\n"
+             "    ownenv.ascii_path = lambda p: ''          # a volume that makes no short names\n"
              "td = os.environ['READ_PAGE_TESSDATA']\n"
              "res = envsetup._check_ocr(os.path.dirname(td), {'tessdata': 'tessdata'})\n"
              "from PIL import Image, ImageDraw, ImageFont\n"
@@ -484,6 +518,13 @@ if real_py and os.path.isfile(real_py) and os.path.isfile(real_eng):
     check("the real tesserocr, the eng pack under a Cyrillic folder: the check passes and a picture is read",
           p.returncode == 0 and said.startswith("True ") and said.endswith("True tesserocr"),
           (said or p.stderr.decode("utf-8", "replace"))[-200:])
+    p_ns = subprocess.run([real_py, "-E", "-B", "-X", "utf8", "-c", probe], capture_output=True, timeout=120,
+                          env=dict(os.environ, READ_PAGE_TESSDATA=cyr_td, READ_PAGE_HOME=cyr, RP_NO_SHORT="1",
+                                   READ_PAGE_ENV_CHILD="1", READ_PAGE_CACHE=os.path.join(cyr, "cache3")))
+    said_ns = p_ns.stdout.decode("utf-8", "replace").strip()
+    check("... and on a volume that makes no short names (a runner's D:): the same, from the folder's parent",
+          p_ns.returncode == 0 and said_ns.startswith("True ") and said_ns.endswith("True tesserocr"),
+          (said_ns or p_ns.stderr.decode("utf-8", "replace"))[-200:])
     # a pack that lists fine and does not start (cut short) is found by starting it, here and in the check
     with open(real_eng, "rb") as fh_:
         cut_pack = fh_.read()[:5000]
@@ -944,14 +985,93 @@ finally:
 # ---------------------------------------------------------------- the Linux browser advice runs no interpreter as root
 dry = ("Missing system dependencies (3):\n  libasound2t64\n  libatk-bridge2.0-0t64\n  libnss3\n")
 fixl = envsetup.browser_libs_fix(dry)
-check("the browser's missing libraries are named as the machine's own `sudo apt-get install`",
-      fixl == "sudo apt-get install libasound2t64 libatk-bridge2.0-0t64 libnss3", fixl)
+check("the browser's missing libraries are named as the machine's own `sudo apt-get install` (no sudo for root)",
+      fixl == "%sapt-get install libasound2t64 libatk-bridge2.0-0t64 libnss3" % ownenv.sudo(), fixl)
 check("... from names only (what is not a package name is not put in a command), and nothing when none is missing",
       envsetup.browser_libs_fix("Missing system dependencies (1):\n  libx; rm -rf ~\n") == ""
       and envsetup.browser_libs_fix("All system dependencies are installed.\n") == "", "")
 src_env = open(os.path.join(SCRIPTS, "envsetup.py"), encoding="utf-8").read()
 check("... and no `sudo <environment python> -m playwright` anywhere (a user-writable interpreter run as root)",
       "sudo %s -m playwright" not in src_env, "")
+
+# ---------------------------------------------------------------- what --setup cannot install is named, with a fix
+# the first CI install on Alpine (musl) and on a bare Ubuntu: "sudo apt install" on an Alpine, a reason cut at
+# its start ("ur requirements are unsatisfiable"), `readpage.py --setup` offered for what it cannot give, the
+# same engine named twice. uv's own words (`uv pip compile --python-platform x86_64-unknown-linux-musl`):
+UV_NO_WHEEL = ("error: No solution found when resolving dependencies\n"
+               "  cause: Because pymupdf-layout==1.28.2 has no wheels with a matching platform tag (e.g., "
+               "`musllinux_1_2_x86_64`) and pymupdf4llm==1.28.2 depends on pymupdf-layout==1.28.2, we can conclude "
+               "that pymupdf4llm==1.28.2 cannot be used.\n         And because you require pymupdf4llm==1.28.2, we "
+               "can conclude that your requirements are unsatisfiable.\n\nhint: Wheels are available for "
+               "`pymupdf-layout` (v1.28.2) on the following platforms: `manylinux_2_28_aarch64`, `win_amd64`\n")
+UV_SDIST_ONLY = ("  x No solution found when resolving dependencies:\n  `-> Because tesserocr==2.13.0 has no usable "
+                 "wheels and you require it, we can conclude that your requirements are unsatisfiable.\n"
+                 "hint: Wheels are required for `tesserocr` because building from source is disabled for all "
+                 "packages (i.e., with `--no-build`)\n")
+UV_NETWORK = ("error: Failed to fetch: `https://pypi.org/simple/lxml/`\n  Caused by: error sending request for url\n"
+              "  Caused by: dns error: failed to lookup address information\n")
+check("uv's no-wheel answers are told from a failure of the network",
+      envsetup.no_build(UV_NO_WHEEL) and envsetup.no_build(UV_SDIST_ONLY) and not envsetup.no_build(UV_NETWORK), "")
+real_machine, real_musl = envsetup.machine, envsetup.musl
+envsetup.machine, envsetup.musl = (lambda: "x64"), (lambda: True)
+ownenv_machine, ownenv_musl = ownenv.machine, ownenv.musl
+ownenv.machine, ownenv.musl = envsetup.machine, envsetup.musl
+try:
+    part, why, fixed = envsetup.package_problem("pymupdf4llm", UV_NO_WHEEL)
+    here_name = "musl Linux on x64" if (os.name != "nt" and sys.platform != "darwin") else ownenv.platform_name()
+    check("a package with no build here is named for this machine, in whole, not cut at its start",
+          part == "pymupdf4llm" and why == "pymupdf4llm has no build for " + here_name, why)
+    check("... with what a user can do (not `readpage.py --setup`, which cannot give it)",
+          "none here" in fixed and "setup" not in fixed and "glibc" in fixed, fixed)
+    part_b, why_b, fix_b = envsetup.package_problem("playwright", UV_NO_WHEEL)
+    check("... Playwright is the browser part, and its fix does not send a user to a system Chromium that has no driver",
+          part_b == "browser" and "no headless browser" in fix_b and "chromium" not in fix_b, fix_b)
+    part_n, why_n, fix_n = envsetup.package_problem("lxml", UV_NETWORK)
+    check("a failure that is not a missing build says what it was (the line, and its cause)",
+          "has no build" not in why_n and "Failed to fetch" in why_n and "error sending request" in why_n, why_n)
+finally:
+    envsetup.machine, envsetup.musl = real_machine, real_musl
+    ownenv.machine, ownenv.musl = ownenv_machine, ownenv_musl
+if os.name == "nt":
+    ownenv.machine = lambda: "arm64"
+    arm_name = ownenv.platform_name()
+    ownenv.machine = ownenv_machine
+    check("Windows on ARM is named the way its users say it", arm_name == "Windows on ARM", arm_name)
+else:
+    print("SKIP the name of Windows on ARM (this is not Windows)")
+check("the engines that are programs name the machine's own install of the program (OCR, PDF text)",
+      envsetup.package_problem("tesserocr", UV_SDIST_ONLY)[2] == ownenv.system_install("tesseract")
+      and envsetup.package_problem("pymupdf", UV_SDIST_ONLY)[2].startswith(ownenv.system_install("poppler")), "")
+os_release = {"alpine": 'NAME="Alpine Linux"\nID=alpine\nVERSION_ID=3.24.1\n',
+              "ubuntu": 'NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\n', "mint": "ID=linuxmint\nID_LIKE=\"ubuntu debian\"\n",
+              "fedora": "ID=fedora\n", "rocky": 'ID="rocky"\nID_LIKE="rhel centos fedora"\n',
+              "suse": 'ID="opensuse-tumbleweed"\nID_LIKE="opensuse suse"\n', "arch": "ID=arch\n", "other": "ID=nixos\n"}
+fam = {k: ownenv.linux_family(v) for k, v in os_release.items()}
+check("a Linux's package manager is read from its os-release (ID and ID_LIKE)",
+      fam == {"alpine": "apk", "ubuntu": "apt", "mint": "apt", "fedora": "dnf", "rocky": "dnf", "suse": "zypper",
+              "arch": "pacman", "other": ""}, str(fam))
+if os.name == "nt" or sys.platform == "darwin":
+    print("SKIP the Linux package lines (this is %s: winget or brew)" % ("Windows" if os.name == "nt" else "macOS"))
+else:
+    check("the install line is the machine's own: apk on Alpine, dnf on Fedora, apt (and sudo for a user, none for root)",
+          ownenv.system_install("tesseract", family="apk", root=True) == "apk add tesseract-ocr"
+          and ownenv.system_install("tesseract", family="dnf", root=False) == "sudo dnf install tesseract"
+          and ownenv.system_install("poppler", family="pacman", root=False) == "sudo pacman -S poppler"
+          and ownenv.system_install("curl", family="", root=True) == "apt install curl"
+          and ownenv.system_install("chromium", family="apt", root=False)
+          == "sudo apt install chromium-browser  (or sudo snap install chromium)", "")
+wk = envsetup.Work(tempfile.mkdtemp(prefix="rp-env-w-"), "rw", "test")
+wk.env_py = sys.executable
+wk.problems = [{"part": "browser", "why": "playwright has no build", "fix": "none here"}]
+wk.sh = lambda *a, **k: (_ for _ in ()).throw(AssertionError("an installer was run"))
+res_b = wk.browser()
+check("the browser step does not download a browser for a Playwright that is not there (and says nothing twice)",
+      res_b[0] is False and "playwright is not installed" in res_b[1] and len(wk.problems) == 1, str(res_b))
+check("a broken engine that was named when it did not install is not named again as `engines`",
+      envsetup.engines_covered("pymupdf4llm (No module named 'pymupdf4llm'); playwright (No module named 'playwright')",
+                               [{"part": "pymupdf4llm"}, {"part": "browser"}])
+      and not envsetup.engines_covered("lxml (No module named 'lxml')", [{"part": "browser"}])
+      and not envsetup.engines_covered("", []), "")
 
 # ---------------------------------------------------------------- a misspelled --setup is --setup
 rp_l5 = load_rp("l5")
