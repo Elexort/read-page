@@ -7,7 +7,8 @@
     setup     run `readpage.py --setup`, timing it and counting the bytes that came in and what it took
     check     read what the setup built (setup.json): steps and engines that did not work must be what
               the matrix expects, and each must be named with a reason and a fix
-    read      a local HTML file, a public page and (--ocr) a scanned PDF, through the installed skill
+    read      a local HTML file, a public page and (--ocr) a scanned PDF, through the installed skill;
+              (--cjk) files named and written in Chinese
     suites    the offline suites, under the environment's own Python
     bare      a Python with nothing installed and no --setup: the CLI, the report, a local read
     collect   the setup's logs and state into the folder that is uploaded
@@ -48,6 +49,11 @@ NO_COUNT = ("office_fixtures",)       # it prints a line a file and ends by its 
 PUBLIC_URL = "https://example.com"
 PUBLIC_WORDS = "documentation examples"          # in the page's text, whichever extractor kept its title or not
 SCAN_WORDS = "Invoice 4711 paid in full"
+# Chinese, from code points (no editor, shell or code page can change them): a file's name, and the text in it
+CN_NAME = "".join(chr(c) for c in (0x4E2D, 0x6587, 0x9875, 0x9762))                                        # 中文页面
+CN_SENTENCE = "".join(chr(c) for c in (0x9875, 0x9762, 0x8BFB, 0x53D6, 0x6D4B, 0x8BD5, 0xFF0C, 0x4E2D, 0x6587,
+                                       0x5185, 0x5BB9, 0x5E94, 0x5F53, 0x5B8C, 0x6574, 0x4FDD, 0x7559, 0x3002))   # 页面读取测试，中文内容应当完整保留。
+CN_PHRASE = CN_SENTENCE[:6]                      # what an answer must hold whole
 
 
 # ---------------------------------------------------------------- small things
@@ -365,6 +371,8 @@ def cmd_check(a):
     print("\nnot working: %s" % (", ".join(gaps) or "nothing"))
     print("expected    : %s" % (", ".join(want) or "nothing"))
     bad = []
+    if parts.get("check") and not checked:
+        bad.append("the check did not finish (setup.json holds no result of it): %s" % (parts["check"].get("note") or "")[:150])
     unexpected = [g for g in gaps if g not in want]
     if unexpected:
         bad.append("not working and not expected: %s" % ", ".join(unexpected))
@@ -485,15 +493,63 @@ def cmd_read(a):
                     print("note: " + msg + " - expected, OCR is a documented gap here")
                 else:
                     bad.append(msg)
+    if a.cjk:
+        bad += cjk_reads(a, work, res)
     save("reads", res)
     for b in bad:
         fail(b)
     return 1 if bad else 0
 
 
+def cjk_reads(a, work, res):
+    """Files whose names are Chinese, written as UTF-8 and as GBK (declared), through the skill the way an agent
+    runs it (-X utf8); then one of them through cmd.exe after `chcp 936`, which is as near to a Chinese console as a
+    runner's pipes get. Returns what went wrong."""
+    bad = []
+    body = (CN_SENTENCE * 6) + "\n"
+    page = ("<html><head>%s<title>" + CN_NAME + "</title></head><body><article><h1>" + CN_NAME + "</h1><p>" + body
+            + "</p><p>" + body + "</p></article></body></html>")
+    folder = os.path.join(work, "cjk " + CN_NAME)
+    os.makedirs(folder)
+    files = [("utf8", os.path.join(folder, CN_NAME + "-utf8.html"), (page % '<meta charset="utf-8">').encode("utf-8")),
+             ("gbk", os.path.join(folder, CN_NAME + "-gbk.html"),
+              (page % '<meta http-equiv="Content-Type" content="text/html; charset=gbk">').encode("gbk")),
+             ("txt", os.path.join(folder, CN_NAME + ".txt"), (CN_SENTENCE * 40 + "\n").encode("utf-8"))]
+    for label, path, data in files:
+        with open(path, "wb") as fh:
+            fh.write(data)
+        rc, out = read(a, [path, "--dir", os.path.join(folder, "out-" + label)])
+        st, why = status_of(out)
+        print("\n== Chinese %s: %s | %s" % (label, st, why[:100]))
+        print("\n".join(out.splitlines()[:6]))
+        res["cjk_" + label] = st
+        if st != "ok" or CN_PHRASE not in out:
+            bad.append("the Chinese file (%s) did not read ok with its text whole (status %r)" % (label, st))
+    if os.name == "nt":
+        # every path goes through the environment (cmd reads it as wide characters; the command line itself stays ASCII)
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", CI_PY=a.python or sys.executable, CI_SCRIPT=script(a),
+                   CI_FILE=files[0][1], CI_OUT=os.path.join(folder, "out-chcp"))
+        line = 'chcp 936>nul & "%CI_PY%" -X utf8 "%CI_SCRIPT%" "%CI_FILE%" --dir "%CI_OUT%"'
+        try:
+            p = subprocess.run(line, shell=True, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               env=env, timeout=240)
+            rc, out = p.returncode, p.stdout.decode("utf-8", "replace")
+        except (OSError, subprocess.SubprocessError) as e:
+            rc, out = -2, str(e)
+        st, why = status_of(out)
+        print("\n== through cmd.exe after chcp 936: %s | %s" % (st, why[:100]))
+        res["cjk_chcp"] = st
+        if st != "ok" or CN_PHRASE not in out:
+            bad.append("the Chinese file read through cmd.exe after chcp 936 was not ok (status %r, exit %s: %s)"
+                       % (st, rc, out[-200:]))
+    return bad
+
+
 # ---------------------------------------------------------------- suites
 def cmd_suites(a):
-    names = [x for x in a.only.split(",") if x] or (OFFLINE + ([] if a.no_browser else [BROWSER_SUITE]))
+    cjk = ["cjk"] if os.path.isfile(os.path.join(ROOT, "tests", "cjk.py")) else []
+    names = [x for x in a.only.split(",") if x] or (OFFLINE + cjk + ([] if a.no_browser else [BROWSER_SUITE]))
+    flags = [] if a.no_xutf8 else ["-X", "utf8"]       # a Chinese Windows or locale gives a driver no UTF-8 mode
     py = a.python or env_python(a) or sys.executable
     print("suites run under %s" % py)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
@@ -514,7 +570,7 @@ def cmd_suites(a):
     for n in names:
         path = os.path.join(ROOT, "tests", n + ".py")
         t0 = time.time()
-        rc, out = run_capture([py, "-X", "utf8", path], env=env, timeout=a.timeout, cwd=ROOT)
+        rc, out = run_capture([py] + flags + [path], env=env, timeout=a.timeout, cwd=ROOT)
         with open(os.path.join(logs(), "suite-%s.log" % n), "w", encoding="utf-8") as fh:
             fh.write(out)
         m = None
@@ -658,6 +714,10 @@ def cmd_summary(a):
 
 # ---------------------------------------------------------------- main
 def main(argv):
+    try:
+        sys.stdout.reconfigure(errors="replace")      # under a code page that lacks a character of a name printed
+    except (AttributeError, ValueError):
+        pass
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
 
@@ -681,9 +741,12 @@ def main(argv):
         lambda p: p.add_argument("--max-mb", type=int, default=None))
     add("check", cmd_check, lambda p: p.add_argument("--expect"))
     add("read", cmd_read, lambda p: p.add_argument("--ocr", action="store_true"),
+        lambda p: p.add_argument("--cjk", action="store_true", help="also read files named and written in Chinese"),
         lambda p: p.add_argument("--expect"))
     add("suites", cmd_suites, lambda p: p.add_argument("--only", default=""),
         lambda p: p.add_argument("--no-browser", action="store_true"),
+        lambda p: p.add_argument("--no-xutf8", action="store_true",
+                                 help="run each suite without -X utf8, as a Python on a Chinese Windows or a GBK locale is"),
         lambda p: p.add_argument("--timeout", type=int, default=1800))
     add("bare", cmd_bare)
     add("collect", cmd_collect)

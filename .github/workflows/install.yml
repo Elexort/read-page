@@ -6,11 +6,11 @@ name: install
 # README; `-large` and `-xlarge` are paid and not used). tools/ci_install.py holds what the jobs measure
 # and assert; what a platform lacks for want of wheels is listed in its matrix row (`expect`), so a gap
 # that is not listed turns the job red, and a listed one is a floor README and KNOWN-ISSUES name.
-# Runs on dev and ci-install pushes (the workflows live on those branches: `main` is the skill alone),
-# and by hand.
+# Runs on dev, ci-install and installer-wave pushes (the workflows live on those branches: `main` is the skill
+# alone), and by hand.
 on:
   push:
-    branches: [dev, ci-install]
+    branches: [dev, ci-install, installer-wave]
   workflow_dispatch:
 
 # a newer push replaces the run of an older one on the same branch
@@ -125,6 +125,9 @@ jobs:
           - {name: windows, os: windows-2025, python: python, shell: pwsh, source: commit, expect: ""}
           - {name: macos, os: macos-15, python: /usr/bin/python3, shell: bash, source: main, expect: ""}
           - {name: macos, os: macos-15, python: /usr/bin/python3, shell: bash, source: commit, expect: ""}
+          # README's other way in: "No git: download the ZIP ... unpack it into that place and name the folder read-page"
+          - {name: linux, os: ubuntu-24.04, python: python3, shell: bash, source: zip, expect: ""}
+          - {name: windows, os: windows-2025, python: python, shell: pwsh, source: zip, expect: ""}
     steps:
       # the checkout is only for tools/ci_install.py; the skill is what README's command clones
       - uses: actions/checkout@v4
@@ -132,7 +135,24 @@ jobs:
           path: ci
 
       - name: 1. put the folder where the agent looks (README's command)
+        if: ${{ matrix.source != 'zip' }}
         run: git clone https://github.com/Elexort/read-page $HOME/.agents/skills/read-page
+
+      - name: "1. ... or the ZIP of the pushed commit, unpacked and named read-page (README, no git)"
+        if: ${{ matrix.source == 'zip' && matrix.shell == 'bash' }}
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/read-page.zip" https://github.com/Elexort/read-page/archive/${{ github.sha }}.zip
+          mkdir -p "$HOME/.agents/skills" "$RUNNER_TEMP/unzipped"
+          unzip -q "$RUNNER_TEMP/read-page.zip" -d "$RUNNER_TEMP/unzipped"
+          mv "$RUNNER_TEMP"/unzipped/read-page-* "$HOME/.agents/skills/read-page"
+
+      - name: "1. ... or the ZIP of the pushed commit, unpacked and named read-page (README, no git; PowerShell)"
+        if: ${{ matrix.source == 'zip' && matrix.shell == 'pwsh' }}
+        run: |
+          Invoke-WebRequest -UseBasicParsing -Uri https://github.com/Elexort/read-page/archive/${{ github.sha }}.zip -OutFile "$env:RUNNER_TEMP\read-page.zip"
+          New-Item -ItemType Directory -Force -Path "$HOME\.agents\skills" | Out-Null
+          Expand-Archive -Path "$env:RUNNER_TEMP\read-page.zip" -DestinationPath "$env:RUNNER_TEMP\unzipped"
+          Move-Item (Get-ChildItem "$env:RUNNER_TEMP\unzipped" | Select-Object -First 1).FullName "$HOME\.agents\skills\read-page"
 
       - name: 1b. the pushed commit instead of main's head
         if: ${{ matrix.source == 'commit' }}
@@ -203,6 +223,13 @@ jobs:
           - {arch: x64, os: ubuntu-24.04, image: "ubuntu:24.04", expect: "browser"}
           - {arch: arm64, os: ubuntu-24.04-arm, image: "alpine:latest", expect: "pymupdf,pymupdf4llm,playwright,tesserocr,browser,tesseract"}
           - {arch: arm64, os: ubuntu-24.04-arm, image: "ubuntu:24.04", expect: "browser"}
+          # older glibc and the other package managers: Debian 11 and Ubuntu 20.04 have glibc 2.31 (and Python
+          # 3.9 and 3.8), Fedora dnf, Arch pacman, openSUSE zypper - each must name what it lacks with its own fix
+          - {arch: x64, os: ubuntu-24.04, image: "debian:11", expect: "browser"}
+          - {arch: x64, os: ubuntu-24.04, image: "ubuntu:20.04", expect: "browser"}
+          - {arch: x64, os: ubuntu-24.04, image: "fedora:latest", expect: "browser"}
+          - {arch: x64, os: ubuntu-24.04, image: "archlinux:latest", expect: "browser"}
+          - {arch: x64, os: ubuntu-24.04, image: "opensuse/tumbleweed:latest", expect: "browser"}
     steps:
       - uses: actions/checkout@v4
 
@@ -227,5 +254,234 @@ jobs:
         if: ${{ always() }}
         with:
           name: install-logs-container-${{ matrix.arch }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/ci-logs
+          if-no-files-found: warn
+
+  proxy:
+    # A proxy that inspects TLS: mitmproxy, its root certificate in the OS's own store and nowhere else (no
+    # SSL_CERT_FILE, no NODE_EXTRA_CA_CERTS), every download of `--setup` and a read sent through it. README says
+    # uv, Node and Python all trust the machine's store (UV_SYSTEM_CERTS, NODE_USE_SYSTEM_CA, urllib's default), so a
+    # company's proxy works for the whole setup; before this job nothing had shown it. tools/ci_proxy.py starts it and
+    # reports which hosts it saw and which client turned its certificate down: an installer that does is red.
+    name: proxy (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CI_EXPECT_MISSING: ${{ matrix.expect }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: linux, os: ubuntu-24.04, expect: ""}
+          - {name: windows, os: windows-2025, expect: ""}
+          - {name: macos, os: macos-15, expect: ""}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: mitmproxy
+        shell: bash
+        run: python -m pip install --quiet --disable-pip-version-check mitmproxy
+
+      - name: the machine, and a fresh READ_PAGE_HOME
+        shell: bash
+        run: |
+          python -X utf8 tools/ci_install.py machine
+          python -X utf8 tools/ci_install.py home
+
+      - name: the proxy, its root certificate in the system's store
+        shell: bash
+        run: python -X utf8 tools/ci_proxy.py start
+
+      - name: --setup through the proxy (every download of it)
+        shell: bash
+        run: python -X utf8 tools/ci_install.py setup --label first --follow
+
+      - name: what it built
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tools/ci_install.py check
+
+      - name: reads through the proxy (a local file, a public page, a scanned PDF)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tools/ci_install.py read --ocr
+
+      - name: what went through the proxy, and who refused its certificate
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          python -X utf8 tools/ci_proxy.py report | tee "$RUNNER_TEMP/ci-logs/proxy-report.txt"
+          python -X utf8 tools/ci_proxy.py stop
+
+      - name: the folder's contents, and the summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          python -X utf8 tools/ci_install.py collect
+          cp "$RUNNER_TEMP/ci-proxy/proxy-flows.tsv" "$RUNNER_TEMP/ci-proxy/mitmdump.log" "$RUNNER_TEMP/ci-logs/" || true
+          python -X utf8 tools/ci_install.py summary --title "proxy ${{ matrix.name }}"
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: install-logs-proxy-${{ matrix.name }}
+          path: ${{ runner.temp }}/ci-logs
+          if-no-files-found: warn
+
+  chinese-windows:
+    # A Chinese user on Windows, as far as a runner allows. The system's ANSI code page (1252 here) cannot change
+    # without a reboot, but an application manifest can give one *process* another: `<activeCodePage>zh-CN` runs it
+    # with GetACP() = 936, the encoding of every narrow Win32 call and of a Python started without -X utf8 (cp936,
+    # its pipes gbk) - what a Chinese Windows gives. tools/ci_acp.py copies the job's python.exe, patches Git's
+    # curl.exe (which takes its arguments in the ANSI code page) and, after the setup, the environment's own Python,
+    # and ASSERTS GetACP() each time: a manifest an older Windows ignores must never be a green job (the trick was
+    # proved on one Windows 11 build; windows-2025 is the first runner it meets).
+    # The profile is named in that language, with a space and a letter whose trailing byte is 0x5C (a backslash to
+    # code that splits a narrow path on bytes): the skill is cloned into it as README says, the setup, the engines'
+    # home and cache, TEMP, files named and written in Chinese, and the suites, run in it.
+    # What it does NOT cover: the system locale itself (GetOEMCP, the console's code page, the UI language, date
+    # formats, keyboard and fonts stay English); a process nobody patched (uv, Node, npm, a user's tools keep 1252: they
+    # take UTF-8 or wide characters); a real console (a runner has pipes: the WriteConsoleW path and a conhost window
+    # on `chcp 936` are not exercised, `cmd /c chcp 936` is tried and said); PowerShell 5.1's own argument and pipe
+    # encodings; software that writes the real files (Excel's GBK csv, Explorer's GBK zip, Word's RTF are
+    # approximated with Python's codecs); a Chinese Windows' own environment (360/Tencent/Kingsoft antivirus holding
+    # files or killing children, the Chinese Store Python, Windows 10 LTSC with an old curl, a redirected profile);
+    # tesseract.exe, pdftotext.exe and lynx (no binary on a runner); the network (the firewall, mirrors, slow
+    # GitHub, `.cn` sites behind captchas); and windows-2022 and older where the manifest may be refused. A real
+    # zh-CN Windows (Azure has an image) run once before a release closes the list.
+    name: chinese windows (${{ matrix.locale }})
+    runs-on: windows-2025
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {locale: zh-CN}
+          - {locale: zh-TW}
+    steps:
+      # only for tools/ci_acp.py: the skill under test is cloned into the Chinese profile below
+      - uses: actions/checkout@v4
+        with:
+          path: ci
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: "the Python and Git's curl get the code page of ${{ matrix.locale }} - and the job stops where that did nothing"
+        run: python ci/tools/ci_acp.py python ${{ matrix.locale }}
+
+      - name: a user profile in that language (home, TEMP, caches), through the environment
+        run: python ci/tools/ci_acp.py profile ${{ matrix.locale }}
+
+      - name: README's install, into that profile (git clone at the pushed commit)
+        run: |
+          git clone -q https://github.com/Elexort/read-page "$HOME/.agents/skills/read-page"
+          git -C "$HOME/.agents/skills/read-page" checkout -q ${{ github.sha }}
+          echo "SKILL=$(cygpath -m "$HOME/.agents/skills/read-page")" >> "$GITHUB_ENV"
+
+      - name: what a process sees here
+        run: |
+          "$ACPY" "$SKILL/tools/ci_acp.py" show
+          "$ACPY" "$SKILL/tools/ci_install.py" machine
+          cmd //c chcp || true
+
+      - name: "--setup from nothing, as an agent runs it (the Python is told no -X utf8, the skill's CLI is)"
+        run: '"$ACPY" "$SKILL/tools/ci_install.py" setup --label first --follow --python "$ACPY" --skill "$SKILL"'
+
+      - name: the environment's Python gets the same code page, and so does everything it starts
+        run: '"$ACPY" "$SKILL/tools/ci_acp.py" env-python ${{ matrix.locale }}'
+
+      - name: what it built
+        if: ${{ !cancelled() }}
+        run: '"$ACPY" "$SKILL/tools/ci_install.py" check --skill "$SKILL"'
+
+      - name: the setup report and --caps
+        if: ${{ !cancelled() }}
+        run: |
+          "$ACPY" -X utf8 "$SKILL/scripts/readpage.py" | tee "$RUNNER_TEMP/ci-logs/setup-report.txt"
+          "$ACPY" -X utf8 "$SKILL/scripts/readpage.py" --caps | tee "$RUNNER_TEMP/ci-logs/caps.json"
+
+      - name: reads (a local file, a public page, a scan through OCR, files named and written in Chinese, after chcp 936)
+        if: ${{ !cancelled() }}
+        run: '"$ACPY" "$SKILL/tools/ci_install.py" read --python "$ACPY" --skill "$SKILL" --ocr --cjk'
+
+      - name: the suites, under the environment's Python and its code page, none of them told -X utf8
+        if: ${{ !cancelled() }}
+        run: '"$ACPY" "$SKILL/tools/ci_install.py" suites --skill "$SKILL" --no-xutf8'
+
+      - name: "--setup once more (nothing to fetch, so quick)"
+        if: ${{ !cancelled() }}
+        run: '"$ACPY" "$SKILL/tools/ci_install.py" setup --label second --max-seconds 120 --max-mb 50 --python "$ACPY" --skill "$SKILL"'
+
+      - name: the folder's contents, and the summary
+        if: ${{ always() }}
+        run: |
+          "$ACPY" "$SKILL/tools/ci_install.py" collect --skill "$SKILL"
+          "$ACPY" "$SKILL/tools/ci_install.py" summary --title "chinese windows ${{ matrix.locale }}"
+
+      - name: the runner's own profile again (the actions that upload the logs know no other)
+        if: ${{ always() }}
+        run: python ci/tools/ci_acp.py restore
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: install-logs-chinese-windows-${{ matrix.locale }}
+          path: ${{ runner.temp }}/ci-logs
+          if-no-files-found: warn
+
+  gbk-linux:
+    # The cheap twin of the job above, on Linux: `LC_ALL=zh_CN.GBK PYTHONUTF8=0` gives a Python the locale encoding of
+    # a Chinese machine (GBK; GB18030 and Big5 are generated too) with no UTF-8 mode, so every text I/O that depends
+    # on it - a test's, a child's - shows, with no Windows trick. Core shape (no packages beyond the engines of
+    # tests.yml); the suites and tests/cjk.py once it exists.
+    name: gbk locale (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install optional engines
+        run: |
+          python -m pip install --quiet --disable-pip-version-check trafilatura html2text \
+            pymupdf python-docx openpyxl python-pptx pillow psutil curl_cffi
+
+      - name: the locales
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq locales
+          printf 'zh_CN.GBK GBK\nzh_CN.GB18030 GB18030\nzh_TW.BIG5 BIG5\n' | sudo tee -a /etc/locale.gen
+          sudo locale-gen
+          locale -a | grep -i zh_ || true
+
+      - name: this Python runs in GBK, with no UTF-8 mode (and the job stops where it does not)
+        env:
+          LC_ALL: zh_CN.GBK
+          PYTHONUTF8: "0"
+        run: python tools/ci_acp.py encoding gbk
+
+      - name: the suites, in that locale, none of them told -X utf8
+        env:
+          LC_ALL: zh_CN.GBK
+          PYTHONUTF8: "0"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: python tools/ci_install.py suites --no-xutf8 --no-browser
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: install-logs-gbk-linux
           path: ${{ runner.temp }}/ci-logs
           if-no-files-found: warn
