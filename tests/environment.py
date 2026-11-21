@@ -42,6 +42,16 @@ import ownenv    # noqa: E402
 ok = failed = 0
 
 
+def ascii_base():
+    """A short folder with an ASCII path, for the checks that are about one: TEMP is not ASCII under a Chinese
+    profile (the CJK job runs the suites there), and cmd.exe prints a path in the OEM code page."""
+    for base in (tempfile.gettempdir(), os.environ.get("RUNNER_TEMP"), os.environ.get("PUBLIC"),
+                 os.environ.get("SystemDrive", "C:") + os.sep):
+        if base and base.isascii() and os.path.isdir(base) and os.access(base, os.W_OK):
+            return base
+    return tempfile.gettempdir()
+
+
 def check(name, good, detail=""):
     global ok, failed
     if good:
@@ -74,11 +84,11 @@ py = os.path.join(bindir, "python.exe" if os.name == "nt" else "python")
 # a tool of the environment's own, to see that its folder comes first on PATH
 if os.name == "nt":
     tool = os.path.join(bindir, "yt-dlp.cmd")
-    with open(tool, "w") as fh:
+    with open(tool, "w", encoding="utf-8") as fh:
         fh.write("@echo 2026.10.26\r\n")
 else:
     tool = os.path.join(bindir, "yt-dlp")
-    with open(tool, "w") as fh:
+    with open(tool, "w", encoding="utf-8") as fh:
         fh.write("#!/bin/sh\necho 2026.10.26\n")
     os.chmod(tool, 0o755)
 os.makedirs(os.path.join(home, "tessdata"))
@@ -328,7 +338,7 @@ check("the folder is one every agent of the user sees (Windows: the home folder,
 # report said nothing is missing, and a scan read as `empty`. The 8.3 short path opens; where it does not
 # (or the pack is broken), OCR is not counted as working, and the read says `missing: ocr` with the reason.
 junk = [home, broken, empty, off, busy]
-cyr = tempfile.mkdtemp(prefix="rp-Иван-")
+cyr = tempfile.mkdtemp(prefix="rp-Иван-", dir=ascii_base())
 junk.append(cyr)
 cyr_td = os.path.join(cyr, "tessdata")
 os.makedirs(cyr_td)
@@ -343,8 +353,9 @@ if os.name == "nt":
               bool(short) and short.isascii() and os.path.samefile(short, cyr_td), str(short))
     check("a path that is not there has no short name: '' (never a guess)",
           hasattr(ownenv, "ascii_path") and ownenv.ascii_path(os.path.join(cyr, "Ещё", "нет")) == "", "")
+ascii_only = os.path.join(os.sep, "ascii only", "folder")          # a path is a string here: it need not exist
 check("an ASCII path stays as it is (and so does any path off Windows)",
-      hasattr(ownenv, "ascii_path") and ownenv.ascii_path(home) == home
+      hasattr(ownenv, "ascii_path") and ownenv.ascii_path(ascii_only) == ascii_only
       and (os.name == "nt" or ownenv.ascii_path(cyr_td) == cyr_td), "")
 
 
@@ -1117,7 +1128,8 @@ check("... and an argument cmd.exe would expand or end (%, a quote, a line break
       rp10.cmd_line(["t.cmd", "%PATH%"]) is None and rp10.cmd_line(["t.cmd", 'a"b']) is None
       and rp10.cmd_line(["t.cmd", "a\nb"]) is None, "")
 if os.name == "nt":
-    amp = os.path.join(dd, "Tom & Jerry")
+    amp = os.path.join(tempfile.mkdtemp(prefix="rp-env-amp-", dir=ascii_base()), "Tom & Jerry")   # cmd's echo is OEM-coded
+    junk.append(os.path.dirname(amp))
     os.makedirs(amp)
     echo = os.path.join(amp, "echo.cmd")
     with open(echo, "w", encoding="utf-8") as fh:
@@ -1412,7 +1424,7 @@ bad_py = os.path.join(bad_bin, "python.exe" if os.name == "nt" else "python")
 if os.name == "nt":
     shutil.copy2(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "find.exe"), bad_py)   # "Parameter format not correct", exit 2
 else:
-    with open(bad_py, "w") as fh_:
+    with open(bad_py, "w", encoding="utf-8") as fh_:
         fh_.write("#!/bin/sh\necho 'python: error while loading shared libraries: libpython3.so' >&2\nexit 127\n")
     os.chmod(bad_py, 0o755)
 with open(os.path.join(bh, "envs", "bad", "pyvenv.cfg"), "w", encoding="utf-8") as fh_:
@@ -1827,6 +1839,301 @@ attempt("the environment's yt-dlp keeps its own cache in the folder; another yt-
                  and seen_cmds[0][seen_cmds[0].index("--cache-dir") + 1] == os.path.join(yt_home, "cache", "yt-dlp")
                  and "--cache-dir" not in seen_cmds[1], str([c_[:3] for c_ in seen_cmds])))
 
+
+# ---------------------------------------------------------------- Node from Playwright's wheel, npm from the registry
+import base64                                            # noqa: E402
+import hashlib                                           # noqa: E402
+
+
+def sri(path):
+    with open(path, "rb") as fh_:
+        return "sha512-" + base64.b64encode(hashlib.sha512(fh_.read()).digest()).decode()
+
+
+def fake_driver(env_dir, name="node"):
+    """An environment folder with a file where Playwright's wheel puts its Node."""
+    if os.name == "nt":
+        site = os.path.join(env_dir, "Lib", "site-packages")
+        name = name + ".exe"
+    else:
+        site = os.path.join(env_dir, "lib", "python3.13", "site-packages")
+    path = os.path.join(site, "playwright", "driver", name)
+    os.makedirs(os.path.dirname(path))
+    with open(path, "wb") as fh_:
+        fh_.write(b"not a real node")
+    return path
+
+
+attempt("npm's integrity is pinned in npm's own form: sha512 and base64, for the version Node 24.22.3 ships",
+        lambda: (re.fullmatch(r"sha512-[A-Za-z0-9+/]{86}==", envsetup.NPM_INTEGRITY) is not None
+                 and re.fullmatch(r"\d+\.\d+\.\d+", envsetup.NPM_VERSION) is not None, envsetup.NPM_INTEGRITY[:30]))
+try:
+    reg = envsetup.fetch_json("https://registry.npmjs.org/npm/%s" % envsetup.NPM_VERSION, timeout=20)["dist"]
+except Exception as e:                                         # noqa: BLE001
+    reg = None
+    print("SKIP npm's pinned integrity against the registry (no answer: %s)" % str(e)[:60])
+if reg:
+    attempt("... and it is the one the registry publishes for that version (a typo would refuse every machine)",
+            lambda: (reg.get("integrity") == envsetup.NPM_INTEGRITY
+                     and reg.get("tarball") == "https://registry.npmjs.org/npm/-/npm-%s.tgz" % envsetup.NPM_VERSION,
+                     "%s %s" % (reg.get("integrity", "")[:30], reg.get("tarball"))))
+d2 = tempfile.mkdtemp(prefix="rp-env-npm-")
+junk.append(d2)
+blob = os.path.join(d2, "blob.bin")
+with open(blob, "wb") as fh_:
+    fh_.write(b"the bytes of a tarball")
+bad_tgz = [False]
+try:
+    envsetup.check_integrity(blob, sri(blob))
+    envsetup.check_integrity(blob, "sha512-" + base64.b64encode(b"x" * 64).decode())
+except ValueError:
+    bad_tgz[0] = True
+attempt("a file is held to its integrity: the right hash passes, another is refused", lambda: (bad_tgz[0], ""))
+dw, ww = work_in("rp-env-wheelnode-")
+env_rel = "envs/py3.13.18-fake"
+driver = fake_driver(os.path.join(dw, "envs", "py3.13.18-fake"))
+attempt("Playwright's Node is found where its wheel puts it, and '' where there is none",
+        lambda: (envsetup.playwright_node(os.path.join(dw, "envs", "py3.13.18-fake")) == driver
+                 and envsetup.playwright_node(os.path.join(dw, "envs", "nothing")) == "", driver))
+ww.env_rel = env_rel
+calls2 = []
+real_off, real_whl, real_fetch2 = ww._node_official, ww._node_wheel, envsetup.fetch
+ww._node_official = lambda: calls2.append("official") or (_ for _ in ()).throw(ValueError("not asked"))
+ww._node_wheel = lambda: calls2.append("pypi") or (_ for _ in ()).throw(ValueError("not asked"))
+envsetup.fetch = lambda *a, **k: calls2.append("fetch") or (_ for _ in ()).throw(AssertionError("a download"))
+ww.sh = lambda cmd, timeout=900, env=None, cwd=None: (0, "v24.21.0")
+try:
+    ok_n, note_n = ww.node()
+finally:
+    envsetup.fetch = real_fetch2
+attempt("Node is the one in Playwright's wheel: nothing is downloaded, setup.json names it, the step says where it came from",
+        lambda: (ok_n and not calls2 and ww.node_bin == driver and ww.info["node_bin"] == "%s/%s" % (
+            env_rel, os.path.relpath(driver, os.path.join(dw, env_rel)).replace(os.sep, "/"))
+                 and "Playwright" in note_n and "v24.21.0" in note_n, "%s %s" % (note_n, calls2)))
+ww2 = envsetup.Work(dw, "r2", "test")
+ww2.env_rel = env_rel
+calls2b = []
+ww2._node_official = lambda: calls2b.append("official") or (_ for _ in ()).throw(ValueError("nodejs.org: not asked"))
+ww2._node_wheel = lambda: calls2b.append("pypi") or (_ for _ in ()).throw(ValueError("pypi: not asked"))
+ww2.sh = lambda cmd, timeout=900, env=None, cwd=None: (0, "v18.20.0")
+ok_old, note_old = ww2.node()
+attempt("a Node in the wheel older than npm 11 runs on is not used: nodejs.org's comes next, then PyPI's",
+        lambda: (not ok_old and calls2b == ["official", "pypi"], "%s %s" % (note_old, calls2b)))
+dw3, ww3 = work_in("rp-env-nowheel-")
+ww3.env_rel = env_rel
+calls3 = []
+ww3._node_official = lambda: calls3.append("official") or (_ for _ in ()).throw(ValueError("musl has none"))
+ww3._node_wheel = lambda: calls3.append("pypi") or os.path.join(dw3, "node", "wheel", "node")
+ww3.sh = lambda cmd, timeout=900, env=None, cwd=None: (0, "v24.19.0")
+ok3, note3 = ww3.node()
+attempt("with no Node in a wheel (musl has no Playwright wheel) the earlier road stays: nodejs.org, then PyPI's wheel",
+        lambda: (ok3 and calls3 == ["official", "pypi"] and "nodejs-wheel-binaries" in note3, "%s %s" % (note3, calls3)))
+
+# npm's tarball: from the registry, held to the pinned integrity, unpacked beside nothing of Node's
+tgz = os.path.join(d2, "npm-test.tgz")
+with tarfile.open(tgz, "w:gz") as t_:
+    for name_, data_ in (("package/bin/npm-cli.js", b"console.log(1)\n"), ("package/package.json", b'{"name":"npm"}')):
+        ti_ = tarfile.TarInfo(name_)
+        ti_.size = len(data_)
+        t_.addfile(ti_, io.BytesIO(data_))
+dn, wn = work_in("rp-env-npmcli-")
+asked2 = []
+
+
+def serve_tgz(url, dest, sha=None, timeout=60):
+    asked2.append(url)
+    shutil.copyfile(tgz if "bad" not in url else blob, dest)
+    return dest
+
+
+saved_pins = (envsetup.NPM_INTEGRITY, envsetup.NPM_VERSION)
+real_fetch3 = envsetup.fetch
+envsetup.NPM_INTEGRITY, envsetup.NPM_VERSION = sri(tgz), "11.1.1"
+envsetup.fetch = serve_tgz
+node_wheel_dir = os.path.join(dn, "driver")
+os.makedirs(node_wheel_dir)
+try:
+    cli_a = wn._npm_cli(os.path.join(node_wheel_dir, "node"))
+    first = list(asked2)
+    cli_b = wn._npm_cli(os.path.join(node_wheel_dir, "node"))
+    wn.env["npm_config_registry"] = "https://registry.corp.example/npm-proxy/"
+    shutil.rmtree(os.path.join(dn, "node"))
+    wn._npm_cli(os.path.join(node_wheel_dir, "node"))
+    mirror_url = asked2[-1]
+    wn.env["npm_config_registry"] = "http://registry.corp.example/"
+    shutil.rmtree(os.path.join(dn, "node"))
+    wn._npm_cli(os.path.join(node_wheel_dir, "node"))
+    http_url = asked2[-1]
+finally:
+    envsetup.fetch = real_fetch3
+    envsetup.NPM_INTEGRITY, envsetup.NPM_VERSION = saved_pins
+attempt("a Node with no npm gets npm from the registry's tarball: its address, unpacked in the folder, used again next time",
+        lambda: (first == ["https://registry.npmjs.org/npm/-/npm-11.1.1.tgz"]
+                 and cli_a == os.path.join(dn, "node", "npm-11.1.1", "package", "bin", "npm-cli.js") and os.path.isfile(cli_a)
+                 and cli_b == cli_a and len(first) == 1 and not os.path.exists(os.path.join(dn, "cache", "dl", "npm-11.1.1.tgz")),
+                 "%s %s" % (cli_a, first)))
+attempt("... a company's https registry (npm_config_registry) serves it, an http one is not used (the hash is pinned either way)",
+        lambda: (mirror_url == "https://registry.corp.example/npm-proxy/npm/-/npm-11.1.1.tgz"
+                 and http_url == "https://registry.npmjs.org/npm/-/npm-11.1.1.tgz", "%s | %s" % (mirror_url, http_url)))
+dn2, wn2 = work_in("rp-env-npmbad-")
+envsetup.NPM_INTEGRITY, envsetup.NPM_VERSION = sri(tgz), "11.1.1"
+envsetup.fetch = lambda url, dest, sha=None, timeout=60: serve_tgz("https://bad/" + url, dest)       # other bytes than pinned
+refused2 = False
+try:
+    wn2._npm_cli(os.path.join(dn2, "driver", "node"))
+except ValueError:
+    refused2 = True
+finally:
+    envsetup.fetch = real_fetch3
+    envsetup.NPM_INTEGRITY, envsetup.NPM_VERSION = saved_pins
+attempt("a tarball that is not the pinned one is refused, and nothing of it is kept",
+        lambda: (refused2 and not os.path.exists(os.path.join(dn2, "node", "npm-11.1.1"))
+                 and not any(n_.endswith(".tgz") for n_ in os.listdir(os.path.join(dn2, "cache", "dl"))), ""))
+dn3, wn3 = work_in("rp-env-npmbeside-")
+beside = os.path.join(dn3, "node", "node-v24", "node_modules", "npm", "bin", "npm-cli.js") if os.name == "nt" else \
+    os.path.join(dn3, "node", "node-v24", "lib", "node_modules", "npm", "bin", "npm-cli.js")
+os.makedirs(os.path.dirname(beside))
+with open(beside, "w") as fh_:
+    fh_.write("x")
+envsetup.fetch = lambda *a, **k: (_ for _ in ()).throw(AssertionError("a download"))
+try:
+    got_beside = wn3._npm_cli(os.path.join(dn3, "node", "node-v24", "node.exe" if os.name == "nt" else "bin/node"))
+finally:
+    envsetup.fetch = real_fetch3
+attempt("a Node that brings its own npm (nodejs.org's, PyPI's) is used with it: nothing is fetched",
+        lambda: (got_beside == beside, got_beside))
+dt, wt = work_in("rp-env-nodetidy-")
+for n_ in ("node-v24.22.3-win-x64", "npm-11.19.1", "wheel-24.19.0"):
+    os.makedirs(os.path.join(dt, "node", n_))
+wt.info = {"env": "envs/x", "node_bin": "envs/x/Lib/site-packages/playwright/driver/node.exe",
+           "npm_cli": "node/npm-11.19.1/package/bin/npm-cli.js"}
+wt.prev = {}
+wt.tidy()
+attempt("tidy keeps the npm in use and removes a Node of nodejs.org's or PyPI's that nothing names any more (the saving)",
+        lambda: (sorted(os.listdir(os.path.join(dt, "node"))) == ["npm-11.19.1"], str(os.listdir(os.path.join(dt, "node")))))
+
+
+# ---------------------------------------------------------------- mirrors for a user in mainland China, and OCR in the user's own language
+attempt("a tessdata mirror: a folder or a template, https only; without one GitHub's raw host",
+        lambda: (envsetup.tessdata_url("chi_sim", {}) == envsetup.TESSDATA_URL % "chi_sim"
+                 and envsetup.tessdata_url("deu", {"READ_PAGE_TESSDATA_URL": "https://m.example/fast/"}) == "https://m.example/fast/deu.traineddata"
+                 and envsetup.tessdata_url("deu", {"READ_PAGE_TESSDATA_URL": "https://m.example/{lang}.bin"}) == "https://m.example/deu.bin"
+                 and envsetup.tessdata_url("deu", {"READ_PAGE_TESSDATA_URL": "http://m.example/fast"}) == envsetup.TESSDATA_URL % "deu", ""))
+over3 = envsetup.source_overrides({"READ_PAGE_TESSDATA_URL": "https://carol:pw@m.example/fast"}, user142, folder142, system=False) + \
+    envsetup.source_overrides({"READ_PAGE_TESSDATA_URL": "http://m.example/fast"}, user142, folder142, system=False)
+attempt("... and it is named in the log and the report: used when https, not used otherwise, credentials left out",
+        lambda: (any(x.startswith("READ_PAGE_TESSDATA_URL=https://m.example/fast - the OCR language data comes from it") for x in over3)
+                 and any(x.startswith("READ_PAGE_TESSDATA_URL=http://m.example/fast - not used") for x in over3)
+                 and not any("pw@" in x for x in over3), str(over3)[:200]))
+pipdir = tempfile.mkdtemp(prefix="rp-env-pipcfg-")
+junk.append(pipdir)
+pip_ini = os.path.join(pipdir, "pip.ini")
+with open(pip_ini, "w", encoding="utf-8") as fh_:
+    fh_.write("[global]\nindex-url = https://pipuser:pipsecret@mirrors.example/pypi/simple\ntrusted-host = mirrors.example\n")
+no_index = os.path.join(pipdir, "other.ini")
+with open(no_index, "w", encoding="utf-8") as fh_:
+    fh_.write("[global]\ntimeout = 60\n")
+saved3 = dict((k_, os.environ.pop(k_)) for k_ in ("UV_DEFAULT_INDEX", "UV_INDEX_URL", "PIP_INDEX_URL", "PIP_CONFIG_FILE") if k_ in os.environ)
+try:
+    os.environ["PIP_CONFIG_FILE"] = pip_ini
+    e_pipcfg = envsetup.net_env()
+    over_pip = envsetup.source_overrides(dict(os.environ), user142, folder142, system=False)
+    os.environ["UV_DEFAULT_INDEX"] = "https://explicit.example/simple"
+    e_explicit = envsetup.net_env()
+    os.environ.pop("UV_DEFAULT_INDEX")
+    os.environ["PIP_CONFIG_FILE"] = no_index
+    e_noidx = envsetup.net_env()
+finally:
+    os.environ.pop("UV_DEFAULT_INDEX", None)
+    os.environ.pop("PIP_CONFIG_FILE", None)
+    os.environ.update(saved3)
+attempt("pip's own configuration names the index when no variable does (uv reads none of it): taken for uv, named in the log "
+        "with its credentials left out, and a variable of uv's still wins",
+        lambda: (e_pipcfg.get("UV_DEFAULT_INDEX") == "https://pipuser:pipsecret@mirrors.example/pypi/simple"
+                 and any("taken as UV_DEFAULT_INDEX" in x and "pip.ini: index-url=https://mirrors.example/pypi/simple" in x for x in over_pip)
+                 and not any("pipsecret" in x for x in over_pip)
+                 and e_explicit.get("UV_DEFAULT_INDEX") == "https://explicit.example/simple"
+                 and "UV_DEFAULT_INDEX" not in e_noidx, str(over_pip)[:240]))
+attempt("the language's OCR pack: Chinese by script, the others by language, English and C need none",
+        lambda: ([ownenv.ocr_pack_for(x) for x in ("zh_CN", "zh-CN", "zh_Hans_CN", "zh-TW", "zh_Hant_HK", "zh_MO.UTF-8", "ja_JP.UTF-8",
+                                                  "ko-KR", "ru_RU", "de_DE@euro", "sr_Latn_RS", "nb_NO", "en_US", "C", "", "xx_YY")]
+                 == ["chi_sim", "chi_sim", "chi_sim", "chi_tra", "chi_tra", "chi_tra", "jpn", "kor", "rus", "deu", "srp_latn", "nor",
+                     "", "", "", ""], ""))
+attempt("the machine's language is read from the environment where the OS has no word (LC_ALL first, C and POSIX skipped)",
+        lambda: (ownenv.system_language({"LC_ALL": "zh_CN.GBK", "LANG": "en_US.UTF-8"}) == "zh_CN.GBK"
+                 and ownenv.system_language({"LC_ALL": "C", "LANG": "ja_JP.eucJP"}) == "ja_JP.eucJP"
+                 and ownenv.system_language({"LANGUAGE": "ko:en"}) == "ko" and ownenv.system_language({"LANG": "POSIX"}) == ""
+                 and ownenv.ocr_default_packs({"LANG": "zh_CN.UTF-8"}) == ["eng", "chi_sim"]
+                 and ownenv.ocr_default_packs({"LANG": "en_US.UTF-8"}) == ["eng"], ""))
+asked3 = []
+
+
+def fetch_names(url, dest, sha=None, timeout=60):
+    asked3.append(url)
+    with open(dest, "wb") as fh_:
+        fh_.write(b"pack")
+    return dest
+
+
+real_lang3, real_fetch4 = ownenv.system_language, envsetup.fetch
+envsetup.fetch = fetch_names
+results3 = {}
+try:
+    for label_, lang_, named_ in (("zh", "zh-CN", ""), ("en", "en-US", ""), ("ru", "ru-RU", ""), ("zh+deu", "zh-TW", "deu")):
+        ownenv.system_language = lambda env=None, v=lang_: v
+        d_, w_ = work_in("rp-env-ocrpack-")
+        del asked3[:]
+        if named_:
+            os.environ["READ_PAGE_OCR_LANGS"] = named_
+        try:
+            ok_, note_ = w_.ocr_data()
+        finally:
+            os.environ.pop("READ_PAGE_OCR_LANGS", None)
+        results3[label_] = ([u_.rsplit("/", 1)[-1] for u_ in asked3], w_.info.get("ocr_langs"), note_)
+    os.environ["READ_PAGE_TESSDATA_URL"] = "https://m.example/fast"
+    ownenv.system_language = lambda env=None: "zh-CN"
+    d_, w_ = work_in("rp-env-ocrpack-")
+    del asked3[:]
+    w_.env["READ_PAGE_TESSDATA_URL"] = "https://m.example/fast"
+    w_.ocr_data()
+    mirror_asked = list(asked3)
+finally:
+    os.environ.pop("READ_PAGE_TESSDATA_URL", None)
+    ownenv.system_language, envsetup.fetch = real_lang3, real_fetch4
+attempt("--setup fetches English and the pack of the user's own language, not Russian for everyone",
+        lambda: (results3["zh"][0] == ["eng.traineddata", "chi_sim.traineddata"] and results3["zh"][1] == ["eng", "chi_sim"]
+                 and results3["en"][0] == ["eng.traineddata"] and results3["en"][1] == ["eng"]
+                 and results3["ru"][0] == ["eng.traineddata", "rus.traineddata"], str(results3)[:200]))
+attempt("... READ_PAGE_OCR_LANGS adds to it, and the step says which language it took and which variable names others",
+        lambda: (results3["zh+deu"][1] == ["eng", "chi_tra", "deu"] and "this machine's language (zh-TW)" in results3["zh+deu"][2]
+                 and "READ_PAGE_OCR_LANGS names others" in results3["zh+deu"][2], results3["zh+deu"][2]))
+attempt("... from the mirror when one is named",
+        lambda: (mirror_asked == ["https://m.example/fast/eng.traineddata", "https://m.example/fast/chi_sim.traineddata"], str(mirror_asked)))
+tools_home = tempfile.mkdtemp(prefix="rp-env-ocrtools-")
+junk.append(tools_home)
+saved_ocr = os.environ.pop("READ_PAGE_OCR_LANGS", None)
+saved_path3 = os.environ.get("PATH"), os.environ.get("PLAYWRIGHT_BROWSERS_PATH"), os.environ.get("READ_PAGE_ENV"), os.environ.get("READ_PAGE_TESSDATA")
+try:
+    ownenv._tools(tools_home, {"ocr_langs": ["eng", "rus", "chi_sim", "osd"]})
+    default_langs = os.environ.get("READ_PAGE_OCR_LANGS")
+    os.environ.pop("READ_PAGE_OCR_LANGS")
+    ownenv._tools(tools_home, {"ocr_langs": ["eng", "rus"]})
+    only_rus = os.environ.get("READ_PAGE_OCR_LANGS")
+    os.environ["READ_PAGE_OCR_LANGS"] = "eng+deu"
+    ownenv._tools(tools_home, {"ocr_langs": ["eng", "chi_sim"]})
+    named_wins = os.environ.get("READ_PAGE_OCR_LANGS")
+finally:
+    os.environ.pop("READ_PAGE_OCR_LANGS", None)
+    if saved_ocr is not None:
+        os.environ["READ_PAGE_OCR_LANGS"] = saved_ocr
+    for k_, v_ in zip(("PATH", "PLAYWRIGHT_BROWSERS_PATH", "READ_PAGE_ENV", "READ_PAGE_TESSDATA"), saved_path3):
+        if v_ is None:
+            os.environ.pop(k_, None)
+        else:
+            os.environ[k_] = v_
+attempt("a read in the environment reads with the pack --setup fetched for the machine's language beside English; "
+        "Russian keeps its own rule (a Cyrillic page) and a variable the user set wins",
+        lambda: (default_langs == "eng+chi_sim" and only_rus is None and named_wins == "eng+deu", "%s %s %s" % (default_langs, only_rus, named_wins)))
 
 for d in junk:
     shutil.rmtree(d, ignore_errors=True)

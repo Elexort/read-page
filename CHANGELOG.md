@@ -28,6 +28,19 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
     `uv cache prune` removes nothing here (measured).
   - Files outside the folder: `NODE_COMPILE_CACHE`, the Python bytecode of a read in the environment and the
     environment's yt-dlp cache are in the folder (`cache/`); a read's start is as fast (0.441 -> 0.434 s).
+- **Node from Playwright's wheel** (KNOWN-ISSUES 171): defuddle and yt-dlp's JavaScript run on the Node that the
+  Playwright wheel carries in its driver (24.21.0; already in the environment), so nodejs.org's archive is not
+  downloaded - 36 MB on Windows x64, 56 on Linux, 51-52 on macOS - nor kept (90-190 MB on disk). That Node has no
+  npm: npm 11.19.1 is fetched from the registry's tarball (3 MB) and held to the SHA512 pinned in `envsetup.py`.
+  nodejs.org's Node (SHA256 pinned) and PyPI's wheel stay as the fallback for musl, which has no Playwright wheel,
+  and for a wheel that lacks its Node. defuddle's Markdown is byte for byte the same as under nodejs.org's 24.22.3
+  on six pages (`example.com`, Wikipedia, Python's tutorial, MDN, SQLite, RFC 9110).
+- **Mirrors and OCR languages for a user in mainland China** (KNOWN-ISSUES 172, 173): pip's own configuration
+  (`pip.ini`, `pip.conf`) is read for its `index-url` when no variable names an index; `READ_PAGE_TESSDATA_URL`
+  names a mirror for the OCR data (https, a folder or a template with `{lang}`); every mirror variable is named in
+  the docs and in the setup's log and report. `--setup` fetches English and the pack of the user's own language
+  (Windows' user locale or `LANG`: zh-CN `chi_sim`, zh-TW `chi_tra`, ja `jpn`, ko `kor`, ru `rus`, ...) instead of
+  English and Russian for everyone, and a read in the environment reads with it beside English.
 - **CI: real installs** (`.github/workflows/install.yml`, on dev and ci-install pushes and by hand; the helper
   is `tools/ci_install.py`). Every standard runner a public repository gets free: `--setup` from nothing into
   a folder with a space and Cyrillic in its path on Linux, Windows and macOS (x64 and arm64) - its time, the

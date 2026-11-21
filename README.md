@@ -269,8 +269,8 @@ runs in the machine's Python with an `environment:` line saying why, and `--setu
 the folder removes it.
 
 What it downloads is checked: the 54 packages by the SHA256 of every file in the lock, uv's wheel
-and Node's archive by SHA256 pinned in the skill for each platform (a mirror serves the bytes, never
-their checksum). Two are not: yt-dlp, which floats by design, and Playwright's browser, which
+and Node's archive (only where there is no Playwright wheel to take Node from) by SHA256 pinned in the skill
+for each platform, npm's tarball by its SHA512 pinned (a mirror serves the bytes, never their checksum). Two are not: yt-dlp, which floats by design, and Playwright's browser, which
 Playwright downloads over TLS with a size check and no hash. uv and Node trust the machine's own
 certificate store, as Python does (`UV_SYSTEM_CERTS`, `NODE_USE_SYSTEM_CA`, unless you set them), so
 a proxy that inspects TLS and has its root there works for all three.
@@ -288,13 +288,13 @@ one thing: a video read in the environment looks for a newer yt-dlp every three 
 | Engine | What it buys | `--setup` installs |
 |---|---|---|
 | `curl_cffi` | passes TLS walls (npm, Medium, Reddit), ~3× faster | 0.17.0 |
-| `defuddle` | the best text on docs pages; keeps picture positions | 0.19.4 with its own packages as of 2026-11-19, through its own Node 24 LTS (nodejs.org, SHA256 pinned) |
+| `defuddle` | the best text on docs pages; keeps picture positions | 0.19.4 with its own packages as of 2026-11-19, on the Node 24 that Playwright's wheel carries (nothing of nodejs.org is downloaded; npm is its registry tarball, SHA512 pinned; where there is no Playwright wheel - musl - nodejs.org's Node, SHA256 pinned, or PyPI's) |
 | `trafilatura`, `readability-lxml`, `html2text` | second opinions and the full-page fallback | 2.2.0, 0.9, 2025.4.15 |
 | headless Chromium | JavaScript pages, hash routes, late mounts | Playwright 1.63's `chromium-headless-shell`; a Chrome or Edge on the machine is used for screenshots |
 | `pymupdf`, `pymupdf4llm` | PDF text, its tables as tables (a small layout model, on the pages that look like they hold one), and the scanned-PDF path | 1.28.2 |
 | our EPUB, ODT and RTF readers | headings, nested lists, tables with merged cells, notes, links, pictures where they stand, code, formulas (ODT), code pages (RTF); against pandoc on 52 files they lost nothing it kept, and kept the endnotes, headings, tables and non-Latin RTF it lost | built in: `scripts/docreaders.py`, the standard library alone, in a process of its own (pandoc left `--setup` on 2026-11-21) |
 | `youtube-transcript-api` | a YouTube transcript when yt-dlp has none | 1.2.5 |
-| OCR | scanned PDFs (3 pages a document) and `--ocr N` | tesseract 5.5.4 in `tesserocr` 2.13, English and Russian from `tessdata_fast` |
+| OCR | scanned PDFs (3 pages a document) and `--ocr N` | tesseract 5.5.4 in `tesserocr` 2.13, English and the pack of this machine's own language (zh-CN `chi_sim`, zh-TW `chi_tra`, ja `jpn`, ko `kor`, ru `rus`, ...) from `tessdata_fast` |
 | `yt-dlp` | video subtitles and thumbnails | not pinned: the newest release that has been out three days, looked for again every three days by a video read |
 | `pillow`, `psutil`, `python-docx`, `openpyxl`, `python-pptx` | pictures for MCP, Office files | pinned in `scripts/setup-lock.txt` with all 54 packages |
 
@@ -317,14 +317,22 @@ os-release). Measured by a real install on every runner GitHub gives a public re
 Where the home folder has letters outside ASCII (a local account `Иван`) OCR still starts: by the 8.3 short
 name of its data folder where the volume makes one, else by the folder's own name from its parent.
 
-A language beyond English and Russian: name it in `READ_PAGE_OCR_LANGS`
-(`eng+deu`), then `--setup` again. Without the environment the skill uses whatever the machine
+OCR languages: `--setup` fetches English and the pack of this machine's own language (Windows' user
+locale, else `LC_ALL`/`LANG`; Chinese goes by script) and a read in the environment reads with it beside
+English (Russian keeps its own rule: a Cyrillic page). Any other language: name it in `READ_PAGE_OCR_LANGS`
+(`eng+deu`), then `--setup` again; the variable also decides what a read uses. Without the environment the skill uses whatever the machine
 has, as before. Behind a proxy it uses the machine's (`HTTPS_PROXY`, or Windows' own setting); a
 company's package mirror named in `UV_DEFAULT_INDEX` or `PIP_INDEX_URL` is used for the Python
 packages, and one for Node in `NODEJS_ORG_MIRROR` (it must be `https://`; a plain-http one is not used).
 uv reads no `uv.toml` here (`UV_NO_CONFIG=1`: a file in a parent folder of the home would change what is
 installed, which was measured), so a mirror a `uv.toml` names goes in `UV_DEFAULT_INDEX`, or the file in
-`UV_CONFIG_FILE`. Whatever sends an installer elsewhere than its default, or skips a check - those variables,
+`UV_CONFIG_FILE`; pip's own configuration (the user's and the system's `pip.ini` or `pip.conf`) is read for
+its `index-url` when no variable names an index - that is where a Chinese or a company machine keeps its
+mirror, and uv does not look there. For a machine that does not reach GitHub, PyPI or nodejs.org these name a
+mirror each: `UV_DEFAULT_INDEX` (Python packages), `UV_PYTHON_INSTALL_MIRROR` (our Python),
+`READ_PAGE_TESSDATA_URL` (OCR data: a folder of `<lang>.traineddata`, or a template with `{lang}`; https),
+`PLAYWRIGHT_DOWNLOAD_HOST` (the browser), `npm_config_registry` (defuddle, and npm's tarball), `NODEJS_ORG_MIRROR`
+(Node, only where there is no Playwright wheel). Whatever sends an installer elsewhere than its default, or skips a check - those variables,
 a `uv.toml`, an `.npmrc`, a `pip.conf`, `NODE_TLS_REJECT_UNAUTHORIZED=0` - is named at the top of the setup's
 log and in the setup report (credentials left out); `UV_NO_VERIFY_HASHES` is not passed on, so the lock's
 hashes always decide. An offline machine gets a clear message and nothing changes.
@@ -399,7 +407,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | The 226-page check (2026-11-06), pages picked to be hard | **202 ok, 6 blocked, 4 login_required, 5 not_found, 7 error, 2 empty**, each with its reason; p50 2.1 s, max 22.9 s on a fast machine, p50 4.8 s, max 30.9 s on an emulated weak laptop |
 | A set read the way `SKILL.md` says (2026-11-07): `--allow-external` first, advice followed, the outline to jump | a 34-page set **34 of 34**, 37 held-out pages no rule was tuned on **37 of 37** (each fact taken from a real Chrome; walls and paywalls by an honest status or through a reader); **1.10 calls** a question; every answer within 9 911 bytes and 309 lines, no CR; from the cache p50 0.22 s, max 0.26; UTF-8 whole in cmd, PowerShell 5.1 and 7, Git Bash and WSL under five code pages |
 | Contract | every manifest in the suite validated against `references/manifest-schema.json` (17 manifests, 0 errors) |
-| Tests | answer contract **84**, statuses **43**, timeouts **15**, deadline **22**, formats **76** (73 off Windows), reading **19**, sources **42**, blocks **26**, images **48**, speed **8**, MCP parallel **14**, security **42** (38 on Windows), props **82**, fixes **154**, channel **9**, setup audit **36**, environment **150** (143 off Windows), MCP **28**, office **3**, our EPUB/ODT/RTF readers **88** (89 on Linux), browser live **32**; against the real services: sources live **20** |
+| Tests | answer contract **84**, statuses **43**, timeouts **15**, deadline **22**, formats **76** (73 off Windows), reading **19**, sources **42**, blocks **26**, images **48**, speed **8**, MCP parallel **14**, security **42** (38 on Windows), props **82**, fixes **154**, channel **9**, setup audit **36**, environment **171** (164 off Windows), MCP **28**, office **3**, our EPUB/ODT/RTF readers **88** (89 on Linux), browser live **32**; against the real services: sources live **20** |
 | CI | the offline suites on ubuntu (3.9 and 3.12), windows, macOS; a browser job on all three; and a real install - `--setup` from nothing into a folder with a space and Cyrillic in its path, every engine checked, the suites and a scanned PDF read through OCR under the environment's Python, `--setup` again with nothing to fetch - on Linux, Windows and macOS, x64 and arm64, a user's own clone-and-read, a bare Python, and Alpine and Ubuntu containers (`install.yml`) |
 | Coverage | 65 % of the engine's statements |
 
@@ -438,7 +446,7 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (168 rows: 123 fixed, 7 planned, 38 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (171 rows: 126 fixed, 7 planned, 38 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License

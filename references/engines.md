@@ -345,8 +345,12 @@ with `--generate-hashes` - 1 092 files, about 94 KB - and uv checks the hashes o
 one-package-at-a-time fallback and the yt-dlp step included; yt-dlp, which floats, has none and is not
 refused for it; wheels only; a package with no wheel for the machine is left
 out and named) and, not pinned, yt-dlp in the newest release that has been out three days
-([video.md](video.md)), Node 24.22.3 from nodejs.org checked against its archive's SHA256 pinned in `envsetup.py` (`NODE_SHA256`; a
-mirror - `NODEJS_ORG_MIRROR` - serves the archive, never its checksum; else
+([video.md](video.md)), Node: the one Playwright's wheel carries in its driver (24.21.0 for the pinned Playwright, at
+least 22.9 as npm 11 asks: nothing of nodejs.org is downloaded, 33-53 MB and 90-180 MB on disk saved) with npm 11.19.1 from
+the registry's tarball, held to the SHA512 pinned in `envsetup.py` (`NPM_INTEGRITY`, the value the registry publishes; an
+https `npm_config_registry` serves it, the hash decides); where there is no such Node - musl has no Playwright wheel, a
+wheel may lack its driver - Node 24.22.3 from nodejs.org checked against its archive's SHA256 pinned in
+`envsetup.py` (`NODE_SHA256`; a mirror - `NODEJS_ORG_MIRROR` - serves the archive, never its checksum; else
 `nodejs-wheel-binaries` 24.19.0 from PyPI, for networks that reach PyPI alone), defuddle 0.19.4
 through that npm (`--ignore-scripts`; its own 26 packages as npm resolved them as of one fixed
 instant, `--before=2026-11-19T00:00:00Z`: the pinned version must exist by it), Playwright's `chromium-headless-shell`
@@ -426,9 +430,10 @@ nothing to fall back from, the first run of each build is a child (`setup.starte
 holds the build once one has started); after it `exec` is kept, and only that first start is guarded.
 
 What is fetched is checked as far as each source allows: the packages by the lock's hashes, uv's wheel
-and Node's archive by hashes pinned in `envsetup.py`, defuddle's packages by npm's own integrity
-values from the registry (`--before` fixes the set), the language data of English and Russian by SHA256
-in the code and any other pack by Content-Length and by tesseract starting with it, Playwright's
+and Node's archive (the fallback) by hashes pinned in `envsetup.py`, npm's tarball by its pinned SHA512,
+defuddle's packages by npm's own integrity values from the registry (`--before` fixes the set), the language data
+of English and Russian by SHA256 in the code and any other pack by Content-Length and by tesseract starting
+with it (`READ_PAGE_TESSDATA_URL` may serve them: an https folder or template; the pins decide), Playwright's
 browser by TLS and its Content-Length only (Playwright's design: no hash anywhere in its download), and
 yt-dlp - not pinned - by TLS. urllib trusts the machine's certificate store; uv and Node are told to
 (`UV_SYSTEM_CERTS=1`, `NODE_USE_SYSTEM_CA=1`, checked in uv 0.13.9's and Node 24's own help: 153 system
@@ -459,6 +464,12 @@ variables (`UV_DEFAULT_INDEX`, `UV_EXTRA_INDEX_URL`, ...) and an explicit `UV_CO
 a company's mirror is one variable. A `uv.toml` that names an index is listed as not read, with that advice,
 and a failed `pypi.org` check names it as the likely cause. `NODEJS_ORG_MIRROR` must be `https://`; a
 plain-http one is not used (nodejs.org is), though the archive's SHA256 is pinned either way.
+pip's own configuration is the exception: its `index-url` (the user's and the system's `pip.ini`/`pip.conf`, or
+`PIP_CONFIG_FILE`) becomes `UV_DEFAULT_INDEX` when no variable names an index, because that is where a user in
+mainland China or behind a company keeps the mirror and uv does not look there; the log names the file. Mirrors,
+one variable each: `UV_DEFAULT_INDEX`, `UV_PYTHON_INSTALL_MIRROR` (our Python), `READ_PAGE_TESSDATA_URL` (OCR
+data), `PLAYWRIGHT_DOWNLOAD_HOST` (the browser), `npm_config_registry` (defuddle and npm's tarball),
+`NODEJS_ORG_MIRROR` (the Node fallback).
 `UV_NO_VERIFY_HASHES` would switch off the lock's hash check: it is not passed on. `NODE_TLS_REJECT_UNAUTHORIZED=0`
 and the like are named, not undone.
 
