@@ -355,6 +355,78 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
     word. Now only "no such process" (error 87) ends it; where it cannot watch it goes on, and
     stdin's end ends it with the read. The test runs a child Python on PID 4 (it stays), on a
     process that has ended (it ends) and on one that is killed (it ends 0.0 s after).
+- **our EPUB, ODT and RTF readers hardened** (`scripts/docreaders.py`, the standard library alone:
+  an independent review of 2026-11-21 found them unsafe as the only path - 6 high, 4 medium, 10
+  low, three of them fixed above; KNOWN-ISSUES 152-160, and 133). Files of 1-5 KB from
+  the web made them take gigabytes or minutes. Each finding has a failing test first
+  (`tests/docreaders.py` 42 -> 88, every hostile file built in the test at a small size and read in
+  a child Python killed past its time or memory); before -> after, measured with a probe (the
+  reader in a watched child, the converter's 10 s) and through the CLI:
+  - **a process of their own**: with pandoc's process gone nothing could stop the converter
+    step - the deadline is the read's own, and three CLI reads ended at 62.8, 82.1 and 91.0 s.
+    `own_doc()` runs `docreaders.py KIND PATH UNTIL KILL` (`-I -S -B`, the standard library alone):
+    it stops itself at its time, writes what it read, and is killed at the converter's time (10 s,
+    or what the deadline leaves; none with `--download`); RLIMIT_AS holds it to 2 GB where the OS
+    has one (Linux; a timeout bounds no memory, 1.4 GB came in 5.9 s). A process start costs
+    0.1 s on Windows and 0.05 s in WSL (with -E -B, as the other children: 0.11 and 0.12 s). All
+    the read's EPUB, ODT and RTF documents share the 10 s - a ZIP's documents had 10 s each, and
+    two RTF lists took 22.4 s, now 1.9 s; a ZIP's document its time did not reach, or whose reader
+    was stopped, says so under its name. All 68 hostile files end through the CLI in
+    8.9 s at most (the 17.6 MB RTF of 2 million runs), the rest in 0.6-3.8 s;
+  - **caps per document, not per element**: a table's grid holds 250 000 cells at most, its
+    spans and repeats included, a document's tables 1 000 000, a row 1 024 columns; an RTF row
+    definition is one tuple for all its rows and 256 borders; an ODT's `text:s` adds a million
+    spaces a document at most; a table cut says so. 1 KB of spanning EPUB cells 494 MB -> 23 MB;
+    an ODT of rows and cells repeated 64 times each (4.5 KB) 40.0 s, 1 267 MB and 164 MB of
+    answer -> 0.04 s and 1 MB; 4 000 RTF rows of 4 000 borders 15.9 s -> 0.09 s;
+  - **no scan goes back over what it passed**: the note scan, the OPF and the container read
+    tags as `[^<>]{0,8192}`, the spine has a set beside it, the tree builder knows where each tag is
+    open (a `<p>` left open under a `<button>` walked the whole stack at every tag that closes a
+    `<p>`: 27 s -> 0.18 s) and joins a text once. html.parser itself ran from every unclosed
+    construct to the end of the part, again at each 64 KB it was fed (one 4 MB tag 2.5 s on Python
+    3.13.18, 19.7 s on 3.9.25), so a part goes to it with its comments and CDATA out, the contents
+    of its raw-text elements out (script, style, title, textarea, iframe, noembed, noframes - the
+    2025 parsers read the last five as raw text, the older ones not), an xmp as a pre, and a "<"
+    that no ">" closes within 8 KB as text. 100 KB of `<a ` 87.5 s -> 0.02 s; 200 KB of `<item `
+    in the OPF 2.35 s -> 0.01 s (quadratic: 20.6 s at 400 KB); 40 000 spine parts 13.9 s -> 0.21 s;
+    a container of 40 000 unclosed `<rootfile ` through the CLI 82.1 s -> 0.6 s;
+  - **html.parser's end of input** (CVE-2025-6069, on Pythons before 2025's fix: 25 KB of `<a `
+    24.5 s on 3.13.2): no "<" is left open when html.parser ends, and the kill is the backstop;
+  - **a run of `![` and a book's own Markdown**: `_escape()`'s picture pattern holds no
+    `[` and is bounded (40 KB of `![` 32.7 s -> 0.01 s); the picture pass's `IMG_LINK` and `LINKED`
+    stop at the next `![` (8 000 `![` and 8 000 `![](` 6.9 s -> 0.00 s), and its fence scan no
+    longer crosses line ends (30 000 blank lines 2.7 s -> 0.00 s). The readers escape the
+    document's own text for Markdown - a backslash before punctuation, `` ` ``, `*`, `[`, `]`, and
+    `_` but inside a word - so a book's literal `![x](y)`, `*****`, `[a]` and `_b_` stay text
+    (`![x](y)` became a picture link, the Calc guide's `*****` emphasis);
+  - **RTF lists**: a list's lines are joined once (100 000 items 60.3 s -> 0.59 s), `\ilvl`
+    stays within RTF's 0-8 (4 000 levels gave 16 MB of indentation -> 92 KB), each list counts its
+    own numbers (20 000 numbered lists ran out of time at 88 % -> 0.26 s for all), and the writing
+    of what was read has a clock of its own;
+  - **the DOCTYPE guard**: expat is asked whether the prolog declares a DOCTYPE, so a line end
+    after `<?xml ...?>`, a BOM, UTF-16 or a space no longer get past it (expat's own limit was all
+    that stopped the bomb); a formula or a `styles.xml` refused says so (both went silently), and
+    the plain ODT reader of ODS and ODP (`odf_text`) has the guard too;
+  - **one bad element is one**: an EPUB part, an ODT element or an RTF stretch that breaks is
+    named and the rest is read - nesting 1 200-1 500 deep in a table, in `<ul>`, in ODT lists,
+    cells and `draw:a` (RecursionError), `<![bogus[` on Python 3.8 and 3.13.2, an RTF `ᄔ112` - and a
+    reader that breaks as a whole leaves the document's plain text (`docreaders.plain`, in its
+    process too); `rtf_text` gave way to `docreaders.rtf_plain`, which passes the groups nobody
+    reads in one scan (it cut each out of the whole text);
+  - **the smaller findings**: an RTF paragraph past 50 000 runs is plain for the rest (2 million runs
+    904 MB, and 81 % of the file in 15 s -> 72 MB, all of it in 5.8 s); emphasis is joined in one
+    pass; an EPUB's first loop reads the clock; "--download reads it whole" is said only where the
+    pace so far says it would be (it was said of a book that read 0 parts of 1 in 91 s); a
+    picture that is a link keeps its address (`[![alt](path)](href)`, which the picture pass writes
+    after the marker); `odf_text` reads a part past 64 MB up to it and says so (it gave nothing);
+    `office_plain()` carries only the XML parts, unzipped - a template's 60 MB picture was unpacked
+    and zipped again (137 MB of memory -> none); an RTF is read with a buffer its own size, not
+    128 MB; pandoc's time counts in the converter's 10 s (our reader then had 10 s more);
+  - **KNOWN-ISSUES 133**: an archive's `mimetype` is read up to 256 bytes and a docx's footnotes and
+    endnotes up to 8 MB, their `w:t` matched in linear time (a 60 MB `mimetype` 137 MB -> 0);
+  - **nothing lost**: the A/B against pandoc again on the 52 files - every count the same
+    (headings, table rows, list items, notes, pictures, code blocks), prose words 1 336 902 ->
+    1 336 908 (the linked picture's address, and a literal `node\_name` now escaped).
 - **PubMed** (found by a run without paid keys, 2026-11-20: 69 of 71 pages, the
   other miss a site answering 503 to everyone). Its page answers a client that did not run its
   script with HTTP 203 and "Cookies must be enabled ... reload this page to continue": that

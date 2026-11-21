@@ -1,24 +1,32 @@
 """EPUB, ODT and RTF read with the standard library (scripts/docreaders.py, 2026-11-20): what each
 reader keeps - headings, lists, tables, notes, links, pictures, code, code pages - and how it
 answers a hostile file: a cut archive, broken XML, an entity bomb, a zip bomb, deep nesting,
-garbage. Then the CLI with READ_PAGE_SKIP=pandoc, which puts these readers in pandoc's place.
-No network.
+garbage. The hostile files of an independent review (2026-11-21) are built here, small, and each
+is read in a child Python killed past its time or its memory, so the old code fails them in
+seconds. Then the CLI with READ_PAGE_SKIP=pandoc, which puts these readers in
+pandoc's place, and the readers' own process: stopped at its time, one clock for a ZIP's
+documents. No network.
 
     python -X utf8 tests/docreaders.py
 """
 import io
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
+import tracemalloc
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+SCRIPTS = os.path.join(os.path.dirname(HERE), "scripts")
 sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
+sys.path.insert(0, SCRIPTS)
 
 from harness import Checks, run_read     # noqa: E402
 import docreaders                        # noqa: E402
+import pictures                          # noqa: E402
 
 check = Checks()
 TMP = tempfile.mkdtemp(prefix="rp-docreaders-")
@@ -28,8 +36,14 @@ def path(name):
     return os.path.join(TMP, name)
 
 
-def epub(name, parts, version="3.0", nav=True, extra=()):
-    """parts: [(file name, body html)]; a nav document (left out of the text) when nav=True."""
+CONTAINER = ('<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:'
+             'container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/'
+             'oebps-package+xml"/></rootfiles></container>')
+
+
+def epub(name, parts, version="3.0", nav=True, extra=(), raw=False, opf=None, container=None):
+    """parts: [(file name, body html)], or their whole text with raw=True; a nav document (left out
+    of the text) when nav=True; `opf` / `container`: their raw text instead of the usual ones."""
     items, spine = [], []
     for i, (n, _b) in enumerate(parts):
         items.append('<item id="p%d" href="%s" media-type="application/xhtml+xml"/>' % (i, n))
@@ -37,19 +51,17 @@ def epub(name, parts, version="3.0", nav=True, extra=()):
     if nav:
         items.append('<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>')
         spine.insert(0, '<itemref idref="nav"/>')
-    with zipfile.ZipFile(path(name), "w") as z:
+    with zipfile.ZipFile(path(name), "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("mimetype", "application/epub+zip", compress_type=zipfile.ZIP_STORED)
-        z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:'
-                   'names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" '
-                   'media-type="application/oebps-package+xml"/></rootfiles></container>')
-        z.writestr("OEBPS/content.opf", '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" '
-                   'version="%s"><metadata/><manifest>%s</manifest><spine>%s</spine></package>'
-                   % (version, "".join(items), "".join(spine)))
+        z.writestr("META-INF/container.xml", container if container is not None else CONTAINER)
+        z.writestr("OEBPS/content.opf", opf if opf is not None else (
+            '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="%s"><metadata/>'
+            '<manifest>%s</manifest><spine>%s</spine></package>' % (version, "".join(items), "".join(spine))))
         if nav:
             z.writestr("OEBPS/nav.xhtml", xhtml('<nav epub:type="toc"><ol><li><a href="c1.xhtml">NAV-ONLY-WORD'
                                                 '</a></li></ol></nav>'))
         for n, b in parts:
-            z.writestr("OEBPS/" + n, xhtml(b))
+            z.writestr("OEBPS/" + n, b if raw else xhtml(b))
         for n, data in extra:
             z.writestr(n, data)
     return path(name)
@@ -99,6 +111,109 @@ def timed(fn, *a):
     t0 = time.time()
     out = fn(*a)
     return out, time.time() - t0
+
+
+def attempt(fn, *a):
+    """fn(*a), or the exception it raised: an API the old code lacks fails a check, not the suite."""
+    try:
+        return fn(*a)
+    except Exception as e:                                     # noqa: BLE001
+        return e
+
+
+def peak_alloc(fn, *a):
+    """fn(*a) under tracemalloc: (its result, seconds, the peak of what Python allocated, in MB)."""
+    tracemalloc.start()
+    t0 = time.time()
+    try:
+        out = fn(*a)
+    finally:
+        dt = time.time() - t0
+        peak = tracemalloc.get_traced_memory()[1] / float(1 << 20)
+        tracemalloc.stop()
+    return out, dt, peak
+
+
+# One docreaders.read() in a child Python (-I -B): it ends itself past `mb` MB of peak memory (a
+# watcher thread), and the parent kills it past `wall` seconds; it prints its seconds, note and peak.
+CHILD = r"""
+import json, os, sys, threading, time
+sys.path.insert(0, sys.argv[1])
+LIMIT = float(sys.argv[6]) * (1 << 20)
+
+
+def peak():
+    try:                                   # Linux: this process's own high-water mark (ru_maxrss
+        with open("/proc/self/status") as fh:     # keeps the parent's across exec)
+            for ln in fh:
+                if ln.startswith("VmHWM:"):
+                    return float(ln.split()[1]) * 1024
+    except OSError:
+        pass
+    try:
+        import resource
+    except ImportError:
+        import ctypes
+        from ctypes import wintypes
+
+        class Counters(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("faults", wintypes.DWORD), ("peak", ctypes.c_size_t)] + \
+                [("x%d" % i, ctypes.c_size_t) for i in range(7)]
+        k32, psapi = ctypes.WinDLL("kernel32"), ctypes.WinDLL("psapi")
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+        c = Counters()
+        c.cb = ctypes.sizeof(c)
+        psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(c), c.cb)
+        return float(c.peak)
+    r = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return float(r) if sys.platform == "darwin" else r * 1024.0
+
+
+def watch():
+    while True:
+        if peak() > LIMIT:
+            os._exit(3)
+        time.sleep(0.02)
+
+
+threading.Thread(target=watch, daemon=True).start()
+import docreaders
+t0 = time.time()
+md, note = docreaders.read(sys.argv[2], sys.argv[3], t0 + float(sys.argv[4]))
+with open(sys.argv[5], "w", encoding="utf-8", errors="replace") as fh:
+    fh.write(md)
+print(json.dumps({"secs": round(time.time() - t0, 2), "note": note[:300], "peak": round(peak() / (1 << 20))}))
+"""
+
+
+def hostile(name, kind, secs=3.0, wall=15.0, mb=300):
+    """docreaders.read() of path(name) in a child Python, given `secs`, killed past `wall` seconds or
+    `mb` MB: (markdown, info) - info has secs, note and peak (MB), or `killed`."""
+    out = path(name + ".md")
+    cmd = [sys.executable, "-I", "-B", "-c", CHILD, SCRIPTS, path(name), kind, str(secs), out, str(mb)]
+    t0 = time.time()
+    try:
+        p = subprocess.run(cmd, capture_output=True, timeout=wall)
+    except subprocess.TimeoutExpired:
+        return "", {"killed": "past %d s" % wall}
+    if p.returncode == 3:
+        return "", {"killed": "past %d MB after %.1f s" % (mb, time.time() - t0)}
+    try:
+        info = json.loads(p.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
+        with open(out, encoding="utf-8") as fh:
+            return fh.read(), info
+    except (ValueError, IndexError, OSError):
+        return "", {"killed": "rc %s: %s" % (p.returncode, p.stderr.decode("utf-8", "replace")[-200:])}
+
+
+def fine(info, secs, mb=100):
+    """A hostile read that ended by itself, inside `secs` and `mb`."""
+    return "killed" not in info and info["secs"] < secs and info["peak"] < mb
+
+
+def show(info, md=""):
+    return "%s, %d chars" % (json.dumps(info)[:220], len(md))
 
 
 # ------------------------------------------------ EPUB
@@ -258,8 +373,11 @@ check("hostile: a part that unpacks past the limit is read up to it, quickly",
       "over the size limit" in note and secs < 5, "%.2fs %r" % (secs, note[:80]))
 os.environ["READ_PAGE_CACHE"] = os.path.join(TMP, "cache")        # readpage's own folders: ours
 import readpage                              # noqa: E402
-got, secs = timed(readpage.odf_text, p)
-check("hostile: the old ODT reader no longer unpacks a part whole", got == "" and secs < 5, "%.2fs" % secs)
+odf_notes = []
+got, secs = timed(attempt, readpage.odf_text, p, odf_notes)
+check("the plain ODT reader (ODS, ODP) reads a part past the limit up to it, and says so (was: nothing)",
+      isinstance(got, str) and "BOMB-START" in got and secs < 5 and "size limit" in " ".join(odf_notes),
+      "%.2fs %r %r" % (secs, odf_notes, got if not isinstance(got, str) else got[:40]))
 p = epub("deep.epub", [("c1.xhtml", "<div><span>" * 50000 + "DEEP" + "</span></div>" * 50000)], nav=False)
 (md, note), secs = timed(docreaders.read, p, "epub")
 check("hostile: 50 000 nested elements in a page, read in seconds", "DEEP" in md and secs < 10, "%.2fs" % secs)
@@ -284,7 +402,191 @@ try:
 except Exception as e:                                         # noqa: BLE001
     check("hostile: a damaged part does not stop the pictures' order (was: internal error)", False, repr(e))
 
-# ------------------------------------------------ office files pandoc read and the office readers refused
+# ------------------------------------------------ hostile files: each small, each read in a child
+TRAP = "<p>Before the trap: the book's own words.</p>"
+TRAP_ODT = "<text:p>Before the trap: the document's own words.</text:p>"
+TRAP_RTF = b"{\\rtf1\\ansi Before the trap: the document's own words.\\par "
+
+# what a table builds is capped per table and per document, not per cell or row
+row = "<tr>" + '<td rowspan="512" colspan="64">x</td>' * 5 + "</tr>"
+epub("spans.epub", [("c1.xhtml", TRAP + "<table>" + row * 20 + "</table>")], nav=False)
+md, info = hostile("spans.epub", "epub")
+check("an EPUB table whose every cell spans 512 rows and 64 columns stays small (1 KB took 494 MB)",
+      fine(info, 3, 80) and "Before the trap" in md and len(md) < 1000000, show(info, md))
+row = ('<table:table-row table:number-rows-repeated="64">' + '<table:table-cell table:number-columns-repeated="64">'
+       '<text:p>x</text:p></table:table-cell>' * 8 + '</table:table-row>')
+odt("repeats.odt", TRAP_ODT + "<table:table>" + row * 313 + "</table:table>")
+md, info = hostile("repeats.odt", "odt")
+check("an ODT table of rows and cells repeated 64 times each stays small (4.5 KB took 40 s, 164 MB out)",
+      fine(info, 3, 120) and "Before the trap" in md and len(md) < 3000000 and "cut" in info.get("note", ""),
+      show(info, md))
+cellx = b"".join(b"\\cellx%d" % (20 * (k + 1)) for k in range(3000))
+rtf("cellx.rtf", TRAP_RTF + b"\\trowd\\cellx9000000" + cellx + b"\\intbl a\\cell\\row" * 3000 + b"\\pard after\\par}")
+md, info = hostile("cellx.rtf", "rtf")
+check("an RTF row of 3 000 borders over 3 000 rows is read in linear time (4 000 took 15.9 s)",
+      fine(info, 2, 120) and "Before the trap" in md and "after" in md, show(info, md))
+odt("spaces.odt", "<text:p>a%sb</text:p>" % ('<text:s text:c="200"/>' * 50000))
+md, info = hostile("spaces.odt", "odt")
+check("50 000 runs of 200 spaces in an ODT do not make 10 MB of them", fine(info, 3) and len(md) < 2000000,
+      show(info, md))
+
+# no scan is quadratic - tags that never close, a long spine, the tree builder's rules
+epub("noteref.epub", [("c1.xhtml", xhtml(TRAP) + "<a " * 10000)], nav=False, raw=True)
+md, info = hostile("noteref.epub", "epub")
+check("a chapter ending in 10 000 unclosed <a is read in linear time (100 KB took 87.5 s)",
+      fine(info, 2) and "Before the trap" in md, show(info, md))
+epub("opf.epub", [("c1.xhtml", TRAP)], nav=False, opf='<?xml version="1.0"?><package><manifest>' + "<item " * 40000)
+md, info = hostile("opf.epub", "epub")
+check("an OPF of 40 000 unclosed <item is read in linear time (400 KB took 20.6 s)",
+      fine(info, 2) and "Before the trap" in md, show(info, md))
+epub("container.epub", [("c1.xhtml", TRAP)], nav=False,
+     container='<?xml version="1.0"?><container>' + "<rootfile " * 30000)
+md, info = hostile("container.epub", "epub")
+check("a container of 30 000 unclosed <rootfile is read in linear time (400 KB took 12.4 s)",
+      fine(info, 2) and "Before the trap" in md, show(info, md))
+items = "".join('<item id="i%d" href="p%d.xhtml" media-type="application/xhtml+xml"/>' % (k, k) for k in range(30000))
+refs = "".join('<itemref idref="i%d"/>' % k for k in range(30000))
+epub("spine.epub", [("p0.xhtml", TRAP)], nav=False,
+     opf='<?xml version="1.0"?><package><manifest>%s</manifest><spine>%s</spine></package>' % (items, refs))
+md, info = hostile("spine.epub", "epub")
+check("a spine of 30 000 distinct parts is read in linear time (40 000 took 13.9 s)",
+      fine(info, 2) and "Before the trap" in md, show(info, md))
+epub("button.epub", [("c1.xhtml", TRAP + "<p>open<button>" + "<span>" * 50000 + "<hr>" * 5000)], nav=False)
+md, info = hostile("button.epub", "epub")
+check("an open <p> under a <button>, 50 000 deep, then 5 000 tags that close a <p> (each walked the stack)",
+      fine(info, 2) and "Before the trap" in md, show(info, md))
+epub("stray.epub", [("c1.xhtml", TRAP + "<p>" + ("a" * 30 + "</x>") * 200000 + "</p>")], nav=False)
+md, info = hostile("stray.epub", "epub")
+check("200 000 stray end tags in a 6 MB paragraph: its text is not copied again at each of them",
+      fine(info, 3) and "aaaa" in md, show(info, md))
+epub("feeds.epub", [("c1.xhtml", TRAP + "<p>" + "<a " * 1400000 + "></p>")], nav=False)
+md, info = hostile("feeds.epub", "epub")
+check("one tag 4 MB long is not scanned again at every 64 KB the parser is fed",
+      fine(info, 3, 200) and "Before the trap" in md, show(info, md))
+
+# a run of unclosed ![ is linear, and a book's own Markdown characters stay text
+epub("pics.epub", [("c1.xhtml", TRAP + "<p>" + "![" * 10000 + "</p>")], nav=False)
+md, info = hostile("pics.epub", "epub")
+check("a paragraph of 10 000 unclosed ![ is read in linear time (40 KB took 32.7 s)",
+      fine(info, 2) and "Before the trap" in md, show(info, md))
+t0 = time.time()
+got = pictures.links("![" * 8000) + pictures.links("![](" * 8000)
+check("the picture pass is linear on 8 000 unclosed ![ and on 8 000 ![]( (16 KB took 2.2 and 4.5 s)",
+      got == [] and time.time() - t0 < 0.5, "%.2fs" % (time.time() - t0))
+t0 = time.time()
+got = pictures.links("x\n" + "\n" * 30000 + "![a](b.png)")
+check("30 000 blank lines cost the picture pass's fence scan nothing (it was quadratic)",
+      len(got) == 1 and time.time() - t0 < 0.5, "%.2fs" % (time.time() - t0))
+p = epub("literal.epub", [("c1.xhtml", '<p><a href="http://example.org/spi"><img src="images/spi.png" alt="SPI"/>'
+                                          '</a></p><p>A literal ![x](y), *****, [z] and _w_.</p>')], nav=False)
+md, note = docreaders.read(p, "epub")
+links = pictures.links(md)
+check("a book's literal ![x](y), *****, [z] and _w_ stay text (they became a picture and emphasis)",
+      "!\\[x\\](y)" in md and "\\*\\*\\*\\*\\*" in md and "\\[z\\]" in md and "\\_w\\_" in md and len(links) == 1,
+      repr(md[-120:]))
+check("a linked picture keeps its address", "[![SPI](OEBPS/images/spi.png)](http://example.org/spi)" in md,
+      repr(md[:120]))
+
+# long RTF lists - one join, a level within RTF's 0-8
+rtf("list.rtf", TRAP_RTF + b"\\ls1 " + b"An item of a long list, forty-some characters\\par " * 40000 + b"}")
+md, info = hostile("list.rtf", "rtf")
+check("an RTF list of 40 000 items is read in linear time (100 000 took 60 s, past the deadline)",
+      fine(info, 2) and md.count("- An item") == 40000, show(info, md))
+rtf("ilvl.rtf", TRAP_RTF + b"\\ls1 " + b"".join(b"\\ilvl%d item\\par " % k for k in range(2000)) + b"}")
+md, info = hostile("ilvl.rtf", "rtf")
+check("\\ilvl0 to \\ilvl1999 do not indent 2 000 levels deep (4 000 gave 16 MB of spaces)",
+      fine(info, 2) and md.count("item") == 2000 and len(md) < 200000, show(info, md))
+rtf("counters.rtf", TRAP_RTF + b"".join(b"\\pard\\ls%d{\\listtext 1.\\tab}x\\par " % k for k in range(20000)) + b"}")
+md, info = hostile("counters.rtf", "rtf")
+check("20 000 numbered lists of their own are counted in linear time (each looked at every other)",
+      fine(info, 2) and md.count("1. x") == 20000, show(info, md))
+
+# the DOCTYPE guard through a newline, a BOM, UTF-16, a space; in a formula and in styles.xml
+BODY = ("<office:document-content %s><office:body><office:text>%s<text:p>&i;</text:p></office:text></office:body>"
+        "</office:document-content>" % (NS, TRAP_ODT))
+for label, content in (("a newline", '<?xml version="1.0"?>\n' + LAUGHS + BODY),
+                       ("a BOM", "﻿" + '<?xml version="1.0"?>' + LAUGHS + BODY),
+                       ("UTF-16", ('<?xml version="1.0" encoding="UTF-16"?>' + LAUGHS + BODY).encode("utf-16")),
+                       ("a space", " " + LAUGHS + BODY)):
+    odt("doctype.odt", "", raw=content)
+    md, info = hostile("doctype.odt", "odt", mb=200)
+    check("a DOCTYPE after %s is refused before expat reads it" % label,
+          fine(info, 2) and md == "" and "DOCTYPE" in info.get("note", ""), show(info, md))
+odt("formula.odt", TRAP_ODT + '<text:p><draw:frame><draw:object xlink:href="./Object 1"/></draw:frame></text:p>',
+    extra=[("Object 1/content.xml", '<?xml version="1.0"?>\n' + LAUGHS.replace("<!DOCTYPE l", "<!DOCTYPE math") +
+            '<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>&i;</mi></math>')])
+md, info = hostile("formula.odt", "odt", mb=200)
+check("a formula that declares a DOCTYPE is left out, and the note says so (it went silently)",
+      fine(info, 2) and "Before the trap" in md and "DOCTYPE" in info.get("note", ""), show(info, md))
+odt("styles.odt", TRAP_ODT, extra=[("styles.xml", '<?xml version="1.0"?>\n' + LAUGHS +
+                                       "<office:document-styles %s>&i;</office:document-styles>" % NS)])
+md, info = hostile("styles.odt", "odt", mb=200)
+check("a styles.xml that declares a DOCTYPE is left out, and the note says so (it went silently)",
+      fine(info, 2) and "Before the trap" in md and "DOCTYPE" in info.get("note", ""), show(info, md))
+p = odt("plain.odt", "", raw='<?xml version="1.0"?>\n' + LAUGHS + BODY)
+odf_notes = []
+got = attempt(readpage.odf_text, p, odf_notes)
+check("the plain ODT reader (ODS, ODP) refuses the DOCTYPE too, and says so",
+      got == "" and "DOCTYPE" in " ".join(odf_notes), "%r %r" % (got, odf_notes))
+
+# one bad element loses that element, not the document; what is lost is named
+p = epub("table.epub", [("c1.xhtml", "<p>Chapter one.</p>"),
+                           ("c2.xhtml", "<table>" + "<div>" * 1500 + "DEEP-CELL" + "</div>" * 1500 + "</table>")])
+md, note = docreaders.read(p, "epub")
+check("a table holding 1 500 nested <div> keeps the book, the cell's words too (was: the reader failed)",
+      "Chapter one." in md and "DEEP-CELL" in md, repr(note))
+p = epub("ul.epub", [("c1.xhtml", "<p>Chapter one.</p>"), ("c2.xhtml", "<ul>" * 1500 + "<li>DEEP-ITEM</li>" +
+                                                                 "</ul>" * 1500)])
+md, note = docreaders.read(p, "epub")
+check("1 500 <ul> nested in each other keep the book (was: the reader failed)",
+      "Chapter one." in md and "DEEP-ITEM" in md, repr(note))
+for label, body in (("lists", "<text:list><text:list-item>" * 1200 + "<text:p>DEEP</text:p>" +
+                     "</text:list-item></text:list>" * 1200),
+                    ("cells", "<table:table><table:table-row><table:table-cell>" * 1200 + "<text:p>DEEP</text:p>" +
+                     "</table:table-cell></table:table-row></table:table>" * 1200),
+                    ("draw:a", "<text:p>" + "<draw:a>" * 1200 + "DEEP" + "</draw:a>" * 1200 + "</text:p>")):
+    md, note = docreaders.read(odt("nested.odt", TRAP_ODT + body), "odt")
+    check("ODT %s nested 1 200 deep keep the document (was: the reader failed)" % label,
+          "Before the trap" in md and "DEEP" in md, repr(note))
+p = epub("bogus.epub", [("c1.xhtml", "<p>Chapter one.</p>"), ("c2.xhtml", "<p>two</p><![bogus[ x ]]><p>AFTER</p>")])
+md, note = docreaders.read(p, "epub")
+check("a bogus <![x[ section keeps the book (Python 3.8 and 3.13.2: the reader failed)",
+      "Chapter one." in md and "AFTER" in md, repr(note))
+for esc in (b"\\u1114112", b"\\u-70000"):
+    md, note = docreaders.read(rtf("u.rtf", TRAP_RTF + b"one bad escape " + esc + b" ends it\\par AFTER}"), "rtf")
+    check("an RTF escape %s out of Unicode's range is one U+FFFD (was: the reader failed)" % esc.decode(),
+          "Before the trap" in md and "AFTER" in md and "�" in md, repr(note))
+real = docreaders._Html.blocks
+
+
+def broken(self, el, depth=0):
+    if self.doc.endswith("c2.xhtml"):
+        raise ValueError("a part that breaks")
+    return real(self, el, depth)
+
+
+docreaders._Html.blocks = broken
+try:
+    md, note = docreaders.read(path("book.epub"), "epub")
+finally:
+    docreaders._Html.blocks = real
+check("a part whose reading breaks is named, and the parts around it are read",
+      "CHAPTER-ONE" in md and "ENDNOTE-TEXT" in md and "c2.xhtml" in note, repr(note))
+
+# RTF runs that pile up, emphasis many levels deep, the first loop's clock, the --download promise
+rtf("runs.rtf", b"{\\rtf1\\ansi " + b"x\\b x\\b0 " * 400000 + b"}")
+md, info = hostile("runs.rtf", "rtf")
+check("800 000 runs before one \\par take little memory (2 million took 904 MB)", fine(info, 4, 80), show(info, md))
+got, secs = timed(docreaders._marks, "a" + "\x0e/*\x0f" * 20000 + "\x0e*\x0f" * 20000 + "b")
+check("20 000 levels of emphasis side by side are joined in one pass (it was one pass a level)",
+      got == "ab" and secs < 0.5, "%.2fs %r" % (secs, got[:20]))
+got, secs = timed(docreaders._one_line, " " * 40000 + "x")
+check("a run of 40 000 no-break spaces is one line in linear time (it was quadratic)", got.endswith("x") and
+      secs < 0.5, "%.2fs" % secs)
+epub("parts.epub", [("p%05d.xhtml" % k, "<p>part %d</p>" % k) for k in range(20000)], nav=False)
+(md, note), secs = timed(docreaders.read, path("parts.epub"), "epub", time.time() - 1)
+check("a book out of time stops at once, and does not promise --download for 0 parts read",
+      secs < 0.3 and "time ran out" in note and "--download" not in note, "%.2fs %r" % (secs, note))
 TYPES = ('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
          '<Override PartName="/word/document.xml" ContentType="%s"/></Types>')
 
@@ -314,6 +616,30 @@ check("office: Strict OOXML's namespaces become the transitional ones",
 plain = package(TYPES % "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
                 REL % "http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument")
 check("office: a plain package is left byte for byte", readpage.office_plain(plain, "docx") is plain, "")
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+    for i in zipfile.ZipFile(io.BytesIO(dotx)).infolist():
+        z.writestr(i.filename, zipfile.ZipFile(io.BytesIO(dotx)).read(i))
+    z.writestr("word/media/big.png", b"\x00" * (60 << 20))
+got, secs, peak = peak_alloc(readpage.office_plain, buf.getvalue(), "docx")
+check("a template's 60 MB picture is not unpacked to give python-docx the plain type (it was, and zipped again)",
+      peak < 20 and b"document.main+xml" in zipfile.ZipFile(io.BytesIO(got)).read("[Content_Types].xml"),
+      "%.2fs, %.0f MB" % (secs, peak))
+
+# KNOWN-ISSUES 133: an archive's parts are read with a size cap of their own
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("mimetype", b"application/epub+zip" + b" " * (60 << 20))
+    z.writestr("OEBPS/content.opf", "<package/>")
+got, secs, peak = peak_alloc(readpage.zip_subtype, buf.getvalue())
+check("133: an archive's mimetype that unpacks to 60 MB is read up to its first bytes", got == "epub" and peak < 10,
+      "%s %.2fs, %.0f MB" % (got, secs, peak))
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+    z.writestr("word/document.xml", "<w:document/>")
+    z.writestr("word/footnotes.xml", "<w:footnotes><w:t>" + "n" * (60 << 20) + "</w:t></w:footnotes>")
+got, secs, peak = peak_alloc(readpage.docx_notes, buf.getvalue())
+check("133: a docx's footnotes that unpack to 60 MB are read up to a cap", peak < 50, "%.2fs, %.0f MB" % (secs, peak))
 
 # ------------------------------------------------ the CLI with these readers in pandoc's place
 for name, fact in (("book.epub", "ENDNOTE-TEXT"), ("doc.odt", "ODT-NOTE"), ("doc.rtf", "RTF-NOTE")):
@@ -321,4 +647,39 @@ for name, fact in (("book.epub", "ENDNOTE-TEXT"), ("doc.odt", "ODT-NOTE"), ("doc
     text = r.file("content.md")
     check("cli without pandoc: %s is read, its notes too" % name,
           r.manifest.get("status") == "ok" and fact in text, "%s %r" % (r.manifest.get("status"), text[:60]))
+
+# ------------------------------------------------ the readers in a process of their own, on one clock
+readpage.budget.start(readpage.budget.SECONDS)
+DOCS = getattr(readpage, "_DOCS", {})             # the read's converter clock (the old code had none)
+DOCS["spent"] = 0.0
+got = attempt(readpage.own_doc, path("doc.rtf"), "rtf")
+check("a document is read in a process of its own", isinstance(got, tuple) and "RTF-NOTE" in got[0],
+      repr(got)[:120])
+os.environ["READ_PAGE_TEST_DOC_SLEEP"] = "30"
+DOCS["spent"] = readpage.CONVERTER_TIMEOUT - 1.5
+got, secs = timed(attempt, readpage.own_doc, path("doc.rtf"), "rtf")
+check("a reader still at work when the converter's time is up is stopped, and the note says so",
+      isinstance(got, tuple) and got[0] == "" and "did not finish" in got[1] and secs < 4, "%.1fs %r" % (secs, got))
+DOCS["spent"] = readpage.CONVERTER_TIMEOUT
+got, secs = timed(attempt, readpage.own_doc, path("doc.rtf"), "rtf")
+check("with the read's converter time spent on other documents, the next is not read, and named so",
+      isinstance(got, tuple) and got[0] == "" and "not read" in got[1] and secs < 0.5, "%.1fs %r" % (secs, got))
+with zipfile.ZipFile(path("two.zip"), "w") as z:
+    z.write(path("doc.rtf"), "one.rtf")
+    z.write(path("doc.rtf"), "two.rtf")
+r = run_read(path("two.zip"), env={"READ_PAGE_SKIP": "pandoc,browser", "READ_PAGE_TEST_DOC_SLEEP": "30"})
+text = r.file("content.md")
+check("a ZIP's documents share the converter's 10 s: the first is stopped at them, the second not read",
+      r.seconds < 18 and "did not finish" in text and "two.rtf" in text and "not read" in text,
+      "%.1fs %r" % (r.seconds, text[-300:]))
+os.environ.pop("READ_PAGE_TEST_DOC_SLEEP")
+if os.name == "nt" or sys.platform == "darwin":
+    check.skip("the readers' process cannot take more memory than its limit (RLIMIT_AS)",
+               "no RLIMIT_AS on Windows; macOS does not hold to it")
+else:
+    code = ("import sys; sys.path.insert(0, %r); import docreaders; docreaders._limit_memory(200 << 20); "
+            "x = bytearray(400 << 20)" % SCRIPTS)
+    p = subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True, timeout=60)
+    check("the readers' process cannot take more memory than its limit (RLIMIT_AS)",
+          p.returncode != 0 and b"MemoryError" in p.stderr, p.stderr[-200:])
 sys.exit(check.done())

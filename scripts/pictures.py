@@ -19,9 +19,15 @@ import unicodedata
 import urllib.parse
 
 # ![alt](src) and ![alt](<src> "title"); a code fence is code, not a picture. An alt may carry
-# escaped brackets - trafilatura writes `![Rack \[File: AP\]](...)` - and those links were left raw
-IMG_LINK = re.compile(r"!\[((?:\\.|[^\]\\\n])*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"\n]*\")?\s*\)")
-FENCE = re.compile(r"(?m)^\s*(```|~~~)")
+# escaped brackets - trafilatura writes `![Rack \[File: AP\]](...)` - and those links were left raw.
+# No part of one runs past the next "![": from each of a run of them the scan went to the end of
+# the line (8 000 "![" took 2.2 s, 8 000 "![](" 4.5 s)
+_NOT_NEXT = r"!(?!\[)"
+IMG_LINK = re.compile(r"!\[((?:\\.|[^\]\\\n!]|%s)*)\]\(\s*<?((?:[^)\s>!]|%s)+)>?(?:\s+\"(?:[^\"\n!]|%s)*\")?\s*\)"
+                      % (_NOT_NEXT, _NOT_NEXT, _NOT_NEXT))
+# a fence line, its indent spaces and tabs: `^\s*` crossed line ends, and ran from every blank line
+# to the end of a run of them (30 000 took 2.7 s)
+FENCE = re.compile(r"(?m)^[ \t]*(```|~~~)")
 MARK = re.compile(r"\[img #(\d+)((?: · [^\]\n]*)?)\](?: (\S+))?")
 TINY_SIDE = 48          # px: a repeat this small with a short alt is printed as its alt
 TINY_ALT = 16           # characters
@@ -150,8 +156,9 @@ def marker(e):
     return "[%s] %s" % (" · ".join(parts), url)
 
 
-LINKED = re.compile(r"\[\s*(!\[(?:\\.|[^\]\\\n])*\]\(\s*<?[^)\s>]+>?(?:\s+\"[^\"\n]*\")?\s*\))\s*\]\(\s*<?([^)\s>]+)>?"
-                    r"(?:\s+\"[^\"\n]*\")?\s*\)")
+LINKED = re.compile(r"\[\s*(!\[(?:\\.|[^\]\\\n!]|%s)*\]\(\s*<?(?:[^)\s>!]|%s)+>?(?:\s+\"(?:[^\"\n!]|%s)*\")?\s*\))"
+                    r"\s*\]\(\s*<?((?:[^)\s>!]|%s)+)>?(?:\s+\"(?:[^\"\n!]|%s)*\")?\s*\)"
+                    % ((_NOT_NEXT,) * 5))
 
 
 def mark(md, base, by_url, drop=()):

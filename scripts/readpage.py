@@ -94,6 +94,7 @@ import blockrule                                                    # noqa: E402
 import budget                                                       # noqa: E402
 import ddworker                                                     # noqa: E402
 import debuglog                                                     # noqa: E402
+import docreaders                                                   # noqa: E402
 import engines                                                      # noqa: E402
 import netguard                                                     # noqa: E402
 import pdftables                                                    # noqa: E402
@@ -3675,9 +3676,10 @@ def zip_subtype(src):
     if any(n.startswith("ppt/") for n in names):
         return "pptx"
     # an archive's own `mimetype` says what it is - an OpenDocument file has one too, and was
-    # taken for an EPUB before the value was read
+    # taken for an EPUB before the value was read. Its first bytes are all of it (one that unpacked
+    # to gigabytes was read whole, KNOWN-ISSUES 133)
     try:
-        kind = z.read("mimetype").decode("ascii", "replace").strip() if "mimetype" in names else ""
+        kind = zip_part(z, "mimetype", 256).decode("ascii", "replace").strip() if "mimetype" in names else ""
     except Exception:                                         # noqa: BLE001
         kind = ""
     if kind == "application/epub+zip" or (not kind and any(n.endswith(".opf") for n in names)):
@@ -3704,29 +3706,38 @@ def office_plain(data, sub):
     """A package as python-docx and python-pptx take it: the main part of a macro-enabled file, a
     template or a slideshow (.docm .dotx .dotm .ppsx .ppsm .potx .potm) given the plain type, and
     Strict OOXML's namespaces the transitional ones. They refused these, and pandoc read them
-    (2026-11-20, measured on variants of a plain package); unchanged bytes when nothing is to do."""
+    (2026-11-20, measured on variants of a plain package); unchanged bytes when nothing is to do.
+    Only the XML parts are carried, unzipped: a picture, a font or a macro is an empty part here
+    (the text needs none of them, and the pictures come from the file itself), so a package's
+    media are never unpacked and zipped again in memory (up to 256 MB of them were)."""
     import io
     import zipfile
     z = zipfile.ZipFile(io.BytesIO(data))
-    if sum(i.file_size for i in z.infolist()) > MAX_PAGE_BYTES * 4:
+    xml = [i for i in z.infolist() if i.filename.endswith((".xml", ".rels"))]
+    if sum(i.file_size for i in xml) > MAX_PAGE_BYTES:
         return data                      # what the parts unpack to is read nowhere here
-    types = z.read("[Content_Types].xml")
-    rels = z.read("_rels/.rels") if "_rels/.rels" in z.namelist() else b""
+    names = set(z.namelist())
+    if "[Content_Types].xml" not in names:
+        return data
+    types = zip_part(z, "[Content_Types].xml", MAX_PAGE_BYTES)
+    rels = zip_part(z, "_rels/.rels", MAX_PAGE_BYTES) if "_rels/.rels" in names else b""
     pattern, plain = OFFICE_MAIN.get(sub, (None, None))
     other = bool(pattern and re.search(pattern, types))
     strict = b"purl.oclc.org/ooxml/" in rels
     if not (other or strict):
         return data
     out = io.BytesIO()
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as w:
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as w:
         for info in z.infolist():
-            part = z.read(info)
+            if info.is_dir():
+                continue
+            part = zip_part(z, info.filename, MAX_PAGE_BYTES) if info.filename.endswith((".xml", ".rels")) else b""
             if info.filename == "[Content_Types].xml" and other:
                 part = re.sub(pattern, plain, part)
             if strict and info.filename.endswith((".xml", ".rels")):
                 part = re.sub(rb"http://purl\.oclc\.org/ooxml/(\w+)/", rb"http://schemas.openxmlformats.org/\1/2006/",
                               part)
-            w.writestr(info, part)
+            w.writestr(zipfile.ZipInfo(info.filename, info.date_time), part)
     return out.getvalue()
 
 
@@ -4173,83 +4184,64 @@ def ocr_pages(paths):
     return "\n\n".join(out), info
 
 
-def rtf_text(data):
-    """RTF without a converter: control words and groups out, paragraphs kept, the hex and
-    unicode escapes decoded. Plain text, no tables; pandoc does better when it is there."""
-    s = data.decode("latin-1", "replace") if isinstance(data, bytes) else data
-    for g in ("fonttbl", "colortbl", "stylesheet", "info", "listtable", "listoverridetable", "generator",
-              "rsidtbl", "xmlnstbl", "mmathPr", "themedata", "colorschememapping", "latentstyles",
-              "datastore", "pict", "object", "header", "footer"):
-        while True:
-            i = s.find("{\\" + g)
-            if i < 0:
-                i = s.find("{\\*\\" + g)
-            if i < 0:
-                break
-            depth, j = 0, i
-            while j < len(s):
-                ch = s[j]
-                if ch == "\\":
-                    j += 2
-                    continue
-                depth += 1 if ch == "{" else -1 if ch == "}" else 0
-                j += 1
-                if depth == 0:
-                    break
-            s = s[:i] + s[j:]
-    s = re.sub(r"\{\\\*[^{}]*\}", "", s)                         # destinations nobody shows
-    s = re.sub(r"\\(par|line|sect|page)\b ?", "\n", s)
-    s = re.sub(r"\\tab\b ?", "\t", s)
-    s = re.sub(r"\\u(-?\d+)\??", lambda m: chr(int(m.group(1)) % 65536), s)
-    s = re.sub(r"\\'([0-9a-fA-F]{2})", lambda m: bytes([int(m.group(1), 16)]).decode("cp1252", "replace"), s)
-    s = re.sub(r"\\[a-zA-Z]+-?\d* ?", "", s)
-    s = re.sub(r"\\([{}\\])", r"\1", s)
-    s = s.replace("{", "").replace("}", "")
-    lines = [ln.strip() for ln in s.splitlines()]
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
-
-
-def odf_text(path):
-    """An OpenDocument file without a converter: its content.xml, headings and paragraphs in
-    order, list items and table cells on lines of their own."""
-    import zipfile
-    from xml.etree import ElementTree as ET
+def odf_text(path, notes=None):
+    """An OpenDocument file's headings and paragraphs in order, list items and table cells on lines
+    of their own (ODS and ODP are read so): docreaders' plain reader in this process, its
+    content.xml read up to MAX_PAGE_BYTES (a part past it is read up to it) and a DOCTYPE
+    refused. What it could not do goes into `notes`."""
     try:
-        with zipfile.ZipFile(path) as z, z.open("content.xml") as fh:
-            data = fh.read(MAX_PAGE_BYTES + 1)            # a zip bomb unpacks to gigabytes
-        if len(data) > MAX_PAGE_BYTES:
-            return ""
-        root = ET.fromstring(data)
-    except Exception:                                         # noqa: BLE001
-        return ""
-    text_ns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
-    out = []
-
-    def words(el):
-        parts = [el.text or ""]
-        for ch in el:
-            tag = ch.tag.split("}")[-1]
-            parts.append("\t" if tag == "tab" else "\n" if tag == "line-break" else " " if tag == "s" else words(ch))
-            parts.append(ch.tail or "")
-        return "".join(parts)
-
-    for el in root.iter():
-        tag = el.tag.split("}")[-1]
-        if el.tag.startswith("{%s}" % text_ns) and tag in ("h", "p"):
-            t = words(el).strip()
-            if t:
-                level = el.get("{%s}outline-level" % text_ns) or "1"
-                out.append(("#" * min(6, int(level) if level.isdigit() else 1) + " " + t) if tag == "h" else t)
-    return "\n\n".join(out)
+        text, note = docreaders.odf_plain(path, MAX_PAGE_BYTES)
+    except Exception as e:                                    # noqa: BLE001
+        debuglog.exc("odf: plain", e)
+        text, note = "", "it could not be read (%s)" % type(e).__name__
+    if note and notes is not None:
+        notes.append(note)
+    return text
 
 
-def own_doc(path, kind, secs):
-    """An EPUB, ODT or RTF through docreaders - the standard library alone - when pandoc is not
-    there or gave nothing (2026-11-20: the prototype measured against pandoc; READ_PAGE_SKIP=pandoc
-    puts it first). The time is the converter's; --download gives it all it needs."""
-    import docreaders
-    until = None if budget.unlimited() else time.time() + secs
-    md, why = docreaders.read(path, kind, until)
+# Our readers of EPUB, ODT and RTF (docreaders.py) run in a process of their own: a file of a few
+# KB made them take gigabytes or minutes (2026-11-21), and in this process nothing could stop them. They stop themselves at their time; the process is killed at it, and
+# RLIMIT_AS holds its memory where the OS has it. All the read's documents share the converter's
+# time - a ZIP's 30 gave each one its own 10 s - and with --download there is no limit.
+_DOCS = {"spent": 0.0}             # the read's converter clock for these documents
+
+
+def own_doc(path, kind):
+    """An EPUB, ODT or RTF through docreaders.py in its own process: (markdown, note)."""
+    unlimited = budget.unlimited()
+    left = CONVERTER_TIMEOUT - _DOCS["spent"]
+    if not unlimited and left < 0.2:
+        return "", ("not read: the %d s this read has for its documents were spent on the others; --download "
+                    "reads them all" % CONVERTER_TIMEOUT)
+    secs = None if unlimited else budget.cap(left, floor=min(left, 1.0))
+    t0 = now()
+    # the reading stops a little before the kill, and what was read is written between the two
+    until, kill = (0.0, 0.0) if secs is None else (t0 + secs - min(2.0, secs * 0.4), t0 + secs)
+    # -I -S: the standard library alone, nothing of the caller's environment or site; the start of a
+    # process is the cost (0.1 s on Windows, measured 2026-11-21: 0.01 s less than -E -B)
+    cmd = [sys.executable, "-I", "-S", "-B", "-X", "utf8",
+           os.path.join(os.path.dirname(os.path.abspath(__file__)), "docreaders.py"),
+           kind, path, "%.3f" % until, "%.3f" % kill]
+    rc, so, se = run(cmd, timeout=secs)
+    dt = now() - t0
+    _DOCS["spent"] += dt
+    if rc == -1 and (secs is None or dt < secs - 0.05):
+        return "", "the reader failed: its process did not start (%s)" % se.decode("utf-8", "replace")[:120]
+    if rc == -1:
+        budget.record("docreader", t0, budget.ended(CONVERTER_TIMEOUT, secs), own=CONVERTER_TIMEOUT, given=secs,
+                      note=kind)
+        return "", "the %s reader did not finish in %.0f s and was stopped" % (kind.upper(), secs or 0)
+    try:
+        if rc != 0:
+            raise ValueError("exit code %s" % rc)
+        res = json.loads(so.decode("utf-8", "replace"))
+        md, why = res.get("md") or "", res.get("note") or ""
+    except ValueError as e:
+        err = [ln for ln in se.decode("utf-8", "replace").splitlines() if ln.strip()]
+        budget.record("docreader", t0, "fail", own=CONVERTER_TIMEOUT, given=secs, note=kind)
+        return "", "the reader failed: %s" % (err[-1].strip() if err else str(e))[:160]
+    budget.record("docreader", t0, "ok", own=CONVERTER_TIMEOUT, given=secs,
+                  note="%s, %d words" % (kind, len(md.split())))
     trace("document.own", kind=kind, words=len(md.split()), note=why[:120])
     return md, why
 
@@ -4359,7 +4351,8 @@ def zip_text(path, c, workdir):
     """A plain archive (not an office file or a book): what is in it, and the text of what can be
     read - text files as they are, documents through the same converters, one level deep. 30
     members at most, none over 20 MB unpacked, 60 MB in all; a member is unpacked under a name of
-    our own, never its path."""
+    our own, never its path. A document that gives no text says why under its name (its reader
+    stopped, the read's converter time spent on the others)."""
     import zipfile
     out, read = [], 0
     try:
@@ -4384,8 +4377,10 @@ def zip_text(path, c, workdir):
                         fh.write(data)
                     kind, _ = detect_kind(data[:4096], "", member)
                     nested = kind == "zip" and zip_subtype(member) == "other"     # one level deep
-                    text = (doc_text(member, kind, c, workdir, name=i.filename)[0]
-                            if kind in ("pdf", "zip", "rtf") and not nested else "")
+                    text, why = (doc_text(member, kind, c, workdir, name=i.filename)
+                                 if kind in ("pdf", "zip", "rtf") and not nested else ("", ""))
+                    if not text.strip() and why:
+                        text = "(%s)" % why
                 if text.strip():
                     out.append("## %s\n\n%s" % (i.filename, text.strip()))
     except Exception as e:                                    # noqa: BLE001
@@ -4886,23 +4881,22 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
         # pandoc reads RTF and ODT into markdown (tables, lists, headings); without it the
         # stdlib readers keep the text
         if c["cli"].get("pandoc") and sub != "ods" and sub != "odp":
+            t_pd = now()
             md = pandoc_md(c["cli"]["pandoc"], path, "rtf" if kind == "rtf" else "odt", secs)
+            _DOCS["spent"] += now() - t_pd           # one converter time, pandoc's in it
             if md.strip():
                 return md, ""
         if kind == "rtf" or sub == "odt":
-            # its answer stands unless it broke: the old readers below read a part whole (an ODT
-            # whose content.xml unpacks to 1 GB took 141 s and 2.1 GB there, 2026-11-20)
-            md, why = own_doc(path, "rtf" if kind == "rtf" else "odt", secs)
-            if md.strip() or not why.startswith("the reader failed"):
-                return md, why or ("" if md.strip() else "no text in this %s" % (sub or kind).upper())
-        if kind == "rtf":
-            with open(path, "rb") as fh:
-                text = rtf_text(fh.read())
-        else:
-            text = odf_text(path)
+            # our reader's answer stands: a reader that breaks gives its plain text itself, in its own
+            # process (the old plain readers here read a part whole, or in quadratic time)
+            md, why = own_doc(path, "rtf" if kind == "rtf" else "odt")
+            return md, why or ("" if md.strip() else "no text in this %s" % (sub or kind).upper())
+        notes = []
+        text = odf_text(path, notes)
         if text.strip():
-            return text, "" if c["cli"].get("pandoc") else "read without pandoc: plain text, tables flattened"
-        return "", "no text in this %s" % (sub or kind).upper()
+            return text, "; ".join(notes) or ("" if c["cli"].get("pandoc") else
+                                              "read without pandoc: plain text, tables flattened")
+        return "", "; ".join(notes) or "no text in this %s" % (sub or kind).upper()
     if kind == "pdf":
         if c["libs"].get("pymupdf"):
             text = None
@@ -4984,11 +4978,14 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
         if text.strip():
             return text, note
     elif kind == "zip" and c["cli"].get("pandoc"):
+        t_pd = now()
         md = pandoc_md(c["cli"]["pandoc"], path, sub if sub in ("epub", "docx", "pptx", "xlsx") else "", secs)
+        if sub == "epub":
+            _DOCS["spent"] += now() - t_pd           # one converter time, pandoc's in it
         if md.strip():
             return md, note
     if sub == "epub":
-        md, why = own_doc(path, "epub", secs)
+        md, why = own_doc(path, "epub")
         if md.strip() or not why.startswith("the reader failed"):
             return md, why or note or ("" if md.strip() else "no text in this EPUB")
         note = note or why
@@ -6079,8 +6076,14 @@ def server_file_name(workdir, stem, ext):
         cand = "%s-%d%s" % (stem, n, ext)
 
 
+DOCX_NOTES = 8 * 1024 * 1024       # a docx's footnotes or endnotes, read up to this (KNOWN-ISSUES 133)
+_W_T = re.compile(r"<w:t(?:\s[^<>]{0,8192})?>([^<]*)</w:t>")
+
+
 def docx_notes(data):
-    """Footnotes and endnotes live outside the body: python-docx does not see them."""
+    """Footnotes and endnotes live outside the body: python-docx does not see them. Each part is
+    read up to DOCX_NOTES, and a w:t is matched in linear time (`<w:t[^>]*>(.*?)</w:t>` ran to the
+    end of the part from every w:t that never closed)."""
     import zipfile
     out = []
     try:
@@ -6088,9 +6091,9 @@ def docx_notes(data):
         for name in ("word/footnotes.xml", "word/endnotes.xml"):
             if name not in z.namelist():
                 continue
-            xml = z.read(name).decode("utf-8", "replace")
-            texts = re.findall(r"(?s)<w:t[^>]*>(.*?)</w:t>", xml)
-            line = " ".join(unescape(re.sub(r"<[^>]+>", "", x)) for x in texts).strip()
+            xml = zip_part(z, name, DOCX_NOTES).decode("utf-8", "replace")
+            texts = _W_T.findall(xml)
+            line = " ".join(unescape(x) for x in texts).strip()
             line = re.sub(r"\s+", " ", line)
             if len(line) > 40:                     # skip separator footnotes
                 out.append(line)
@@ -7174,6 +7177,7 @@ def read(args):
     budget.start(None if args.download else budget.SECONDS)
     debuglog.begin()
     tables_reset()
+    _DOCS["spent"] = 0.0                       # the read's converter clock for EPUB, ODT and RTF
     _CAPS_RUN.clear()
     _RENDER_STOP.clear()
     _BROWSER_UP.clear()

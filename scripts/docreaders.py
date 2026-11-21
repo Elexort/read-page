@@ -1,34 +1,63 @@
 """EPUB, ODT and RTF as Markdown with the standard library alone (2026-11-20).
 
-pandoc - pypandoc_binary, 41 MB of --setup's download and 226 MB on disk - reads these three
-formats and nothing else here. These readers are the prototype measured against it on 52 files
-(2026-11-20), to see whether it can go. They need nothing but the standard library: an
-EPUB's XHTML goes through html.parser, which expands no entity a DTD declares; an ODT's XML through
-ElementTree, a DOCTYPE refused first; an RTF through a tokenizer of our own.
+pandoc - pypandoc_binary, 41 MB of --setup's download and 226 MB on disk - read these three
+formats and nothing else here; measured against it on 52 files, these readers lose nothing it kept
+and keep what it lost. They need nothing but the standard library: an EPUB's XHTML goes through
+html.parser, which expands no entity a DTD declares; an ODT's XML through ElementTree, a DOCTYPE
+refused first; an RTF through a tokenizer of our own.
+
+readpage.py runs them in a process of their own (`python docreaders.py KIND PATH UNTIL KILL`, see
+main()), killed at the converter's time and held to MEMORY by RLIMIT_AS where the OS has it: a
+reader stops itself at `until`, and the kill is the backstop for what it does not foresee. What
+they build is bounded by the document, not by its elements: a table's grid by CELLS and all of a
+document's tables by DOC_CELLS, whatever its cells span or repeat (a 1 KB EPUB took 1.4 GB and a
+4.5 KB ODT 40 s, because a cap held per cell and multiplied across cells). No scan runs back over
+what it has passed: a tag is TAG_MAX characters at most and holds no "<", a rule that closes an
+element looks up where it is open, a list or a paragraph is joined once.
 
 Each reader returns (markdown, note): note is "" or what it could not do - the time ran out after
-chapter 12 of 40, a part over the size limit, XML that breaks somewhere (what came before is kept).
-A picture is ![alt](its path in the archive), so readpage's doc_pictures() puts its marker where
-the picture stands; a footnote is [^n] where it is called and "[^n]: its text" (an EPUB: where the
-book keeps its notes; ODT, RTF: at the end); a table is a Markdown table whose merged cells leave
-their other places empty. An archive's part is read up to PART_BYTES and all of them together up
-to TOTAL_BYTES unpacked, whatever their headers claim; `until` (a time.time() to stop by, None for
-no limit) is checked between chapters and every few hundred elements."""
+chapter 12 of 40, a part over the size limit, XML that breaks somewhere (what came before is kept),
+a part or an element that broke (the others are read), a table cut at its cap. A picture is
+![alt](its path in the archive), so readpage's doc_pictures() puts its marker where the picture
+stands; a footnote is [^n] where it is called and "[^n]: its text" (an EPUB: where the book keeps
+its notes; ODT, RTF: at the end); a table is a Markdown table whose merged cells leave their other
+places empty. The document's own text is escaped for Markdown, so its literal ![x](y), [a] or *b*
+stay text. An archive's part is read up to PART_BYTES and all of them together up to TOTAL_BYTES
+unpacked, whatever their headers claim; `until` (a time.time() to stop by, None for no limit) is
+checked between chapters and every few hundred elements."""
+import bisect
 import codecs
 import html
+import json
+import os
 import posixpath
 import re
+import sys
 import time
 import urllib.parse
 import zipfile
 from html.parser import HTMLParser
 from xml.etree import ElementTree as ET
+from xml.parsers import expat
 
 PART_BYTES = 32 * 1024 * 1024      # one part of an archive, unpacked
 TOTAL_BYTES = 128 * 1024 * 1024    # every part one reader takes from one archive
 RTF_BYTES = 128 * 1024 * 1024      # an RTF's own bytes (pictures make the big ones)
 DEPTH = 100                        # nesting a renderer follows; what is deeper comes as plain text
+OPEN = 2000                        # elements the tree builder keeps open; deeper start tags become siblings
+NODES = 500000                     # elements of one part (a part that unpacks to 1 GB of <p>a</p>
+                                   # built 4 million of them, 2 GB, 2026-11-20)
 ROWS = 20000                       # rows of one table
+WIDTH = 1024                       # columns of one table: a row's cells past it join its last cell
+CELLS = 250000                     # one table's grid, rows x columns, its spans and repeats included
+DOC_CELLS = 1000000                # the grids of all of one document's tables
+TAG_MAX = 8192                     # characters of one tag: a "<" no ">" closes within them is text
+RUNS = 50000                       # runs of one look in an RTF paragraph; past them its rest is plain
+CELLX = 256                        # cell borders of one RTF row definition
+SPACES = 1000000                   # spaces an ODT's text:s may add to one document
+FINISH = 1.0                       # seconds past `until` for writing what was read
+MEMORY = 2 << 30                   # the readers' process: its address space where the OS limits it
+PROMISE = 300                      # "--download reads it whole" when the whole would take this at most
 
 
 class Late(Exception):
@@ -36,10 +65,14 @@ class Late(Exception):
 
 
 class _Clock(object):
-    __slots__ = ("until", "n")
+    """The time a reader has, and what it may still build for one document (table cells, spaces);
+    what a cap cut is counted, to be said once in the note."""
+    __slots__ = ("until", "finish", "n", "t0", "cells", "spaces", "cuts")
 
-    def __init__(self, until):
-        self.until, self.n = until, 0
+    def __init__(self, until, finish=None):
+        self.until, self.n, self.t0 = until, 0, time.time()
+        self.finish = finish if finish is not None or until is None else until + FINISH
+        self.cells, self.spaces, self.cuts = 0, 0, {}
 
     def tick(self):
         if self.until is not None:
@@ -50,18 +83,37 @@ class _Clock(object):
     def late(self):
         return self.until is not None and time.time() > self.until
 
+    def finishing(self):
+        """The reading is over: what was read is written by `finish`, a little later."""
+        self.until = self.finish
 
-def read(path, kind, until=None):
-    """(markdown, note) of an EPUB, an ODT or an RTF file; ("", why) when it gives no text."""
+    def cut(self, what, n=1):
+        self.cuts[what] = self.cuts.get(what, 0) + n
+
+    def said(self):
+        return "; ".join("%s: %d" % (what, n) if n > 1 else what for what, n in self.cuts.items())
+
+    def more(self, done):
+        """"; --download reads it whole" when, at the pace so far, the whole would take PROMISE
+        seconds at most: a read its time cut, not one that would not end with all the time there is
+        (it was said of a book read 0 parts of 1 in 91 s)."""
+        spent = time.time() - self.t0
+        return "; --download reads it whole" if 0 < done and spent / done <= PROMISE else ""
+
+
+def read(path, kind, until=None, finish=None):
+    """(markdown, note) of an EPUB, an ODT or an RTF file; ("", why) when it gives no text. A part
+    or an element that breaks loses that part, and the note names it; a reader that breaks as a
+    whole leaves the document's plain text (its words in order, no tables), and says so."""
     try:
         if kind == "epub":
-            return epub_md(path, until)
+            return epub_md(path, until, finish)
         if kind == "odt":
-            return odt_md(path, until)
+            return odt_md(path, until, finish)
         if kind == "rtf":
-            with open(path, "rb") as fh:
-                data = fh.read(RTF_BYTES + 1)
-            md, note = rtf_md(data[:RTF_BYTES], until)
+            with open(path, "rb") as fh:            # read(n) sets n bytes aside first: no more than the file has
+                data = fh.read(min(os.fstat(fh.fileno()).st_size, RTF_BYTES) + 1)
+            md, note = rtf_md(data[:RTF_BYTES], until, finish)
             if len(data) > RTF_BYTES:
                 note = _join(note, "the file was read up to %d MB" % (RTF_BYTES >> 20))
             return md, note
@@ -70,7 +122,12 @@ def read(path, kind, until=None):
     except zipfile.BadZipFile as e:
         return "", "not a whole archive (%s): the file is cut or damaged" % str(e)[:80]
     except Exception as e:                                     # noqa: BLE001
-        return "", "the reader failed: %s: %s" % (type(e).__name__, str(e)[:120])
+        why = "the reader failed: %s: %s" % (type(e).__name__, str(e)[:120])
+        try:
+            md, note = plain(path, kind, until if until is None else max(until, time.time() + FINISH))
+        except Exception:                                      # noqa: BLE001
+            return "", why
+        return md, _join(why, "the plain text instead" + (": " + note if note else "")) if md.strip() else why
     return "", "the reader failed: it does not know %s" % kind
 
 
@@ -90,7 +147,24 @@ def _int(s, default=0):
 _WS = re.compile(r"[ \t\n\r\f]+")
 _EXTERNAL = re.compile(r"(?i)^(?:https?|ftps?|mailto|news|tel|doi|urn):")
 _LIST_LINE = re.compile(r"^ {0,3}(?:[-*+]|\d{1,9}[.)])(?: |$)")
-_PIC = r"!\[(?:\\.|[^\]\\\n])*\]\([^)\s]*\)"
+# a picture as _pic() writes it: its alt and path hold no "[" (escaped, percent-encoded), so a scan
+# from one "![" never runs past the next one (a run of them was quadratic)
+_PIC = r"!\[(?:\\.|[^\[\]\\\n]){0,%d}\]\([^()\s\[\]]{0,%d}\)" % (TAG_MAX, TAG_MAX)
+# what Markdown would take for its own in a document's text: a backslash before punctuation, `,
+# *, [ and ], and _ unless a letter or digit stands on both sides of it (snake_case stays as it is)
+_MD_CHARS = re.compile(r"\\(?=[!-/:-@\[-`{-~])|[`*\[\]]|(?<![^\W_])_|_(?![^\W_])")
+_MD_UNESC = re.compile(r"\\([!-/:-@\[-`{-~])")
+
+
+def _esc(s):
+    """A document's own text as Markdown text: its ![x](y), [a](b), *b*, `c` and _d_ stay what they
+    say (a book's literal ![x](y) became a picture link, a Calc guide's ***** emphasis)."""
+    return _MD_CHARS.sub(r"\\\g<0>", s) if s else s
+
+
+def _unesc(s):
+    """_esc() undone: code is what it is, with no escapes."""
+    return _MD_UNESC.sub(r"\1", s) if "\\" in s else s
 
 
 def _space(s):
@@ -98,7 +172,11 @@ def _space(s):
 
 
 def _one_line(s):
-    return re.sub(r"\s*\n\s*", " ", s).strip()
+    """Every run of white space that holds a line end as one space, the ends trimmed. Split, not a
+    pattern: `\\s*\\n` scanned back over a long run of spaces with no line end from each of them."""
+    if "\n" not in s:
+        return s.strip()
+    return " ".join(t for t in (p.strip() for p in s.split("\n")) if t)
 
 
 def _lines(s):
@@ -114,8 +192,8 @@ def _lines(s):
 
 
 def _para(s):
-    """Inline text as a paragraph: _lines(), a line Markdown would take for a heading, a list item
-    or a setext underline escaped, a picture kept apart from the words around it."""
+    """Inline text as a paragraph: _lines(), a line Markdown would take for a heading, a list item,
+    a quote or a setext underline escaped, a picture kept apart from the words around it."""
     return _escape(_lines(s))
 
 
@@ -126,6 +204,9 @@ def _escape(t):
     t = re.sub(r"(?m)^([-+*])(?=[ \t])", r"\\\1", t)
     t = re.sub(r"(?m)^(\d{1,9})([.)])(?=[ \t])", r"\1\\\2", t)
     t = re.sub(r"(?m)^([=-]+)[ \t]*$", r"\\\1", t)
+    t = re.sub(r"(?m)^>", r"\\>", t)
+    if "![" not in t:
+        return t
     t = re.sub(r"(%s)(?=\w)" % _PIC, r"\1 ", t)
     return re.sub(r"(?<=\w)(%s)" % _PIC, r" \1", t)
 
@@ -143,17 +224,25 @@ def _heading(level, text):
 # Emphasis is written as \x0e<mark>\x0f ... \x0e/<mark>\x0f until a text is whole, then _marks()
 # makes it Markdown: two runs of one look side by side are one run. Written at once, a word in
 # three bold spans came out as **Extras****→****Optionen** (an ODT, 2026-11-20).
-_MERGE = re.compile("\x0e/([*~]+)\x0f\x0e\\1\x0f")
+_MARK_TOKEN = re.compile("(\x0e/?[*~]+\x0f)")
 _MARK = re.compile("\x0e/?([*~]+)\x0f")
 
 
 def _marks(t):
+    """In one pass: a closing mark followed at once by an opening one of the same look cancel out,
+    and the ones that meet then too (it was a pass per level of nesting: 5.5 s for 64 MB)."""
     if "\x0e" not in t:
         return t
-    prev = None
-    while prev != t:
-        prev, t = t, _MERGE.sub("", t)
-    return _MARK.sub(r"\1", t)
+    out = []
+    for i, piece in enumerate(_MARK_TOKEN.split(t)):
+        if not i % 2:
+            if piece:
+                out.append(piece)
+        elif piece[1] != "/" and out and out[-1] == "\x0e/" + piece[1:]:
+            out.pop()
+        else:
+            out.append(piece)
+    return _MARK.sub(r"\1", "".join(out))
 
 
 def _emph(s, mark):
@@ -192,17 +281,20 @@ def _fence(code, lang=""):
 
 
 def _link(text, href):
-    """[text](href) for an address outside the document; its words alone for one inside it."""
+    """[text](href) for an address outside the document; its words alone for one inside it. A link
+    that is a picture alone is [![alt](path)](href): the picture pass keeps its address after the
+    marker; words and a picture together keep it after them."""
     core = text.strip()
     href = (href or "").strip()
-    if not core or not _EXTERNAL.match(href) or "![" in core:
+    if not core or not _EXTERNAL.match(href):
         return text
+    if re.search(r"[\s()<>\[\]]", href):
+        href = "<%s>" % re.sub(r"\s+", "%20", href).replace("<", "%3C").replace(">", "%3E")
+    if "![" in core:
+        return "[%s](%s)" % (core, href) if re.match(r"^%s$" % _PIC, core) else "%s (%s)" % (text, href)
     i = len(text) - len(text.lstrip())
     j = len(text.rstrip())
-    if re.search(r"[\s()<>]", href):
-        href = "<%s>" % re.sub(r"\s+", "%20", href).replace("<", "%3C").replace(">", "%3E")
-    core = _one_line(core).replace("[", "\\[").replace("]", "\\]")
-    return text[:i] + "[%s](%s)" % (core, href) + text[j:]
+    return text[:i] + "[%s](%s)" % (_one_line(core), href) + text[j:]
 
 
 def _pic(alt, path):
@@ -212,7 +304,7 @@ def _pic(alt, path):
         return ""
     alt = _one_line(alt or "").replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
     if _EXTERNAL.match(path):
-        return "![%s](%s)" % (alt, re.sub(r"[\s()<>]", lambda m: "%%%02X" % ord(m.group(0)), path))
+        return "![%s](%s)" % (alt, re.sub(r"[\s()<>\[\]]", lambda m: "%%%02X" % ord(m.group(0)), path))
     return "![%s](%s)" % (alt, urllib.parse.quote(path, safe="/"))
 
 
@@ -246,28 +338,38 @@ def _list(items):
     return sep.join(_indent(sep.join(blocks), m, " " * len(m)) for m, blocks in items)
 
 
-def md_table(rows):
+def md_table(rows, clock=None):
     """Rows of cell texts as a Markdown table, the first row its head; None when fewer than two
     columns have text (such rows read better as paragraphs), "" when nothing is left."""
-    rows = [[_one_line(c or "").replace("|", "\\|") for c in r] for r in rows]
-    rows = [r for r in rows if any(r)]
-    if not rows:
+    out = []
+    for r in rows:
+        if clock is not None:
+            clock.tick()
+        line = [_one_line(c or "").replace("|", "\\|") for c in r]
+        if any(line):
+            out.append(line)
+    if not out:
         return ""
-    width = max(len(r) for r in rows)
-    rows = [r + [""] * (width - len(r)) for r in rows]
-    keep = [j for j in range(width) if any(r[j] for r in rows)]
+    width = max(len(r) for r in out)
+    keep = [j for j in range(width) if any(j < len(r) and r[j] for r in out)]
     if len(keep) < 2:
         return None
-    rows = [[r[j] for j in keep] for r in rows]
-    line = lambda r: "| " + " | ".join(r) + " |"                    # noqa: E731
-    return "\n".join([line(rows[0]), "|" + " --- |" * len(keep)] + [line(r) for r in rows[1:]])
+    lines = ["| " + " | ".join(r[j] if j < len(r) else "" for j in keep) + " |" for r in out]
+    return "\n".join([lines[0], "|" + " --- |" * len(keep)] + lines[1:])
 
 
-def _table_blocks(rows):
-    md = md_table(rows)
+def _table_blocks(rows, clock=None):
+    md = md_table(rows, clock)
     if md is None:                     # one column: its cells as paragraphs
         return [p for p in (_para(c) for r in rows for c in r) if p]
     return [md] if md else []
+
+
+def _grid_room(clock, rows, width):
+    """How many more rows of `width` cells a table holding `rows` may take: CELLS for one table,
+    what DOC_CELLS has left for the document."""
+    width = max(1, width)
+    return min(CELLS // width, (DOC_CELLS - clock.cells) // width) - rows
 
 
 # ---------------------------------------------------------------- archives
@@ -319,6 +421,20 @@ class _Zip(object):
         return "; ".join(out)
 
 
+# codecs a part may not name for itself: not a character set, and punycode's decoder is quadratic
+_NOT_CHARSETS = frozenset(("idna", "punycode", "unicode_escape", "raw_unicode_escape", "undefined"))
+
+
+def _charset(name):
+    try:
+        info = codecs.lookup(name)
+    except LookupError:
+        return None
+    if not getattr(info, "_is_text_encoding", True) or info.name in _NOT_CHARSETS:
+        return None
+    return info.name
+
+
 def _decode(data):
     """An XML or HTML part as text: its BOM, its XML declaration, its meta charset, else UTF-8."""
     if data[:3] == b"\xef\xbb\xbf":
@@ -328,21 +444,52 @@ def _decode(data):
     head = data[:2048]
     m = re.match(rb"""\s*<\?xml[^>]*?encoding\s*=\s*["']([A-Za-z0-9._:-]+)""", head) or \
         re.search(rb"""(?i)<meta\b[^>]*?charset\s*=\s*["']?([A-Za-z0-9._:-]+)""", head)
-    enc = m.group(1).decode("ascii") if m else "utf-8"
+    enc = _charset(m.group(1).decode("ascii")) if m else None
     try:
-        return data.decode(enc)
-    except (LookupError, UnicodeDecodeError):
+        return data.decode(enc or "utf-8")
+    except (LookupError, UnicodeError, ValueError):
         return data.decode("utf-8", "replace")
 
 
-_ATTR = re.compile(r"""([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+_ATTR = re.compile(r"""(?<![\w:.-])([\w:.-]+)\s*=\s*(?:"([^"]*)"|'([^']*)')""")
 
 
 def _attrs(tag):
     return {k.lower(): html.unescape(a or b) for k, a, b in _ATTR.findall(tag)}
 
 
-_PROLOG = re.compile(rb"\s*(?:<\?.*?\?>|<!--.*?-->)", re.S)
+class _Stop(Exception):
+    pass
+
+
+_CUT = "{urn:read-page}cut"            # an element of ours where a part's XML broke: no reader reads it
+
+
+def _doctype(data):
+    """Does an XML part declare a DOCTYPE? expat reads its prolog alone, up to the first element, so
+    a BOM, UTF-16, an encoding or a line end before it change nothing (a newline after
+    <?xml ...?> let one through, and expat's own limit was all that stopped the bomb)."""
+    p = expat.ParserCreate()
+    seen = []
+
+    def doctype(*_a):
+        seen.append(1)
+        raise _Stop()
+
+    def element(*_a):
+        raise _Stop()
+    p.StartDoctypeDeclHandler = doctype
+    p.EntityDeclHandler = doctype
+    p.StartElementHandler = element
+    try:
+        for i in range(0, len(data), 1 << 16):
+            p.Parse(data[i:i + (1 << 16)], False)
+        p.Parse(b"", True)
+    except _Stop:
+        pass
+    except expat.ExpatError:
+        pass                                                   # XML that breaks: ElementTree says how
+    return bool(seen)
 
 
 def _xml(data, clock):
@@ -351,13 +498,7 @@ def _xml(data, clock):
     are the way to a billion laughs on a Python whose expat has no limit of its own."""
     if not data:
         return None, "it is empty"
-    pos = 0
-    while True:
-        m = _PROLOG.match(data, pos)
-        if not m or m.end() == pos:
-            break
-        pos = m.end()
-    if data[pos:pos + 9].lstrip()[:9] == b"<!DOCTYPE":
+    if _doctype(data):
         return None, "it declares a DOCTYPE"
     tb = ET.TreeBuilder()
     parser = ET.XMLParser(target=tb)
@@ -370,6 +511,8 @@ def _xml(data, clock):
     except ET.ParseError as e:
         why = "its XML breaks (%s): what comes after that point is missing" % str(e)[:60]
     try:
+        tb.start(_CUT, {})              # the text of an element still open goes to it (a part cut at
+        tb.end(_CUT)                    # its size limit kept no word of its last paragraph)
         return tb.close(), why
     except Exception:                                          # noqa: BLE001
         return None, why
@@ -405,37 +548,104 @@ class _Full(Exception):
     """A part holds more elements than NODES."""
 
 
-NODES = 500000                     # elements of one part (a part that unpacks to 1 GB of <p>a</p>
-                                   # built 4 million of them, 2 GB, 2026-11-20)
+# Elements html.parser reads as raw text, to their end tag: script and style on every Python, and
+# since 2025's fixes (3.9.25, 3.12.14, 3.13.18) xmp, iframe, noembed, noframes, title and textarea
+_RAW_START = re.compile(r"(?i)<(script|style|title|textarea|iframe|noembed|noframes|xmp)(?=[\s/>])")
+_RAW_END = dict((n, re.compile(r"(?i)</%s(?=[\s/>])" % n))
+                for n in ("script", "style", "title", "textarea", "iframe", "noembed", "noframes", "xmp"))
+
+
+def _markup(t):
+    """A part's markup as html.parser reads it in linear time, the same on every Python. html.parser
+    ran from every unclosed construct to the end of the part - at the end of input on Pythons
+    without 2025's fix (CVE-2025-6069: 12 KB of "<a " took 4.8 s on 3.13.2) and again at each 64 KB
+    it is fed, on all of them (one 4 MB tag: 2.5 s on 3.13.18, 19.7 s on 3.9.25). So:
+    - a comment or a CDATA section goes (none of their words is read), to the end of the part when
+      it never ends, as a browser has it;
+    - a raw-text element (script, style, title, textarea, iframe, noembed, noframes) keeps its tags
+      and loses its contents, none of which is read either; one that never ends, the rest of the
+      part; `<script/>` is closed at once (the 2025 parsers would open it);
+    - an xmp is a pre with its text escaped (raw text on the 2025 parsers, markup before them);
+    - a "<" that no ">" closes within TAG_MAX characters is text."""
+    if "<" not in t:
+        return t
+    out, pos, start, gt, n = [], 0, 0, -1, len(t)
+    while True:
+        i = t.find("<", start)
+        if i < 0:
+            break
+        if t.startswith("<!--", i) or t.startswith("<![CDATA[", i):
+            out.append(t[pos:i])
+            j = t.find("-->" if t[i + 2] == "-" else "]]>", i + 4)
+            pos = start = n if j < 0 else j + 3
+            continue
+        if gt < i:
+            gt = t.find(">", i)
+            if gt < 0:
+                gt = n + TAG_MAX                # no ">" after here: every "<" left is text
+        if gt - i > TAG_MAX:
+            out.append(t[pos:i])
+            out.append("&lt;")
+            pos = start = i + 1
+            continue
+        m = _RAW_START.match(t, i)
+        if m:
+            name = m.group(1).lower()
+            if t[gt - 1] == "/":
+                out.append(t[pos:gt - 1] + "></%s>" % name)
+                pos = start = gt + 1
+                continue
+            e = _RAW_END[name].search(t, gt + 1)
+            end = e.start() if e else n
+            if name == "xmp":
+                out.append(t[pos:i] + "<pre>" + t[gt + 1:end].replace("&", "&amp;").replace("<", "&lt;") + "</pre>")
+                k = t.find(">", end)
+                pos = start = n if e is None or k < 0 else k + 1
+            else:
+                out.append(t[pos:gt + 1])
+                pos = start = end
+            continue
+        start = i + 1
+    out.append(t[pos:])
+    return "".join(out)
 
 
 class _Tree(HTMLParser):
     """XHTML (or tag soup) as a tree of _El; the HTML rules that close a <p> or an <li> nobody
-    closed, so a sloppy EPUB 2 book still nests the way a browser would show it. Which tags are
-    open is counted, so a rule or an end tag looks down the stack only for a tag that is there
-    (200 000 nested <div> looked down the whole stack at each tag: hours); the clock is read
-    every 4096 elements, and the tree stops at NODES."""
+    closed, so a sloppy EPUB 2 book still nests the way a browser would show it. Where each tag is
+    open is kept (`at`: its stack positions), so a rule or an end tag finds its element in one look
+    (a <p> left open under a <button> made each tag that closes a <p> walk the whole stack);
+    text is gathered and joined once (300 000 stray end tags copied it at each); OPEN elements at
+    most are open, the clock is read every 4096 elements, and the tree stops at NODES."""
 
     def __init__(self, clock):
         HTMLParser.__init__(self, convert_charrefs=True)
         self.root = _El("#root", {})
-        self.stack, self.open, self.clock, self.nodes = [self.root], {}, clock, 0
+        self.stack, self.at, self.clock, self.nodes, self.buf = [self.root], {}, clock, 0, []
+
+    def flush(self):
+        if self.buf:
+            self.stack[-1].kids.append("".join(self.buf))
+            self.buf = []
 
     def _pop(self, k):
+        self.flush()
         for el in self.stack[k:]:
-            self.open[el.tag] -= 1
+            self.at[el.tag].pop()
         del self.stack[k:]
 
+    def _top(self, names):
+        top = -1
+        for n in names:
+            s = self.at.get(n)
+            if s and s[-1] > top:
+                top = s[-1]
+        return top
+
     def _close(self, names, stop):
-        if not any(self.open.get(n) for n in names):
-            return
-        for k in range(len(self.stack) - 1, 0, -1):
-            t = self.stack[k].tag
-            if t in names:
-                self._pop(k)
-                return
-            if t in stop:
-                return
+        k = self._top(names)
+        if k > 0 and self._top(stop) < k:
+            self._pop(k)
 
     def handle_starttag(self, tag, attrs):
         self._start(tag, attrs, False)
@@ -463,33 +673,36 @@ class _Tree(HTMLParser):
             self._close(("td", "th"), ("tr", "table"))
         elif tag in ("thead", "tbody", "tfoot"):
             self._close(("thead", "tbody", "tfoot"), ("table",))
+        self.flush()
         el = _El(tag, {k: (v or "") for k, v in attrs})
         self.stack[-1].kids.append(el)
-        if not empty and tag not in _VOID:
+        if not empty and tag not in _VOID and len(self.stack) <= OPEN:
+            self.at.setdefault(tag, []).append(len(self.stack))
             self.stack.append(el)
-            self.open[tag] = self.open.get(tag, 0) + 1
 
     def handle_endtag(self, tag):
-        tag = tag.rsplit(":", 1)[-1]
-        if not self.open.get(tag):
-            return                                     # nothing of the kind is open: a stray end tag
-        for k in range(len(self.stack) - 1, 0, -1):
-            if self.stack[k].tag == tag:
-                self._pop(k)
-                return
+        s = self.at.get(tag.rsplit(":", 1)[-1])
+        if s:                                          # else nothing of the kind is open: a stray end tag
+            self._pop(s[-1])
 
     def handle_data(self, data):
-        kids = self.stack[-1].kids
-        if kids and isinstance(kids[-1], str):
-            kids[-1] += data
-        else:
-            kids.append(data)
+        self.buf.append(data)
+
+    def parse_html_declaration(self, i):
+        try:
+            return HTMLParser.parse_html_declaration(self, i)
+        except (AssertionError, NotImplementedError):
+            # a declaration html.parser has no rule for (<![bogus[ before 2025's fix: AssertionError on
+            # 3.13.2, NotImplementedError on 3.8, and the book was lost): a bogus comment, to its ">"
+            j = self.rawdata.find(">", i + 2)
+            return j + 1 if j >= 0 else -1
 
 
 def _html_tree(text, clock):
-    """(root, whole): whole is False when the part had more than NODES elements and the tree
-    holds the ones before."""
+    """(root, how): "whole", "full" when the part had more than NODES elements and the tree holds
+    the ones before, "broke" when its markup broke the parser and the tree holds what came before."""
     t = _Tree(clock)
+    how = "whole"
     try:
         for i in range(0, len(text), 1 << 16):
             t.feed(text[i:i + (1 << 16)])
@@ -497,8 +710,13 @@ def _html_tree(text, clock):
                 raise Late()
         t.close()
     except _Full:
-        return t.root, False
-    return t.root, True
+        how = "full"
+    except (Late, MemoryError):
+        raise
+    except Exception:                                          # noqa: BLE001
+        how = "broke"
+    t.flush()
+    return t.root, how
 
 
 def _text(el):
@@ -540,8 +758,14 @@ def _target(doc, href):
     return doc, urllib.parse.unquote(frag)
 
 
-_NOTEREF = re.compile(r"""(?is)<a\b[^>]*?\b(?:epub:type|role)\s*=\s*["'][^"']*noteref[^"']*["'][^>]*>""")
+# tags as _markup() leaves them: TAG_MAX characters at most, no "<" inside (`[^>]*` ran to the
+# end of the part from every <a, <item or <rootfile that never closed)
+_A_TAG = re.compile(r"(?i)<a\b[^<>]{0,%d}>" % TAG_MAX)
+_NOTE_KIND = re.compile(r"""(?i)\b(?:epub:type|role)\s*=\s*["'][^"'<>]*noteref""")
 _HREF = re.compile(r"""(?is)\bhref\s*=\s*(?:"([^"]*)"|'([^']*)')""")
+_ROOTFILE = re.compile(r"(?i)<rootfile\b[^<>]{0,%d}>" % TAG_MAX)
+_OPF_ITEM = re.compile(r"(?i)<(?:\w{1,32}:)?item\b[^<>]{0,%d}>" % TAG_MAX)
+_OPF_ITEMREF = re.compile(r"(?i)<(?:\w{1,32}:)?itemref\b[^<>]{0,%d}>" % TAG_MAX)
 
 
 class _Book(object):
@@ -552,9 +776,13 @@ class _Book(object):
     def __init__(self):
         self.notes, self.defined, self.refs = {}, set(), {}
 
-    def scan(self, doc, text):
-        for m in _NOTEREF.finditer(text):
-            h = _HREF.search(m.group(0))
+    def scan(self, doc, text, clock):
+        for m in _A_TAG.finditer(text):
+            clock.tick()
+            tag = m.group(0)
+            if "noteref" not in tag.lower() or not _NOTE_KIND.search(tag):
+                continue
+            h = _HREF.search(tag)
             key = _target(doc, html.unescape(h.group(1) or h.group(2))) if h else None
             if key and key not in self.notes:
                 self.notes[key] = str(len(self.notes) + 1)
@@ -591,11 +819,15 @@ class _Html(object):
             return None
         return self.book.notes.get(_target(self.doc, el.attrs.get("href", "")))
 
+    def flat(self, el):
+        """What is past DEPTH: its words as one paragraph."""
+        t = _para(_esc(_space(_text(el))))
+        return [t] if t else []
+
     # -- blocks
     def blocks(self, el, depth=0):
         if depth > DEPTH:
-            t = _para(_space(_text(el)))
-            return [t] if t else []
+            return self.flat(el)
         out, run = [], []
 
         def flush():
@@ -606,7 +838,7 @@ class _Html(object):
                     out.append(p)
         for k in el.kids:
             if isinstance(k, str):
-                run.append(_space(k))
+                run.append(_esc(_space(k)))
                 continue
             self.clock.tick()
             if k.tag in _SKIP or "hidden" in k.attrs:
@@ -677,6 +909,8 @@ class _Html(object):
         return ""
 
     def list(self, el, depth):
+        if depth > DEPTH:
+            return self.flat(el)
         ordered = el.tag == "ol"
         n = _int(el.attrs.get("start"), 1)
         items, out = [], []
@@ -687,13 +921,14 @@ class _Html(object):
                 del items[:]
         for k in el.kids:
             if isinstance(k, str):
-                s = _para(_space(k))
+                s = _para(_esc(_space(k)))
                 if s:
                     if items:
                         items[-1][1].append(s)
                     else:
                         out.append(s)
                 continue
+            self.clock.tick()
             if k.tag in _SKIP or "hidden" in k.attrs:
                 continue
             lab = self.note_label(k) or (self.anchor_label(k)[0] if k.tag == "li" else None)
@@ -733,7 +968,7 @@ class _Html(object):
         out = []
         for k in el.kids:
             if isinstance(k, str):
-                s = _para(_space(k))
+                s = _para(_esc(_space(k)))
                 if s:
                     out.append(s)
             elif k.tag in _SKIP:
@@ -749,9 +984,13 @@ class _Html(object):
         return out
 
     def table(self, el, depth):
+        """A table's grid: a merged cell leaves its other places empty. The grid holds CELLS at most
+        (DOC_CELLS with the document's other tables), a row WIDTH columns, a span 64 columns and
+        the table's own rows: past them the table is cut, and the note says so (spans of
+        512 x 64 per cell, multiplied across 300 cells, took 1.4 GB from 1 KB)."""
         caption, rows = [], []
 
-        def walk(x):
+        def walk(x, d):
             for k in x.kids:
                 if isinstance(k, str) or k.tag in _SKIP:
                     continue
@@ -761,42 +1000,58 @@ class _Html(object):
                         caption.append(c)
                 elif k.tag == "tr":
                     rows.append(k)
-                elif k.tag not in ("colgroup", "col", "table", "td", "th"):
-                    walk(k)                    # thead, tbody, tfoot, or a form around the rows
-        walk(el)
-        grid, spans, cells = [], set(), []
-        for r, tr in enumerate(rows[:ROWS]):
+                elif k.tag not in ("colgroup", "col", "table", "td", "th") and d < DEPTH:
+                    walk(k, d + 1)             # thead, tbody, tfoot, or a form around the rows
+        walk(el, 0)
+        if not rows:                           # no row at all: what it holds, as blocks
+            return caption + self.blocks(el, depth)
+        n = min(len(rows), ROWS)
+        grid, cells, busy, width = [], [], [], 0       # busy[col]: the last row a span above covers
+        for r, tr in enumerate(rows[:n]):
+            self.clock.tick()
             line, col = [], 0
             for c in tr.kids:
                 if isinstance(c, str) or c.tag not in ("td", "th"):
                     continue
                 cells.append(c)
-                while (r, col) in spans:
+                while col < len(busy) and busy[col] >= r:
                     line.append("")
                     col += 1
-                line.append(_one_line(self.inline(c, depth + 1)))
-                cs = min(max(_int(c.attrs.get("colspan"), 1), 1), 64)
-                rs = min(max(_int(c.attrs.get("rowspan"), 1), 1), 512)
+                text = _one_line(self.inline(c, depth + 1))
+                if col >= WIDTH:
+                    if text:
+                        line[-1] = (line[-1] + " " + text).strip()
+                    continue
+                cs = min(max(_int(c.attrs.get("colspan"), 1), 1), 64, WIDTH - col)
+                rs = min(max(_int(c.attrs.get("rowspan"), 1), 1), 512, n - r)
+                line.append(text)
                 line.extend([""] * (cs - 1))
-                for dr in range(1, rs):
+                if rs > 1:
+                    if len(busy) < col + cs:
+                        busy.extend([-1] * (col + cs - len(busy)))
                     for dc in range(cs):
-                        spans.add((r + dr, col + dc))
+                        busy[col + dc] = max(busy[col + dc], r + rs - 1)
                 col += cs
-            while (r, col) in spans:
+            while col < len(busy) and busy[col] >= r:
                 line.append("")
                 col += 1
+            width = max(width, len(line))
+            if _grid_room(self.clock, len(grid), width) < 1:
+                self.clock.cut("table(s) cut at %d cells" % CELLS)
+                break
             grid.append(line)
-        if md_table(grid) is None:
+        self.clock.cells += len(grid) * width
+        if md_table(grid, self.clock) is None:
             # one column: a table that lays a page out (a title page in a cell); its cells as the
             # blocks they hold, headings and all
             return caption + [b for c in cells for b in self.blocks(c, depth + 1)]
-        return caption + _table_blocks(grid)
+        return caption + _table_blocks(grid, self.clock)
 
     # -- inline
     def inline(self, el, depth):
         parts = []
         for k in el.kids:
-            parts.append(_space(k) if isinstance(k, str) else self.inline_el(k, depth + 1))
+            parts.append(_esc(_space(k)) if isinstance(k, str) else self.inline_el(k, depth + 1))
         return "".join(parts)
 
     def inline_el(self, el, depth):
@@ -805,7 +1060,7 @@ class _Html(object):
         if t in _SKIP or "hidden" in a or id(el) in self.skip:
             return ""
         if depth > DEPTH:
-            return _space(_text(el))
+            return _esc(_space(_text(el)))
         if t == "br":
             return "\n"
         if t == "img":
@@ -842,7 +1097,7 @@ class _Html(object):
             return "\u201c" + self.inline(el, depth) + "\u201d"
         if t == "math":
             m = _space(a.get("alttext") or _text(el)).strip()
-            return " %s " % m if m else ""
+            return " %s " % _esc(m) if m else ""
         if t == "rt":
             s = _one_line(self.inline(el, depth))
             return "(%s)" % s if s else ""
@@ -867,58 +1122,67 @@ class _Html(object):
         return _pic(alt, posixpath.normpath(posixpath.join(self.dir, rel)))
 
 
-def _epub_parts(zf):
+def _epub_parts(zf, clock):
     """The book's reading order: [(path, media type)], the navigation document left out (it
     repeats the headings as links). No package document: every (X)HTML part by name."""
     opf_path = None
     c = zf.read("META-INF/container.xml", 1 << 20)
     if c:
-        for tag in re.findall(r"(?is)<rootfile\b[^>]*>", _decode(c)):
-            a = _attrs(tag)
+        for m in _ROOTFILE.finditer(_decode(c)):
+            clock.tick()
+            a = _attrs(m.group(0))
             if a.get("full-path") and (not a.get("media-type") or "oebps-package" in a.get("media-type", "")):
                 opf_path = a["full-path"]
                 break
     if not opf_path:
         opf_path = next((n for n in zf.names if n.lower().endswith(".opf")), None)
     opf = zf.read(opf_path, 16 << 20) if opf_path else None
-    parts = []
+    parts, seen = [], set()
     if opf:
         t, base = _decode(opf), posixpath.dirname(opf_path.lstrip("/"))
         items = {}
-        for tag in re.findall(r"(?is)<(?:\w+:)?item\b[^>]*>", t):
-            a = _attrs(tag)
+        for m in _OPF_ITEM.finditer(t):
+            clock.tick()
+            a = _attrs(m.group(0))
             if a.get("id") and a.get("href"):
                 path = posixpath.normpath(posixpath.join(base, urllib.parse.unquote(a["href"].split("#")[0])))
                 items[a["id"]] = (path, a.get("media-type", "").lower(), a.get("properties", "").lower().split())
-        for tag in re.findall(r"(?is)<(?:\w+:)?itemref\b[^>]*>", t):
-            it = items.get(_attrs(tag).get("idref"))
-            if it and "nav" not in it[2] and (it[0], it[1]) not in parts:
+        for m in _OPF_ITEMREF.finditer(t):
+            clock.tick()
+            it = items.get(_attrs(m.group(0)).get("idref"))
+            if it and "nav" not in it[2] and (it[0], it[1]) not in seen:
+                seen.add((it[0], it[1]))
                 parts.append((it[0], it[1]))
     if not parts:
         parts = [(n, "") for n in sorted(zf.names) if re.search(r"(?i)\.x?html?$", n)]
     return parts
 
 
-def epub_md(path, until=None):
-    """An EPUB 2 or 3 as Markdown: its spine in order, each part's XHTML as blocks."""
-    clock = _Clock(until)
+def epub_md(path, until=None, finish=None):
+    """An EPUB 2 or 3 as Markdown: its spine in order, each part's XHTML as blocks. A part whose
+    reading breaks is named, and the parts around it are read."""
+    clock = _Clock(until, finish)
     with zipfile.ZipFile(path) as z:
         zf = _Zip(z)
-        parts = _epub_parts(zf)
-        book, texts = _Book(), []
+        parts = _epub_parts(zf, clock)
+        book, texts, late = _Book(), [], False
         for doc, media in parts:
+            if clock.late():                    # the clock is read here too
+                late = True
+                break
             if "svg" in media or doc.lower().endswith(".svg"):
                 texts.append((doc, None))
                 continue
             data = zf.read(doc)
             if data is None:
                 continue
-            t = _decode(data)
+            t = _markup(_decode(data))
             texts.append((doc, t))
-            book.scan(doc, t)
-        out, done, late, big = [], 0, False, []
+            book.scan(doc, t, clock)
+        out, done, big, broke, size = [], 0, [], [], sum(len(t) for _d, t in texts if t)
+        read_chars = 0
         for i, (doc, t) in enumerate(texts):
-            if clock.late():
+            if late or clock.late():
                 late = True
                 break
             if t is None:
@@ -926,28 +1190,40 @@ def epub_md(path, until=None):
                 done += 1
                 continue
             try:
-                root, whole = _html_tree(t, clock)
-                if not whole:
+                root, how = _html_tree(t, clock)
+                if how == "full":
                     big.append(doc)
+                elif how == "broke":
+                    broke.append("%s (its markup)" % doc)
                 blocks = _Html(doc, book, clock).blocks(_find(root, "body") or root)
             except Late:
                 late = True
                 break
+            except MemoryError:
+                raise
+            except Exception as e:              # noqa: BLE001  (this part, not the book)
+                broke.append("%s (%s)" % (doc, type(e).__name__))
+                blocks = []
+            read_chars += len(t)
             texts[i] = (doc, None)
             out.append("\n\n".join(b for b in blocks if b))
             done += 1
+        clock.finishing()
         md = _marks("\n\n".join(o for o in out if o.strip()))
         dangling = {lab for lab in book.refs if lab not in book.defined}
         if dangling:                    # a call whose note was never found: what the book showed there
             md = re.sub(r"\[\^(\d+)\]", lambda m: book.refs.get(m.group(1), "") if m.group(1) in dangling
                         else m.group(0), md)
-        note = zf.note()
+        note = _join(zf.note(), clock.said())
         if big:
             note = _join("%d part(s) read up to their first %d elements (%s)" % (len(big), NODES, ", ".join(big[:3])),
                          note)
+        if broke:
+            note = _join("%d part(s) could not be read whole, what came before the fault kept (%s)"
+                         % (len(broke), ", ".join(broke[:3])), note)
         if late:
-            note = _join("the time ran out: %d of the book's %d parts read; --download reads it whole"
-                         % (done, len(texts)), note)
+            note = _join("the time ran out: %d of the book's %d parts read%s"
+                         % (done, len(parts), clock.more(float(read_chars) / size if size else 0)), note)
         return md, note
 
 
@@ -1008,6 +1284,28 @@ def _mathml(el):
     if tag == "mroot" and len(kids) == 2:
         return "root(%s, %s)" % (kids[1], kids[0])
     return " ".join([(el.text or "").strip()] + kids).strip()
+
+
+def _flat_text(el):
+    """An element's text with its spaces, tabs and line breaks, without recursion: text:s a space,
+    text:tab a tab, text:line-break a line end."""
+    out, stack = [el.text or ""], [(None, iter(el))]
+    while stack:
+        owner, it = stack[-1]
+        ch = next(it, None)
+        if ch is None:
+            stack.pop()
+            if owner is not None:
+                out.append(owner.tail or "")
+            continue
+        tag = ch.tag.rsplit("}", 1)[-1] if isinstance(ch.tag, str) else ""
+        if tag in ("s", "tab", "line-break"):
+            out.append(" " if tag == "s" else "\t" if tag == "tab" else "\n")
+            out.append(ch.tail or "")
+            continue
+        out.append(ch.text or "")
+        stack.append((ch, iter(ch)))
+    return "".join(out)
 
 
 class _OdfStyles(object):
@@ -1082,12 +1380,15 @@ class _OdfStyles(object):
 
 
 class _Odt(object):
-    """The body of an OpenDocument text as Markdown blocks; notes at the end."""
+    """The body of an OpenDocument text as Markdown blocks; notes at the end. An element whose
+    reading breaks is left out and counted (`broke`), and the elements around it are read."""
 
     def __init__(self, styles, clock, zf=None):
         self.s, self.clock, self.zf = styles, clock, zf
         self.notes = []                   # [(label, blocks)]
         self.counts = {}                  # (list style, level) -> the last number it gave
+        self.broke = {}                   # the kind of fault -> how many elements it cost
+        self.done, self.of = 0, 0         # top-level elements read, of how many
 
     def doc(self, root):
         body = root.find(_o("office:body"))
@@ -1095,62 +1396,78 @@ class _Odt(object):
         if text is None:
             return "", False
         out, late = [], False
+        kids = list(text)
+        self.of = len(kids)
         try:
-            for ch in text:
+            for ch in kids:
                 out.extend(self.blocks_of([ch], 1))
+                self.done += 1
         except Late:
             late = True
+        self.clock.finishing()
         md = "\n\n".join(b for b in out if b)
         notes = [d for d in (_note_def(lab, blocks) for lab, blocks in self.notes) if d]
         if notes:
             md = md + "\n\n" + "\n\n".join(notes)
         return _marks(md), late
 
+    def plain(self, el):
+        """What is past DEPTH: its words as one paragraph."""
+        t = _para(_esc(_space(_flat_text(el))))
+        return [t] if t else []
+
     def blocks_of(self, els, depth):
         out, code = [], []
 
         def flush_code():
             if code:
-                f = _fence("\n".join(code))
+                f = _fence(_unesc("\n".join(code)))
                 del code[:]
                 if f:
                     out.append(f)
         for ch in els:
             self.clock.tick()
-            tag = ch.tag
             if depth > DEPTH:
-                t = _para(_space("".join(ch.itertext())))
-                if t:
-                    out.append(t)
+                out.extend(self.plain(ch))
                 continue
-            if tag in (O_P, O_H):
-                pend = []
-                kind, text = self.para(ch, pend, depth)
-                if kind == "code":
-                    code.append(text)
-                    continue
-                flush_code()
-                if text:
-                    out.append(text)
-                out.extend(pend)
-                continue
-            flush_code()
-            if tag == O_LIST:
-                out.extend(self.list(ch, 0, None, depth + 1))
-            elif tag == O_TABLE:
-                out.extend(self.table(ch, depth + 1))
-            elif tag.startswith("{%s}" % _DRAW):
-                pend = []
-                s = _para(self.draw(ch, pend, depth + 1))
-                if s:
-                    out.append(s)
-                out.extend(pend)
-            elif tag in _ODF_SKIP:
-                continue
-            else:                              # a section, an index's body, any other wrapper
-                out.extend(self.blocks_of(list(ch), depth + 1))
+            try:
+                self.block(ch, depth, out, code, flush_code)
+            except (Late, MemoryError):
+                raise
+            except Exception as e:             # noqa: BLE001  (this element, not the document)
+                name = type(e).__name__
+                self.broke[name] = self.broke.get(name, 0) + 1
         flush_code()
         return out
+
+    def block(self, ch, depth, out, code, flush_code):
+        tag = ch.tag
+        if tag in (O_P, O_H):
+            pend = []
+            kind, text = self.para(ch, pend, depth)
+            if kind == "code":
+                code.append(text)
+                return
+            flush_code()
+            if text:
+                out.append(text)
+            out.extend(pend)
+            return
+        flush_code()
+        if tag == O_LIST:
+            out.extend(self.list(ch, 0, None, depth + 1))
+        elif tag == O_TABLE:
+            out.extend(self.table(ch, depth + 1))
+        elif isinstance(tag, str) and tag.startswith("{%s}" % _DRAW):
+            pend = []
+            s = _para(self.draw(ch, pend, depth + 1))
+            if s:
+                out.append(s)
+            out.extend(pend)
+        elif tag in _ODF_SKIP or not isinstance(tag, str):
+            return
+        else:                              # a section, an index's body, any other wrapper
+            out.extend(self.blocks_of(list(ch), depth + 1))
 
     def para(self, el, pend, depth):
         # a heading is a text:h; a text:p in a heading's style is one its author took out of the
@@ -1171,18 +1488,20 @@ class _Odt(object):
         return "p", p
 
     def inline(self, el, pend, base, depth):
-        parts = [_space(el.text or "")]
+        parts = [_esc(_space(el.text or ""))]
         for ch in el:
             parts.append(self.inline_el(ch, pend, base, depth + 1))
             if ch.tail:
-                parts.append(_space(ch.tail))
+                parts.append(_esc(_space(ch.tail)))
         return "".join(parts)
 
     def inline_el(self, ch, pend, base, depth):
         self.clock.tick()
         tag = ch.tag
+        if not isinstance(tag, str):                      # a comment or a processing instruction
+            return ""
         if depth > DEPTH:
-            return _space("".join(ch.itertext()))
+            return _esc(_space(_flat_text(ch)))
         if tag == O_SPAN:
             st = ch.get(O_STYLE_NAME)
             b, i = self.s.get("text", st, "bold"), self.s.get("text", st, "italic")
@@ -1191,12 +1510,16 @@ class _Odt(object):
             font = self.s.get("text", st, "font") or base[2]
             inner = self.inline(ch, pend, (b, i, font), depth)
             if font != base[2] and font in self.s.fixed and base[2] not in self.s.fixed:
-                return _code(inner)
+                return _code(_unesc(inner))
             if (b and not base[0]) or (i and not base[1]):
                 return _bi(inner, b and not base[0], i and not base[1])
             return inner
         if tag == O_S:
-            return " " * min(max(_int(ch.get(_o("text:c")), 1), 1), 200)
+            n = min(max(_int(ch.get(_o("text:c")), 1), 1), 200)
+            self.clock.spaces += n
+            if self.clock.spaces > SPACES:              # the document's spaces are spent: one more
+                return " "
+            return " " * n
         if tag == O_TAB:
             return "\t"
         if tag == O_LB:
@@ -1216,7 +1539,7 @@ class _Odt(object):
         if tag == O_RUBY:
             b, r = ch.find(O_RUBY_BASE), ch.find(O_RUBY_TEXT)
             rb = self.inline(b, pend, base, depth) if b is not None else ""
-            rt = _one_line("".join(r.itertext())) if r is not None else ""
+            rt = _esc(_one_line(_flat_text(r))) if r is not None else ""
             return rb + ("(%s)" % rt if rt else "")
         if ch.get(_o("text:is-hidden")) == "true":
             return ""
@@ -1225,6 +1548,8 @@ class _Odt(object):
     def draw(self, el, pend, depth):
         """A frame: its picture where it stands; a text box's or a shape's paragraphs after the
         paragraph that holds it."""
+        if depth > DEPTH:
+            return _esc(_space(_flat_text(el)))
         if el.tag == O_DRAW_A:
             return " ".join(p for p in (self.draw(k, pend, depth + 1) for k in el) if p)
         if el.tag != O_FRAME:
@@ -1233,7 +1558,7 @@ class _Odt(object):
         alt, pic = "", ""
         for k in el:
             if k.tag in (O_TITLE, O_DESC) and not alt:
-                alt = _one_line("".join(k.itertext()))
+                alt = _one_line(_flat_text(k))
             elif k.tag in (O_OBJECT, O_OBJECT_OLE) and not pic:
                 # an embedded object: a formula as its text; a chart or a sheet is left out, and
                 # with it the picture that stands in for it (ObjectReplacements/, no extension)
@@ -1254,8 +1579,12 @@ class _Odt(object):
         its MathML says."""
         name = posixpath.normpath(urllib.parse.unquote(re.sub(r"^\./", "", href.strip())))
         data = self.zf.read(name + "/content.xml", 4 << 20) if self.zf is not None and name else None
-        root = _xml(data, self.clock)[0] if data else None
-        if root is None or not root.tag.endswith("}math"):
+        root, why = _xml(data, self.clock) if data else (None, "")
+        if root is None:
+            if why and why != "it is empty":
+                self.clock.cut("formula(s) left out: %s" % why)
+            return ""
+        if not root.tag.endswith("}math"):
             return ""
         for a in root.iter():
             if a.tag.endswith("}annotation") and "starmath" in (a.get("encoding") or "").lower():
@@ -1269,6 +1598,8 @@ class _Odt(object):
         return " %s " % _code(t) if t else ""
 
     def list(self, el, lvl, style, depth):
+        if depth > DEPTH:
+            return self.plain(el)
         style = el.get(O_STYLE_NAME) or style
         if any(x.tag == O_H for x in el.iter()):
             return self.flat(el, depth)        # numbered headings: they stay headings
@@ -1302,6 +1633,8 @@ class _Odt(object):
         return [md] if md else []
 
     def flat(self, el, depth):
+        if depth > DEPTH:
+            return self.plain(el)
         out = []
         for it in el:
             for ch in it:
@@ -1312,27 +1645,54 @@ class _Odt(object):
         return out
 
     def table(self, el, depth):
-        rows = []
+        """A table's grid: repeated rows and cells 64 times each at most, a row WIDTH columns, the
+        grid CELLS (DOC_CELLS with the document's other tables); past them the table is cut and the
+        note says so (313 rows of 32 cells, each repeated 64 times both ways, took 40 s and
+        gave 164 MB). A row with no text is left out, and a row's empty cells at its end."""
+        rows, state = [], {"width": 0, "cut": False}
 
-        def walk(box):
+        def walk(box, d):
             for r in box:
-                if len(rows) >= ROWS:
+                if state["cut"] or len(rows) >= ROWS:
                     return
                 if r.tag in O_ROWS:
-                    walk(r)
+                    if d < DEPTH:
+                        walk(r, d + 1)
                 elif r.tag == O_ROW:
+                    self.clock.tick()
                     cells = []
                     for c in r:
-                        if c.tag in (O_CELL, O_COVERED):
-                            rep = min(max(_int(c.get(_o("table:number-columns-repeated")), 1), 1), 64)
-                            text = self.cell(c, depth + 1) if c.tag == O_CELL else ""
-                            cells.extend([text] * rep)
-                    rep = min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), 64)
-                    rows.extend([cells] * rep)
-        walk(el)
-        return _table_blocks(rows)
+                        if c.tag not in (O_CELL, O_COVERED):
+                            continue
+                        rep = min(max(_int(c.get(_o("table:number-columns-repeated")), 1), 1), 64)
+                        text = self.cell(c, depth + 1) if c.tag == O_CELL else ""
+                        room = WIDTH - len(cells)
+                        if room <= 0:
+                            if text:
+                                cells[-1] = (cells[-1] + " " + text).strip()
+                            continue
+                        cells.extend([text] * min(rep, room))
+                    while cells and not cells[-1]:
+                        cells.pop()
+                    if not cells:
+                        continue
+                    rep = min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), 64, ROWS - len(rows))
+                    width = max(state["width"], len(cells))
+                    fit = _grid_room(self.clock, len(rows), width)
+                    if fit < rep:
+                        rep = max(0, fit)
+                        state["cut"] = True
+                        self.clock.cut("table(s) cut at %d cells" % CELLS)
+                    if rep:
+                        state["width"] = width
+                        rows.extend([cells] * rep)
+        walk(el, 0)
+        self.clock.cells += len(rows) * state["width"]
+        return _table_blocks(rows, self.clock)
 
     def cell(self, c, depth):
+        if depth > DEPTH:
+            return _one_line(_esc(_space(_flat_text(c))))
         parts = []
         for ch in c:
             if ch.tag in (O_P, O_H):
@@ -1346,15 +1706,15 @@ class _Odt(object):
             elif ch.tag in (O_LIST, O_ITEM, O_LHEAD, O_TABLE, O_ROW, O_CELL) + O_ROWS or \
                     ch.tag == _o("text:section"):
                 parts.append(self.cell(ch, depth + 1))
-            elif ch.tag not in _ODF_SKIP:
-                parts.append(_one_line(_space("".join(ch.itertext()))))
+            elif isinstance(ch.tag, str) and ch.tag not in _ODF_SKIP:
+                parts.append(_one_line(_esc(_space(_flat_text(ch)))))
         return " ".join(p for p in parts if p)
 
 
-def odt_md(path, until=None):
+def odt_md(path, until=None, finish=None):
     """An OpenDocument text as Markdown: content.xml's body, with styles.xml for what its styles
     say."""
-    clock = _Clock(until)
+    clock = _Clock(until, finish)
     with zipfile.ZipFile(path) as z:
         zf = _Zip(z)
         data = zf.read("content.xml")
@@ -1364,14 +1724,23 @@ def odt_md(path, until=None):
         root, why = _xml(data, clock)
         if root is None:
             return "", "content.xml could not be read: %s" % why
-        styles = _OdfStyles()
+        styles, swhy = _OdfStyles(), ""
         sdata = zf.read("styles.xml", 16 << 20)
         if sdata:
-            styles.load(_xml(sdata, clock)[0])
+            sroot, swhy = _xml(sdata, clock)
+            styles.load(sroot)
+            if swhy:
+                swhy = "styles.xml could not be read%s: %s" % (" whole" if sroot is not None else "", swhy)
         styles.load(root)
-        md, late = _Odt(styles, clock, zf).doc(root)
-        note = _join(why, zf.note(), "the time ran out before the end of the document; --download reads it "
-                     "whole" if late else "")
+        odt = _Odt(styles, clock, zf)
+        md, late = odt.doc(root)
+        broke = ""
+        if odt.broke:
+            broke = "%d element(s) could not be read and were left out (%s)" % (
+                sum(odt.broke.values()), ", ".join(sorted(odt.broke)))
+        note = _join(why, swhy, zf.note(), broke, clock.said(),
+                     "the time ran out before the end of the document%s" % clock.more(
+                         float(odt.done) / odt.of if odt.of else 0) if late else "")
         return md, note
 
 
@@ -1436,6 +1805,24 @@ def _codec(name, cache={}):                                     # noqa: B006  (a
     return cache[name]
 
 
+def _group_end(s, pos):
+    """From inside an RTF group, the position after its closing brace (\\binN data jumped over)."""
+    depth, search = 1, _RTF_SKIPPER.search
+    while True:
+        m = search(s, pos)
+        if m is None:
+            return len(s)
+        pos, g = m.end(), m.group(0)
+        if g == "{":
+            depth += 1
+        elif g == "}":
+            depth -= 1
+            if not depth:
+                return pos
+        elif m.group(1):
+            pos += int(m.group(1))
+
+
 class _Rtf(object):
     def __init__(self, s, clock):
         self.s, self.clock = s, clock
@@ -1445,8 +1832,8 @@ class _Rtf(object):
         self.fonts, self.styles, self.list_ids, self.lists = {}, {}, {}, {}
         self.ansi, self.deff = "cp1252", None
         self.pend, self.skip_uc, self.high = bytearray(), 0, 0
-        self.notes, self.counters = [], {}
-        self.cellx, self.trleft = [], 0                  # the row definition: its cells' right borders
+        self.notes, self.counters = [], {}               # counters: list -> {level: the last number}
+        self.cellx, self.trleft, self.rowdef = [], 0, None   # the row definition, one per \trowd
         self.pos, self.ctrl, self.chars = 0, 0, 0
 
     # -- the scan
@@ -1493,23 +1880,6 @@ class _Rtf(object):
                 self.symbol(m.group(4))
         self.pos = n
 
-    def skip_to_end(self, pos):
-        """From inside a group, the position after its closing brace (\\binN data jumped over)."""
-        depth, s, search = 1, self.s, _RTF_SKIPPER.search
-        while True:
-            m = search(s, pos)
-            if m is None:
-                return len(s)
-            pos, g = m.end(), m.group(0)
-            if g == "{":
-                depth += 1
-            elif g == "}":
-                depth -= 1
-                if not depth:
-                    return pos
-            elif m.group(1):
-                pos += int(m.group(1))
-
     def groups(self, a, b):
         """The groups one level inside s[a:b]: [(start, end)] of their insides."""
         out, depth, start = [], 0, None
@@ -1532,13 +1902,13 @@ class _Rtf(object):
         self.st = self.st[:]
         if len(self.stack) > 2000:                     # a nesting bomb: deeper groups are passed over
             self.st = self.stack.pop()[0]
-            return self.skip_to_end(pos)
+            return _group_end(self.s, pos)
         m = _RTF_DEST.match(self.s, pos)
         if not m:
             return pos
         name, star = m.group(1), self.s.startswith("\\*", pos)
         if name in _RTF_IGNORE or (star and name not in _RTF_KEEP):
-            end = self.skip_to_end(m.end())
+            end = _group_end(self.s, m.end())
             if name in ("fonttbl", "stylesheet", "listtable", "listoverridetable"):
                 getattr(self, name)(m.end(), max(m.end(), end - 1))
             self.st = self.stack.pop()[0]
@@ -1680,9 +2050,20 @@ class _Rtf(object):
         key = (st[_B], st[_I], st[_STRIKE])
         runs = sink.runs
         if runs and runs[-1][1] == key:
-            runs[-1][0].append(t)
+            pieces = runs[-1][0]
+        elif len(runs) >= RUNS:
+            # a paragraph of RUNS runs already: the rest of it is plain, one run (2 million runs
+            # before one \par took 904 MB)
+            if runs[-1][1] is not None:
+                runs.append([[], None])
+                self.clock.cut("paragraph(s) whose look past %d runs was left out" % RUNS)
+            pieces = runs[-1][0]
         else:
             runs.append([[t], key])
+            return
+        pieces.append(t)
+        if len(pieces) > 4096:
+            pieces[-4096:] = ["".join(pieces[-4096:])]
 
     def symbol(self, c):
         self.flush()
@@ -1705,7 +2086,9 @@ class _Rtf(object):
             self.high = 0
         else:
             self.high = 0
-            self.emit(chr(n) if not 0xD800 <= n < 0xE000 else "\ufffd")
+            # outside Unicode (\u1114112, \u-70000) or half a pair: one U+FFFD, not the end of the
+            # reading (chr() raised, and the whole document was lost)
+            self.emit(chr(n) if 0 <= n <= 0x10FFFF and not 0xD800 <= n < 0xE000 else "\ufffd")
         self.skip_uc = max(0, self.st[_UC])
 
     # -- control words
@@ -1741,11 +2124,13 @@ class _Rtf(object):
         elif w == "intbl":
             st[_TBL] = True
         elif w == "cellx":
-            self.cellx.append(_int(arg))
+            if len(self.cellx) < CELLX:                 # a row of 4 000 borders was copied into each row
+                self.cellx.append(_int(arg))
+                self.rowdef = None
         elif w == "trowd":
-            self.cellx, self.trleft = [], 0
+            self.cellx, self.trleft, self.rowdef = [], 0, None
         elif w == "trleft":
-            self.trleft = _int(arg)
+            self.trleft, self.rowdef = _int(arg), None
         elif w == "itap":
             st[_TBL] = _int(arg, 1) > 0
         elif w == "s":
@@ -1755,7 +2140,7 @@ class _Rtf(object):
         elif w == "ls":
             st[_LS] = _int(arg)
         elif w == "ilvl":
-            st[_LVL] = _int(arg)
+            st[_LVL] = min(max(_int(arg), 0), 8)        # RTF's levels are 0-8 (4 000 indented 16 MB)
         elif w == "bin":
             n = max(0, _int(arg))
             if self.skip_uc:
@@ -1805,10 +2190,14 @@ class _Rtf(object):
 
     # -- paragraphs, tables, notes, fields
     def runs_md(self, sink):
+        """A paragraph's runs as Markdown: the document's text escaped, each run of one look
+        marked; a note's call and a link are ours, as they are."""
         runs, sink.runs = sink.runs, []
         out = []
         for pieces, key in runs:
             t = "".join(pieces)
+            if key is None or len(key) == 3:
+                t = _esc(t)
             if key and len(key) == 3 and t.strip():
                 b, i, s = key
                 if s:
@@ -1857,12 +2246,28 @@ class _Rtf(object):
         return self.styles.get(st[_STY])
 
     def number(self, ls, level, mark):
+        """The item's number: its own marker's, else one more than the list's last at this level;
+        the deeper levels of the list start again (each list's own counters: looking at every
+        list's at each item was quadratic)."""
         nums = re.findall(r"\d+", mark or "")
-        n = int(nums[-1]) if nums and len(nums[-1]) < 9 else self.counters.get((ls, level), 0) + 1
-        self.counters[(ls, level)] = n
-        for k in [k for k in self.counters if k[0] == ls and k[1] > level]:
-            del self.counters[k]
+        levels = self.counters.setdefault(ls, {})
+        n = int(nums[-1]) if nums and len(nums[-1]) < 9 else levels.get(level, 0) + 1
+        levels[level] = n
+        for k in [k for k in levels if k > level]:
+            del levels[k]
         return n
+
+    def definition(self):
+        """The row definition in force, one tuple for every row it lays out (it was a copy a row)."""
+        if self.rowdef is None:
+            self.rowdef = (tuple(self.cellx), self.trleft)
+        return self.rowdef
+
+    def add_row(self, sink, row):
+        if len(sink.rows) < ROWS:
+            sink.rows.append((row, self.definition()))
+        else:
+            self.clock.cut("table rows past %d left out" % ROWS)
 
     def cell(self):
         sink = self.st[_SINK]
@@ -1871,7 +2276,10 @@ class _Rtf(object):
         text = self.runs_md(sink)
         if text:
             sink.cell.append(text)
-        sink.row.append(" ".join(sink.cell))
+        if len(sink.row) < WIDTH:
+            sink.row.append(" ".join(sink.cell))
+        elif sink.cell:                                  # past the table's width: into its last cell
+            sink.row[-1] = (sink.row[-1] + " " + " ".join(sink.cell)).strip()
         sink.cell, sink.mark = [], None
 
     def row(self):
@@ -1885,7 +2293,7 @@ class _Rtf(object):
             sink.row.append(" ".join(sink.cell))
             sink.cell = []
         if sink.row:
-            sink.rows.append((sink.row, list(self.cellx), self.trleft))
+            self.add_row(sink, sink.row)
             sink.row = []
 
     def end_table(self, sink):
@@ -1893,10 +2301,10 @@ class _Rtf(object):
             if sink.cell:
                 sink.row.append(" ".join(sink.cell))
                 sink.cell = []
-            sink.rows.append((sink.row, list(self.cellx), self.trleft))
+            self.add_row(sink, sink.row)
             sink.row = []
         if sink.rows:
-            sink.blocks.append(("t", _rtf_grid(sink.rows)))
+            sink.blocks.append(("t", _rtf_grid(sink.rows, self.clock)))
             sink.rows = []
 
     def footnote(self):
@@ -1926,22 +2334,28 @@ class _Rtf(object):
         if sink.par != par or i > len(sink.runs):
             return                                       # the result ran over paragraphs (a TOC)
         url = re.search(r'"([^"]+)"', inst) or re.match(r"(?i)HYPERLINK\s+(\S+)", inst)
-        text = "".join("".join(p) for p, _k in sink.runs[i:])
+        text = "".join(_esc("".join(p)) if k is None or len(k) == 3 else "".join(p) for p, k in sink.runs[i:])
         if url and text.strip():
             del sink.runs[i:]
             sink.runs.append([[_link(text, url.group(1))], ("link",)])
 
     def finish(self):
+        """What was read as Markdown, by the clock's finishing time: what that leaves out is named."""
+        self.clock.finishing()
         self.flush()
         body = self.body
         text = self.runs_md(body)
         if text:
             body.blocks.append(("p", _escape(text)))
-        self.end_table(body)
-        md = _flat_md(body.blocks)
+        try:
+            self.end_table(body)
+        except Late:
+            body.rows = []
+            self.clock.cut("the time ran out while a table was written")
+        md = _flat_md(body.blocks, self.clock)
         notes, empty = [], set()
         for label, note in self.notes:
-            d = _note_def(label, [_flat_md(note.blocks)])
+            d = _note_def(label, [_flat_md(note.blocks, self.clock)])
             if d:
                 notes.append(d)
             else:
@@ -1951,71 +2365,245 @@ class _Rtf(object):
         return _marks(md + ("\n\n" + "\n\n".join(notes) if notes else ""))
 
 
-def _rtf_grid(rows):
-    """[(cells, right borders, left edge)] -> rows of cells on the table's columns: a cell whose
-    right border (\\cellx) lies past one of the columns other rows have is followed by an empty
-    cell for each, as a merged cell is elsewhere. Borders within 15 twips are one column."""
+def _rtf_grid(rows, clock):
+    """[(cells, (right borders, left edge))] -> rows of cells on the table's columns: a cell whose
+    right border (\\cellx) lies past one of the columns other rows have is followed by an empty cell
+    for each, as a merged cell is elsewhere. Borders within 15 twips are one column; a table of
+    more than 4 096 borders has its rows as they are. The columns are counted by bisection (each
+    row summed over every border), and the grid stops at CELLS."""
+    defs = {}
+    for _c, d in rows:
+        defs[id(d)] = d
+    seen = set()
+    for bounds, _l in defs.values():
+        seen.update(bounds)
+        if len(seen) > 4096:
+            break
     grid = []
-    for e in sorted(set(b for _c, bounds, _l in rows for b in bounds)):
-        if not grid or e - grid[-1] > 15:
-            grid.append(e)
-    out = []
-    for cells, bounds, left in rows:
+    if len(seen) <= 4096:
+        for e in sorted(seen):
+            if not grid or e - grid[-1] > 15:
+                grid.append(e)
+    out, width = [], 0
+    for cells, (bounds, left) in rows:
+        clock.tick()
         if not grid or len(bounds) < len(cells):
-            out.append(list(cells))
-            continue
-        line, prev = [""] * sum(1 for g in grid if g <= left + 15), left
-        for k, cell in enumerate(cells):
-            line.append(cell)
-            line.extend([""] * max(0, sum(1 for g in grid if prev + 15 < g <= bounds[k] + 15) - 1))
-            prev = bounds[k]
+            line = list(cells)
+        else:
+            line = [""] * bisect.bisect_right(grid, left + 15)
+            prev = left
+            for k, cell in enumerate(cells):
+                line.append(cell)
+                span = bisect.bisect_right(grid, bounds[k] + 15) - bisect.bisect_right(grid, prev + 15)
+                if span > 1:
+                    line.extend([""] * (span - 1))
+                prev = bounds[k]
+        width = max(width, len(line))
+        if _grid_room(clock, len(out), width) < 1:
+            clock.cut("table(s) cut at %d cells" % CELLS)
+            break
         out.append(line)
+    clock.cells += len(out) * width
     return out
 
 
-def _flat_md(blocks):
+def _flat_md(blocks, clock):
     """The RTF reader's blocks as Markdown; list items nest by their level, each under the text of
-    the item above it."""
-    out, stack, prev = [], [], False
-    for b in blocks:
-        if b[0] == "li":
-            _k, lvl, marker, text = b
-            while stack and stack[-1][0] >= lvl:
-                stack.pop()
-            col = stack[-1][1] if stack else 0
-            item = _indent(text, " " * col + marker, " " * (col + len(marker)))
-            if prev:
-                out[-1] += "\n" + item
-            else:
-                out.append(item)
-            stack.append((lvl, col + len(marker)))
-            prev = True
-            continue
-        stack, prev = [], False
-        if b[0] == "p":
-            out.append(b[1])
-        elif b[0] == "h":
-            out.append(_heading(b[1], b[2]))
-        elif b[0] == "t":
-            out.extend(_table_blocks(b[1]))
-    return "\n\n".join(o for o in out if o)
+    the item above it. A list's lines are joined once (each item was added to the list's text,
+    and 100 000 items took 60 s); past the finishing time the rest is left out and named."""
+    out, stack, items = [], [], None
+    try:
+        for b in blocks:
+            clock.tick()
+            if b[0] == "li":
+                _k, lvl, marker, text = b
+                while stack and stack[-1][0] >= lvl:
+                    stack.pop()
+                col = stack[-1][1] if stack else 0
+                if items is None:
+                    items = []
+                    out.append(items)
+                items.append(_indent(text, " " * col + marker, " " * (col + len(marker))))
+                stack.append((lvl, col + len(marker)))
+                continue
+            stack, items = [], None
+            if b[0] == "p":
+                out.append(b[1])
+            elif b[0] == "h":
+                out.append(_heading(b[1], b[2]))
+            elif b[0] == "t":
+                out.extend(_table_blocks(b[1], clock))
+    except Late:
+        clock.cut("the time ran out while the document was written: what follows is missing")
+    return "\n\n".join(o for o in ("\n".join(x) if isinstance(x, list) else x for x in out) if o)
 
 
-def rtf_md(data, until=None):
-    """An RTF document as Markdown."""
-    clock = _Clock(until)
+def rtf_md(data, until=None, finish=None):
+    """An RTF document as Markdown. A fault in the middle keeps what came before it."""
+    clock = _Clock(until, finish)
     s = data.decode("latin-1") if isinstance(data, (bytes, bytearray)) else data
     r = _Rtf(s, clock)
-    late = False
+    late, broke = False, ""
     try:
         r.run()
     except Late:
         late = True
+    except MemoryError:
+        raise
+    except Exception as e:                                     # noqa: BLE001  (what came before stays)
+        broke = "the reading stopped at %d%% of the file (%s): what came before is kept" % (
+            100 * r.pos // max(1, len(s)), type(e).__name__)
     if r.ctrl > max(50, (r.chars + r.ctrl) // 100):
         # bytes no writer leaves in text (random data after "{\rtf1" read as 64 708 words of
         # mojibake, 2026-11-20): what is there is not the document's text
         return "", "not text: this RTF holds binary data where its text should be"
     md = r.finish()
-    note = ("the time ran out at %d%% of the file; --download reads it whole" % (100 * r.pos // max(1, len(s)))
-            if late else "")
+    note = _join(broke, clock.said(), "the time ran out at %d%% of the file%s" % (
+        100 * r.pos // max(1, len(s)), clock.more(float(r.pos) / len(s) if s else 0)) if late else "")
     return md, note
+
+
+# ---------------------------------------------------------------- plain text: when a reader breaks
+
+_PLAIN_SKIP = ("fonttbl", "colortbl", "stylesheet", "info", "listtable", "listoverridetable", "generator",
+               "rsidtbl", "xmlnstbl", "mmathPr", "themedata", "colorschememapping", "latentstyles",
+               "datastore", "pict", "object", "header", "footer")
+_PLAIN_GROUP = re.compile(r"\{\\(?:\*\\)?(?:%s)" % "|".join(_PLAIN_SKIP))
+
+
+def rtf_plain(data):
+    """RTF as plain text: control words and groups out, paragraphs kept, the hex and unicode escapes
+    decoded; no tables. Linear: the groups nobody reads are passed over in one scan."""
+    s = data.decode("latin-1", "replace") if isinstance(data, (bytes, bytearray)) else data
+    out, pos = [], 0
+    while True:
+        m = _PLAIN_GROUP.search(s, pos)
+        if m is None:
+            break
+        out.append(s[pos:m.start()])
+        pos = _group_end(s, m.start() + 1)
+    out.append(s[pos:])
+    s = "".join(out)
+    s = re.sub(r"\{\\\*[^{}]*\}", "", s)                         # destinations nobody shows
+    s = re.sub(r"\\(par|line|sect|page)\b ?", "\n", s)
+    s = re.sub(r"\\tab\b ?", "\t", s)
+
+    def uni(m):
+        n = int(m.group(1)) % 65536
+        return chr(n) if not 0xD800 <= n < 0xE000 else "\ufffd"
+    s = re.sub(r"\\u(-?\d{1,10})\??", uni, s)
+    s = re.sub(r"\\'([0-9a-fA-F]{2})", lambda m: bytes([int(m.group(1), 16)]).decode("cp1252", "replace"), s)
+    s = re.sub(r"\\[a-zA-Z]{1,32}-?\d{0,10} ?", "", s)
+    s = re.sub(r"\\([{}\\])", r"\1", s)
+    s = s.replace("{", "").replace("}", "")
+    lines = [ln.strip() for ln in s.splitlines()]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+def odf_plain(path, cap=PART_BYTES, until=None):
+    """An OpenDocument file's headings and paragraphs in order, as plain text (readpage reads ODS
+    and ODP so): content.xml read up to `cap`, a DOCTYPE refused, XML that breaks read up to the
+    break. (text, note)."""
+    clock = _Clock(until)
+    with zipfile.ZipFile(path) as z:
+        zf = _Zip(z)
+        data = zf.read("content.xml", cap)
+        root, why = _xml(data, clock) if data else (None, "no content.xml" if data is None else "it is empty")
+        note = _join(("content.xml could not be read: %s" % why) if root is None else why, zf.note())
+        if root is None:
+            return "", note
+        out = []
+        for el in root.iter():
+            clock.tick()
+            if el.tag in (O_P, O_H):
+                t = _flat_text(el).strip()
+                if t:
+                    level = el.get(_o("text:outline-level")) or "1"
+                    out.append(("#" * min(6, int(level) if level.isdigit() else 1) + " " + t) if el.tag == O_H else t)
+        return "\n\n".join(out), note
+
+
+_PLAIN_BLOCK = re.compile(r"(?i)</?(?:p|div|h[1-6]|li|tr|br|section|blockquote|pre|dt|dd|table|ul|ol|hr|"
+                          r"figure|figcaption|aside|header|footer)\b[^<>]{0,%d}>" % TAG_MAX)
+_PLAIN_TAG = re.compile(r"<[^<>]{0,%d}>" % TAG_MAX)
+
+
+def epub_plain(path, until=None):
+    """An EPUB's words in its reading order, tags out, a paragraph at each block: the fallback when
+    epub_md() breaks as a whole. (text, note)."""
+    clock = _Clock(until)
+    with zipfile.ZipFile(path) as z:
+        zf = _Zip(z)
+        try:
+            parts = _epub_parts(zf, clock)
+        except Late:
+            raise
+        except Exception:                                      # noqa: BLE001
+            parts = [(n, "") for n in sorted(zf.names) if re.search(r"(?i)\.x?html?$", n)]
+        out = []
+        for doc, _media in parts:
+            if clock.late():
+                break
+            data = zf.read(doc)
+            if not data:
+                continue
+            t = _PLAIN_TAG.sub("", _PLAIN_BLOCK.sub("\n\n", _markup(_decode(data))))
+            t = _lines(html.unescape(t))
+            if t:
+                out.append(t)
+        return "\n\n".join(out), zf.note()
+
+
+def plain(path, kind, until=None):
+    """(text, note) of a document whose reader broke: its words without the structure."""
+    if kind == "epub":
+        return epub_plain(path, until)
+    if kind == "odt":
+        return odf_plain(path, PART_BYTES, until)
+    with open(path, "rb") as fh:
+        return rtf_plain(fh.read(min(os.fstat(fh.fileno()).st_size, RTF_BYTES))), ""
+
+
+# ---------------------------------------------------------------- a process of its own
+
+def _limit_memory(nbytes):
+    """RLIMIT_AS where the OS has it: past it an allocation fails (MemoryError) and the reading
+    ends, as no timeout can make it (a 1 KB EPUB took 1.4 GB in 5.9 s). True when it is set. Not
+    on macOS: its kernel does not hold to the limit, and a process there reserves far more address
+    space than it uses."""
+    if sys.platform == "darwin":
+        return False
+    try:
+        import resource
+    except ImportError:
+        return False                                           # Windows
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+        want = nbytes if hard == resource.RLIM_INFINITY else min(nbytes, hard)
+        if soft == resource.RLIM_INFINITY or soft > want:
+            resource.setrlimit(resource.RLIMIT_AS, (want, hard))
+        return True
+    except (ValueError, OSError, AttributeError):
+        return False
+
+
+def main(argv):
+    """python docreaders.py KIND PATH [UNTIL [KILL]]: one document, as JSON on stdout ({"md", "note"}).
+    UNTIL is when the reading stops (a time.time(); 0: no limit), KILL when readpage.py kills this
+    process: what was read is written by the middle of the two."""
+    kind, path = argv[0], argv[1]
+    until = float(argv[2]) if len(argv) > 2 and float(argv[2]) > 0 else None
+    kill = float(argv[3]) if len(argv) > 3 and float(argv[3]) > 0 else None
+    finish = until + (kill - until) / 2 if until is not None and kill is not None and kill > until else None
+    _limit_memory(MEMORY)
+    slow = os.environ.get("READ_PAGE_TEST_DOC_SLEEP")          # the test suites' stand-in for a slow document
+    if slow:
+        time.sleep(float(slow))
+    md, note = read(path, kind, until, finish)
+    sys.stdout.buffer.write(json.dumps({"md": md, "note": note}, ensure_ascii=False).encode("utf-8", "replace"))
+    sys.stdout.buffer.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

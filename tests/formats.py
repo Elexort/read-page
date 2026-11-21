@@ -253,9 +253,9 @@ try:
         check("RTF (%s) is read, its words and escapes decoded" % path,
               r.manifest.get("status") == "ok" and "RTF-MARKER" in text and "café" in text and "При" in text,
               "%s %s: %r" % (r.manifest.get("status"), (r.manifest.get("content") or {}).get("engine"), text[:80]))
-    check("RTF without pandoc keeps the text (the stdlib reader)",
-          "RTF-MARKER" in mod.rtf_text(RTF) and "fonttbl" not in mod.rtf_text(RTF)
-          and "Times New Roman" not in mod.rtf_text(RTF), repr(mod.rtf_text(RTF)[:80]))
+    plain = mod.docreaders.rtf_plain(RTF)
+    check("an RTF's plain text, when its reader breaks, keeps the words (docreaders.rtf_plain)",
+          "RTF-MARKER" in plain and "fonttbl" not in plain and "Times New Roman" not in plain, repr(plain[:80]))
 
     # ------------------------------------------------ OpenDocument is not EPUB
     check("an ODT's mimetype is read, not taken for EPUB",
