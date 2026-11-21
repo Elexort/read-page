@@ -1,17 +1,20 @@
-"""EPUB, ODT and RTF read with the standard library (scripts/docreaders.py, 2026-11-20): what each
-reader keeps - headings, lists, tables, notes, links, pictures, code, code pages - and how it
-answers a hostile file: a cut archive, broken XML, an entity bomb, a zip bomb, deep nesting,
-garbage. The hostile files of an independent review (2026-11-21) are built here, small, and each
-is read in a child Python killed past its time or its memory, so the old code fails them in
-seconds. Then the CLI, which reads these formats with these readers alone (pandoc left --setup on
-2026-11-21), and the readers' own process: stopped at its time, one clock for a ZIP's documents.
-No network.
+"""EPUB, ODT, ODS, ODP and RTF read with the standard library (scripts/docreaders.py, 2026-11-20): what
+each reader keeps - headings, lists, tables, notes, links, pictures, code, code pages, a sheet's
+repeated rows, a slide's notes, an RTF's pictures - and how it answers a hostile file: a cut
+archive, broken XML, an entity bomb, a zip bomb, deep nesting, garbage. The hostile files of an
+independent review (2026-11-21) are built here, small, and each is read in a child Python killed
+past its time or its memory, so the old code fails them in seconds. Then the CLI, which reads these
+formats with these readers alone (pandoc left --setup on 2026-11-21), and the readers' own process:
+stopped at its time, one clock for a ZIP's documents, its memory held (RLIMIT_AS, a Job Object).
+Also what readpage does beside them: a cut archive read from its members' own headers, members'
+names in a code page, a DOCX's formulas (OMML). No network.
 
     python -X utf8 tests/docreaders.py
 """
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -185,6 +188,8 @@ if sys.argv[3] == "zip":                   # readpage's reading of an archive th
     got, info = readpage.zip_whole(sys.argv[2], os.path.dirname(sys.argv[5]))
     md, note = json.dumps({"how": info["how"], "members": info["members"], "whole": len(info["whole"]),
                            "broken": info["broken"][-3:], "more": info["more"]}), info["reason"]
+elif sys.argv[3] == "rtf-pictures":        # an RTF, its pictures written to RP_TEST_PICS
+    md, note = docreaders.read(sys.argv[2], "rtf", t0 + float(sys.argv[4]), None, os.environ["RP_TEST_PICS"])
 else:
     md, note = docreaders.read(sys.argv[2], sys.argv[3], t0 + float(sys.argv[4]))
 with open(sys.argv[5], "w", encoding="utf-8", errors="replace") as fh:
@@ -898,6 +903,91 @@ got = json.loads(md) if md.startswith("{") else {}
 check("167: five members of 30 MB: four are taken (128 MB in all), the fifth is over the limit, one at a time in memory",
       fine(info, 30, 200) and got.get("whole") == 4 and "over the size limit" in info.get("note", ""), show(info, md))
 
+
+# ------------------------------------------------ KNOWN-ISSUES 166: an RTF's pictures
+def tiny_png(w, h, rgb=(10, 120, 200)):
+    import struct
+    import zlib
+
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(b"\x00" + bytes(rgb) * w for _ in range(h)))) + chunk(b"IEND", b""))
+
+
+def hexed(b):
+    """A picture's data as Word writes it: hex digits, 128 to a line."""
+    h = b.hex().encode()
+    return b"\n".join(h[i:i + 128] for i in range(0, len(h), 128))
+
+
+JPEG = b"\xff\xd8\xff\xe0" + b"\x00\x10JFIF" + b"\x00" * 200 + b"\xff\xd9"
+RP = (b"{\\rtf1\\ansi Before the picture.\\par "
+      b"{\\*\\shppict{\\pict{\\*\\picprop{\\sp{\\sn wzDescription}{\\sv A CHART}}}{\\*\\blipuid 0123456789abcdef}"
+      b"\\picw100\\pich80\\pngblip\n" + hexed(tiny_png(30, 20)) + b"}}{\\nonshppict{\\pict\\wmetafile8\\picw100 "
+      + hexed(b"\x01\x00\x09\x00\x00\x03") + b"}} after it.\\par "
+      b"{\\pict\\jpegblip\\bin%d " % len(JPEG) + JPEG + b"}\\par "
+      b"{\\pict\\wmetafile8 010009000003}\\par "
+      b"{\\shp{\\*\\shpinst{\\sp{\\sn shapeType}{\\sv 75}}{\\sp{\\sn pib}{\\sv {\\pict\\pngblip "
+      + hexed(tiny_png(40, 30, (200, 30, 30))) + b"}}}}}Floating.\\par "
+      b"{\\pict\\pngblip\\bin999999999 }}")
+pics = path("rtf-pictures")
+md, note = attempt(docreaders.read, rtf("pictures.rtf", RP), "rtf", None, None, pics) if \
+    "pictures" in docreaders.read.__code__.co_varnames else ("", "no pictures")
+on_disk = sorted(os.listdir(pics)) if os.path.isdir(pics) else []
+check("rtf pictures: a PNG and a JPEG are written out, each where it stands, with its alt text",
+      "Before the picture.\n\n![A CHART](rtf-pict-0001.png) after it." in md and "![](rtf-pict-0002.jpg)" in md
+      and on_disk[:2] == ["rtf-pict-0001.png", "rtf-pict-0002.jpg"]
+      and open(os.path.join(pics, "rtf-pict-0001.png"), "rb").read() == tiny_png(30, 20), "%r %r" % (md[:160], on_disk))
+check("rtf pictures: Word's WMF copy of a PNG is no second picture; a WMF alone is named where it stands",
+      md.count("WMF") == 1 and "[a picture in WMF, not shown]" in md and "1 in WMF" in note, "%r %r" % (md, note))
+check("rtf pictures: a floating shape's picture (\\sp pib) is written too; one over the size limit is left out, named",
+      "![](rtf-pict-0003.png)" in md.split("Floating.")[0] and len(on_disk) == 3 and "over 32 MB" in note, repr(note))
+md, _note = docreaders.read(path("pictures.rtf"), "rtf")
+check("rtf pictures: with no folder given they are passed over, as before", "![" not in md and "WMF" not in md, repr(md))
+many = b"{\\rtf1\\ansi " + b"".join(b"Picture %d: {\\pict\\pngblip %s}\\par " % (k, hexed(tiny_png(4, 4)))
+                                    for k in range(1200)) + b"}"
+rtf("many.rtf", many)
+os.environ["RP_TEST_PICS"] = path("many-pictures")
+md, info = hostile("many.rtf", "rtf-pictures", wall=60, mb=200)
+check("rtf pictures: 1 200 pictures give 1 000, and the note says the rest were left out, in seconds",
+      fine(info, 10, 200) and md.count("![](rtf-pict-") == 1000 and "past 1000" in info.get("note", ""), show(info, md))
+r = run_read(path("pictures.rtf"), env={"READ_PAGE_SKIP": "browser"})
+text, imgs = r.file("content.md"), r.manifest.get("images") or []
+files = [e.get("file") or "" for e in imgs]
+check("cli: an RTF's pictures are in img/, each its marker where it stands (none were extracted)",
+      len(imgs) == 3 and all(os.path.isfile(os.path.join(r.dir, f)) for f in files)
+      and re.search(r"Before the picture\.\n\n\[img #1 · 30x20 [^\]]* · A CHART\] img/01-a-chart\.png after it\.", text)
+      and "[img #3 · 40x30" in text.split("Floating.")[0] and not os.path.isdir(os.path.join(r.dir, "_rtf-pictures")),
+      "%s %r" % (files, text[:200]))
+
+# ------------------------------------------------ KNOWN-ISSUES 165: OMML, read in the read's own process (python-docx's)
+from xml.etree import ElementTree as ET  # noqa: E402
+OM = 'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"'
+
+
+def omml(xml):
+    return ET.fromstring('<m:oMath %s>%s</m:oMath>' % (OM, xml))
+
+
+if hasattr(docreaders, "omml_text"):
+    deep = omml("<m:f><m:num><m:r><m:t>1</m:t></m:r></m:num><m:den>" * 3000 + "<m:r><m:t>x</m:t></m:r>"
+                + "</m:den></m:f>" * 3000)
+    got, secs = timed(attempt, docreaders.omml_text, deep)
+    check("OMML: fractions nested 3 000 deep are read, past 100 levels as their text (no recursion error)",
+          isinstance(got, str) and got.startswith("1/(1/(") and got.rstrip(")").endswith("1" * 2900 + "x")
+          and got.count("1/(") >= 40 and secs < 2, "%.2fs %r" % (secs, got[:40] if isinstance(got, str) else got))
+    got, note, linear = scaled_call(docreaders.omml_text, lambda n: omml(
+        "<m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>"
+        "<m:r><m:t>+</m:t></m:r>" * n), 5000, 20000)
+    check("OMML: a formula of 20 000 terms is read in linear time", got.count("x^2+") == 20000 and linear, note)
+    got, note, linear = scaled_call(docreaders.omml_text, lambda n: omml(
+        "<m:sSup><m:e><m:d><m:e>" * 50 + "<m:r><m:t>%s</m:t></m:r>" % ("a+" * n) + "</m:e></m:d></m:e><m:sup>"
+        "<m:r><m:t>2</m:t></m:r></m:sup></m:sSup>" * 50), 125000, 500000)
+    check("OMML: a run of 1 MB 50 levels deep is read in linear time (each level looked at its whole part)",
+          linear and got.count("a+") == 500000, note)
+else:
+    check("OMML: a formula is read at all", False, "no docreaders.omml_text")
 
 # ------------------------------------------------ member names in a code page, with no UTF-8 flag
 def raw_zip(name, members):

@@ -889,6 +889,82 @@ try:
               all(i >= 0 for i in order) and order == sorted(order), str(order))
     except ImportError:
         check.skip("docx: content controls and text boxes", "python-docx is not installed here")
+
+    # ------------------------------------------------ KNOWN-ISSUES 165: a DOCX's formulas (OMML), as Word writes them
+    MATH = ('xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" '
+            'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"')
+    CTRL = '<m:ctrlPr><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/><w:i/></w:rPr></m:ctrlPr>'
+
+    def mr(t):
+        return ('<m:r><w:rPr><w:rFonts w:ascii="Cambria Math" w:hAnsi="Cambria Math"/></w:rPr><m:t>%s</m:t></m:r>'
+                % t)
+
+    def e(*xs):
+        return "<m:e>%s</m:e>" % "".join(xs)
+    WORD_FORMULAS = [            # (OMML as Word writes it, the line it is read as)
+        (mr("E=m") + '<m:sSup><m:sSupPr>%s</m:sSupPr>%s<m:sup>%s</m:sup></m:sSup>' % (CTRL, e(mr("c")), mr("2")),
+         "E=mc^2"),
+        ('<m:f><m:fPr>%s</m:fPr><m:num>%s</m:num><m:den>%s</m:den></m:f>' % (CTRL, mr("a+b"), mr("2")), "(a+b)/2"),
+        ('<m:f><m:fPr><m:type m:val="lin"/>%s</m:fPr><m:num>%s</m:num><m:den>%s</m:den></m:f>' % (CTRL, mr("a"), mr("b")),
+         "a/b"),
+        ('<m:rad><m:radPr>%s</m:radPr><m:deg/>%s</m:rad>' % (CTRL, e(mr("x+1"))), "√(x+1)"),
+        ('<m:rad><m:radPr>%s</m:radPr><m:deg>%s</m:deg>%s</m:rad>' % (CTRL, mr("3"), e(mr("x"))), "root(3, x)"),
+        ('<m:nary><m:naryPr><m:chr m:val="∑"/><m:limLoc m:val="undOvr"/>%s</m:naryPr><m:sub>%s</m:sub><m:sup>%s</m:sup>%s'
+         '</m:nary>' % (CTRL, mr("i=1"), mr("n"), e('<m:sSub><m:sSubPr>%s</m:sSubPr>%s<m:sub>%s</m:sub></m:sSub>'
+                                                   % (CTRL, e(mr("x")), mr("i")))), "∑_(i=1)^n x_i"),
+        ('<m:nary><m:naryPr><m:limLoc m:val="subSup"/>%s</m:naryPr><m:sub>%s</m:sub><m:sup>%s</m:sup>%s</m:nary>'
+         % (CTRL, mr("0"), mr("1"), e(mr("f(x)dx"))), "∫_0^1 f(x)dx"),                   # no m:chr: an integral
+        ('<m:func><m:funcPr>%s</m:funcPr><m:fName>%s</m:fName>%s</m:func>' % (CTRL, mr("sin"), e(mr("x"))), "sin x"),
+        ('<m:func><m:funcPr>%s</m:funcPr><m:fName><m:limLow><m:limLowPr>%s</m:limLowPr>%s<m:lim>%s</m:lim></m:limLow>'
+         '</m:fName>%s</m:func>' % (CTRL, CTRL, e(mr("lim")), mr("n→∞"), e(mr("a_n"))), "lim_(n→∞) a_n"),
+        ('<m:d><m:dPr><m:begChr m:val="["/><m:endChr m:val="]"/>%s</m:dPr>%s</m:d>' % (CTRL, e(
+            '<m:m><m:mPr>%s</m:mPr><m:mr>%s%s</m:mr><m:mr>%s%s</m:mr></m:m>' % (CTRL, e(mr("1")), e(mr("2")), e(mr("3")),
+                                                                            e(mr("4"))))), "[1, 2; 3, 4]"),
+        ('<m:d><m:dPr>%s</m:dPr>%s%s</m:d>' % (CTRL, e(mr("a")), e(mr("b"))), "(a|b)"),     # Word's defaults
+        ('<m:acc><m:accPr>%s</m:accPr>%s</m:acc>' % (CTRL, e(mr("x"))), "x̂"),
+        ('<m:groupChr><m:groupChrPr>%s</m:groupChrPr>%s</m:groupChr>' % (CTRL, e(mr("a+b"))), "underbrace(a+b)"),
+        ('<m:sPre><m:sPrePr>%s</m:sPrePr><m:sub>%s</m:sub><m:sup>%s</m:sup>%s</m:sPre>' % (CTRL, mr("1"), mr("2"),
+                                                                                         e(mr("X"))), "_1^2 X"),
+        ('<m:eqArr><m:eqArrPr>%s</m:eqArrPr>%s%s</m:eqArr>' % (CTRL, e(mr("x=1")), e(mr("y=2"))), "x=1; y=2"),
+        (mr("a") + '<m:phant><m:phantPr><m:show m:val="0"/>%s</m:phantPr>%s</m:phant>' % (CTRL, e(mr("HIDDEN")))
+         + mr("b"), "ab"),
+    ]
+    try:
+        import docx
+        from docx.oxml import parse_xml
+        tmpm = tempfile.mkdtemp(prefix="rp-math-")
+        d = docx.Document()
+        for k, (omml, _want) in enumerate(WORD_FORMULAS):
+            d.add_paragraph("FORMULA-%02d: " % k)
+            d.paragraphs[-1]._p.append(parse_xml('<m:oMath %s>%s</m:oMath>' % (MATH, omml)))
+            d.paragraphs[-1].add_run(" ends here.")
+        d.add_paragraph()._p.append(parse_xml('<m:oMathPara %s><m:oMath>%s</m:oMath></m:oMathPara>'
+                                              % (MATH, mr("DISPLAY=") + WORD_FORMULAS[1][0])))
+        t = d.add_table(rows=1, cols=2)
+        t.rows[0].cells[0].text = "IN-A-CELL"
+        t.rows[0].cells[1].paragraphs[0]._p.append(parse_xml('<m:oMath %s>%s</m:oMath>' % (MATH, WORD_FORMULAS[0][0])))
+        mp = os.path.join(tmpm, "math.docx")
+        d.save(mp)
+        got = mod2.office_fast(mp, "docx")
+        lost = [(k, want) for k, (_o, want) in enumerate(WORD_FORMULAS)
+                if "FORMULA-%02d: `%s` ends here." % (k, want) not in got]
+        check("165: a DOCX's formulas are read where they stand, as a line each (Word's own OMML: %d of them)"
+              % len(WORD_FORMULAS), not lost, "%s %r" % (lost[:3], got[:200]))
+        check("165: a formula of its own paragraph is a paragraph; a formula in a table cell is in its cell",
+              "\n\n`DISPLAY=(a+b)/2`\n\n" in got and "IN-A-CELL | `E=mc^2`" in got, repr(got[-200:]))
+        only = docx.Document()
+        for k in (5, 9):
+            only.add_paragraph()._p.append(parse_xml('<m:oMathPara %s><m:oMath>%s</m:oMath></m:oMathPara>'
+                                                     % (MATH, WORD_FORMULAS[k][0])))
+        op = os.path.join(tmpm, "only-math.docx")
+        only.save(op)
+        r = run_read(op, env=env)
+        check("165: a DOCX of formulas alone reads as them (it read as nothing: python-docx skips OMML)",
+              r.manifest.get("status") == "ok" and "`∑_(i=1)^n x_i`" in r.file("content.md")
+              and "`[1, 2; 3, 4]`" in r.file("content.md"), "%s %r" % (r.manifest.get("status"),
+                                                                       r.file("content.md")[:80]))
+    except ImportError:
+        check.skip("165: a DOCX's formulas", "python-docx is not installed here")
     try:
         from pptx import Presentation
         from pptx.util import Inches

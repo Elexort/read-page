@@ -4101,6 +4101,42 @@ def office_plain(data, sub):
 
 _OFFICE = {}          # the last office_fast(): "damaged" (a member did not unpack), "missing" (its library)
 OFFICE_LIBS = {"docx": "python-docx", "xlsx": "openpyxl", "pptx": "python-pptx"}
+M_OMATH, M_OMATH_PARA = docreaders.M_NS + "oMath", docreaders.M_NS + "oMathPara"
+
+
+def docx_para(p, qn):
+    """A python-docx paragraph's text with its formulas where they stand: python-docx's text holds no
+    m:oMath (a DOCX that is one formula read as nothing, KNOWN-ISSUES 165). Each formula is one line
+    (docreaders.omml_text) in backticks, as an ODT's is; one that is a paragraph of its own is that
+    paragraph. A paragraph with no formula is python-docx's text, untouched."""
+    el = p._p
+    if el.find(M_OMATH) is None and el.find(M_OMATH_PARA) is None:
+        return p.text
+    from docx.text.run import Run
+    w_r, w_link = qn("w:r"), qn("w:hyperlink")
+    out, math_last = [], False
+    for ch in el.iterchildren():
+        if ch.tag in (M_OMATH, M_OMATH_PARA):
+            maths = [ch] if ch.tag == M_OMATH else list(ch.iterchildren(M_OMATH))
+            said = [docreaders._code(t) for t in (docreaders.omml_text(m).strip() for m in maths) if t]
+            if not said:
+                continue
+            if out and not out[-1][-1:].isspace():
+                out.append(" ")
+            out.append(" ".join(said))
+            math_last = True
+            continue
+        if ch.tag == w_r:
+            t = Run(ch, p).text
+        elif ch.tag == w_link:
+            t = "".join(Run(r, p).text for r in ch.iterchildren(w_r))
+        else:
+            continue
+        if t and math_last and not t[:1].isspace() and t[:1] not in ".,;:!?)]":
+            out.append(" ")
+        out.append(t)
+        math_last = math_last and not t
+    return "".join(out)
 
 
 def office_fast(path, sub):
@@ -4146,9 +4182,9 @@ def office_fast(path, sub):
                 # python-docx's paragraphs hold neither, and markitdown read them (2026-11-19)
                 for child in el.iterchildren():
                     if child.tag == w_p:
-                        p = Paragraph(child, d)
-                        if p.text.strip():
-                            parts.append(p.text)
+                        text = docx_para(Paragraph(child, d), qn)
+                        if text.strip():
+                            parts.append(text)
                         # a picture stands in its paragraph; doc_pictures() makes it a marker
                         pics = ["![](%s)" % media[r] for r in re.findall(r'r:embed="([^"]+)"', child.xml)
                                 if r in media]
@@ -4161,7 +4197,8 @@ def office_fast(path, sub):
                                 blocks(box)
                     elif child.tag == w_tbl:
                         for row in Table(child, d).rows:
-                            parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+                            parts.append(" | ".join("\n".join(docx_para(p, qn) for p in cell.paragraphs).strip()
+                                                    for cell in row.cells))
                     elif child.tag == w_sdt:
                         content = child.find(qn("w:sdtContent"))
                         if content is not None:
@@ -4566,8 +4603,9 @@ def ocr_pages(paths):
 _DOCS = {"spent": 0.0}             # the read's converter clock for these documents
 
 
-def own_doc(path, kind):
-    """An EPUB, ODT, ODS, ODP or RTF through docreaders.py in its own process: (markdown, note)."""
+def own_doc(path, kind, pictures=None):
+    """An EPUB, ODT, ODS, ODP or RTF through docreaders.py in its own process: (markdown, note).
+    `pictures`: a folder an RTF's pictures are written to (rtf_images() takes them from there)."""
     unlimited = budget.unlimited()
     left = CONVERTER_TIMEOUT - _DOCS["spent"]
     if not unlimited and left < 0.2:
@@ -4581,7 +4619,7 @@ def own_doc(path, kind):
     # process is the cost (0.1 s on Windows, measured 2026-11-21: 0.01 s less than -E -B)
     cmd = [sys.executable, "-I", "-S", "-B", "-X", "utf8",
            os.path.join(os.path.dirname(os.path.abspath(__file__)), "docreaders.py"),
-           kind, path, "%.3f" % until, "%.3f" % kill]
+           kind, path, "%.3f" % until, "%.3f" % kill] + ([pictures] if pictures else [])
     rc, so, se = run(cmd, timeout=secs)
     dt = now() - t0
     _DOCS["spent"] += dt
@@ -5304,7 +5342,12 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
         # our reader's answer stands: a reader that breaks gives its plain text itself, in its own
         # process (the old plain readers here read a part whole, or in quadratic time; a sheet or a
         # slide deck was its paragraphs in this process, with no clock and no kill)
-        md, why = own_doc(path, "rtf" if kind == "rtf" else sub)
+        # the read's own RTF writes its pictures out (a member of an archive's are passed over), into a
+        # folder of this read's alone (an earlier read's, killed, may have left some)
+        pics = os.path.join(workdir, RTF_PICTURES) if kind == "rtf" and not name else None
+        if pics:
+            shutil.rmtree(pics, ignore_errors=True)
+        md, why = own_doc(path, "rtf" if kind == "rtf" else sub, pics)
         return md, why or ("" if md.strip() else "no text in this %s" % (sub or kind).upper())
     if kind == "pdf":
         if c["libs"].get("pymupdf"):
@@ -7201,6 +7244,38 @@ def doc_pictures(text, entries, workdir):
     if rest:
         text = (text or "").rstrip() + "\n\n" + pictures.unplaced_list(rest)
     return text, placed + rest
+
+
+RTF_PICTURES = "_rtf-pictures"      # the folder of a read where our RTF reader writes its pictures
+
+
+def rtf_images(folder, workdir):
+    """The pictures our RTF reader wrote (docreaders' rtf-pict-NNNN.png and .jpg, KNOWN-ISSUES 166)
+    as a document's pictures, in its order: into img/, an entry each for doc_pictures(), which puts
+    each one's marker where the text names it. A tracking pixel is left out; the folder goes."""
+    out = []
+    try:
+        names = sorted(n for n in os.listdir(folder) if re.match(r"^rtf-pict-\d{4}\.(?:png|jpg)$", n))
+    except OSError:
+        return out
+    for name in names:
+        src = os.path.join(folder, name)
+        try:
+            with open(src, "rb") as fh:
+                data = fh.read(MEDIA_LIMIT + 1)
+        except OSError:
+            continue
+        w, h = _img_dims(data)
+        if not data or len(data) > MEDIA_LIMIT or (w and h and w <= 2 and h <= 2):
+            continue
+        os.makedirs(os.path.join(workdir, "img"), exist_ok=True)
+        os.replace(src, os.path.join(workdir, "img", name))
+        out.append({"file": "img/" + name, "bytes": len(data), "dims": "%dx%d" % (w, h) if w and h else "?",
+                    "alt": "", "_zip": name, "order": len(out) + 1})
+    shutil.rmtree(folder, ignore_errors=True)
+    return out
+
+
 def zip_images(path, workdir, limit=PAGE_LIMIT):
     """DOCX/EPUB keep pictures inside the package (word/media, OEBPS/images/...).
 
@@ -8100,8 +8175,10 @@ def read(args):
                 **({} if broke["how"] == "not a ZIP" else {
                     "members": broke["members"], "whole": len(broke["whole"]),
                     "not_whole": ["%s: %s" % b for b in broke["broken"][:20]]}))
-        if kind == "zip":
-            zimg = zip_images(read_path, workdir)
+        if kind in ("zip", "rtf"):
+            # an archive's pictures, or the ones our RTF reader wrote out
+            zimg = zip_images(read_path, workdir) if kind == "zip" else \
+                rtf_images(os.path.join(workdir, RTF_PICTURES), workdir)
             if zimg:
                 ordered = any(e.get("order") for e in zimg)
                 # a picture the text names stands there; the rest follow in document order

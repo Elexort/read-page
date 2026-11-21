@@ -38,6 +38,16 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   text, lists, tables and pictures, then `notes:`. On LibreOffice-shaped files: 678 table rows of a workbook (0
   before), its repeated rows, a deck's 12 slides, 10 table rows, 3 pictures and notes. `odf_text` is gone; the
   plain reader is what is left when the reader breaks. A table in a frame is read in an ODT too.
+- **A DOCX's formulas** (KNOWN-ISSUES 165): python-docx's paragraphs hold no OMML, so a DOCX's formulas were
+  lost, and one of formulas alone read as nothing. Each formula is now one line in backticks where it stands
+  (`docreaders.omml_text`), as an ODT's MathML is: `(a+b)/(c−d)`, `e^(−x^2)`, `√(x+1)`, `root(3, x)`,
+  `∑_(i=1)^n x_i`, a matrix by its rows `[a, b; c, d]`, `x̂`, `lim_(n→∞) a_n` - in a paragraph, a table cell, a text
+  box or a paragraph of its own. On 120 formulas pandoc's OMML writer made and 16 written as Word writes them:
+  all present (none before), every construct and character kept; the lines are 42 % of pandoc's TeX of them.
+- **An RTF's pictures** (KNOWN-ISSUES 166): a PNG or a JPEG of an RTF - inline, Word's `\*\shppict`, a floating
+  shape's - is in `img/` with its marker where it stood, its alt text Word's; Word's WMF copy of it is passed over,
+  and a picture in a format no browser or model shows (WMF, EMF, PICT) is named where it stands. Written by our
+  reader in its process, under its caps (1 000 pictures, 32 MB each, 128 MB in all).
 - **The readers' process has a memory limit on Windows** (KNOWN-ISSUES 181): a Job Object's process memory limit
   of 2 GB, which the process sets on itself (ctypes), as RLIMIT_AS holds it on Linux: an allocation past it is a
   MemoryError. Its start costs 11 ms more (143 -> 154 ms median of 20 under the environment's Python), ctypes'
