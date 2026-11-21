@@ -1,6 +1,8 @@
 """A TLS-inspecting proxy for the proxy job of install.yml: mitmproxy, its root certificate in the OS's own store.
 
-    python tools/ci_proxy.py start [--port N]     run mitmdump, trust its CA in the OS store, export the proxy variables
+    python tools/ci_proxy.py start [--port N] [--cafile]
+                                                  run mitmdump, trust its CA in the OS store, export the proxy variables
+                                                  (--cafile: SSL_CERT_FILE too, for a Python that reads no store - macOS)
     python tools/ci_proxy.py report               what went through it, and which clients refused its certificate
     python tools/ci_proxy.py stop                 the proxy off again (the actions that upload the logs must not use it)
 
@@ -26,11 +28,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # the OCR data (raw.githubusercontent.com), Node or npm's registry, the browser's CDN
 REQUIRED = [("pypi.org", ("pypi.org",)),
             ("PyPI's files", ("files.pythonhosted.org",)),
-            ("Python's builds", ("github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com")),
+            ("Python's builds", ("releases.astral.sh", "github.com", "release-assets.githubusercontent.com",
+                                 "objects.githubusercontent.com")),
             ("OCR data", ("raw.githubusercontent.com",)),
             ("npm's registry (defuddle)", ("registry.npmjs.org",)),
-            ("the browser's CDN", ("cdn.playwright.dev", "playwright.download.prss.microsoft.com",
-                                   "playwright.azureedge.net"))]
+            ("the browser's download", ("storage.googleapis.com", "playwright.download.prss.microsoft.com",
+                                        "playwright.azureedge.net"))]
 
 
 def state_dir():
@@ -104,6 +107,8 @@ def cmd_start(a):
     export_env("NO_PROXY", "127.0.0.1,localhost")
     export_env("no_proxy", "127.0.0.1,localhost")
     export_env("CI_PROXY_LOG", log)
+    if a.cafile:
+        export_env("SSL_CERT_FILE", cert)
     with open(os.path.join(d, "mitmdump.pid"), "w", encoding="utf-8") as fh:
         fh.write(str(p.pid))
     print("mitmdump pid %d listens on %s; its CA is in the system store (%s)" % (p.pid, proxy, cert))
@@ -158,7 +163,7 @@ def cmd_report(a):
 
 
 def cmd_stop(a):
-    for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy"):
+    for k in ("HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE"):
         export_env(k, "")
     try:
         with open(os.path.join(state_dir(), "mitmdump.pid"), encoding="utf-8") as fh:
@@ -181,6 +186,7 @@ def main(argv):
     p = sub.add_parser("start")
     p.set_defaults(fn=cmd_start)
     p.add_argument("--port", type=int, default=8080)
+    p.add_argument("--cafile", action="store_true")
     sub.add_parser("report").set_defaults(fn=cmd_report)
     sub.add_parser("stop").set_defaults(fn=cmd_stop)
     a = ap.parse_args(argv)

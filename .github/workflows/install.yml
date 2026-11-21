@@ -226,6 +226,7 @@ jobs:
           # older glibc and the other package managers: Debian 11 and Ubuntu 20.04 have glibc 2.31 (and Python
           # 3.9 and 3.8), Fedora dnf, Arch pacman, openSUSE zypper - each must name what it lacks with its own fix
           - {arch: x64, os: ubuntu-24.04, image: "debian:11", expect: "browser"}
+          - {arch: x64, os: ubuntu-24.04, image: "rockylinux:8", expect: "browser"}      # glibc 2.28, the floor of our wheels
           - {arch: x64, os: ubuntu-24.04, image: "ubuntu:20.04", expect: "browser"}
           - {arch: x64, os: ubuntu-24.04, image: "fedora:latest", expect: "browser"}
           - {arch: x64, os: ubuntu-24.04, image: "archlinux:latest", expect: "browser"}
@@ -272,9 +273,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {name: linux, os: ubuntu-24.04, expect: ""}
-          - {name: windows, os: windows-2025, expect: ""}
-          - {name: macos, os: macos-15, expect: ""}
+          - {name: linux, os: ubuntu-24.04, expect: "", cafile: ""}
+          - {name: windows, os: windows-2025, expect: "", cafile: ""}
+          - {name: macos, os: macos-15, expect: "", cafile: "--cafile"}
     steps:
       - uses: actions/checkout@v4
 
@@ -294,7 +295,9 @@ jobs:
 
       - name: the proxy, its root certificate in the system's store
         shell: bash
-        run: python -X utf8 tools/ci_proxy.py start
+        # macOS: neither Apple's Python nor python.org's reads the keychain (the setup says so and names SSL_CERT_FILE,
+        # which is the documented way); uv and Node read it
+        run: python -X utf8 tools/ci_proxy.py start ${{ matrix.cafile }}
 
       - name: --setup through the proxy (every download of it)
         shell: bash
@@ -313,9 +316,12 @@ jobs:
       - name: what went through the proxy, and who refused its certificate
         if: ${{ !cancelled() }}
         shell: bash
-        run: |
-          python -X utf8 tools/ci_proxy.py report | tee "$RUNNER_TEMP/ci-logs/proxy-report.txt"
-          python -X utf8 tools/ci_proxy.py stop
+        run: python -X utf8 tools/ci_proxy.py report | tee "$RUNNER_TEMP/ci-logs/proxy-report.txt"
+
+      - name: the proxy off again (the actions that upload the logs use no other store than their own)
+        if: ${{ always() }}
+        shell: bash
+        run: python -X utf8 tools/ci_proxy.py stop
 
       - name: the folder's contents, and the summary
         if: ${{ always() }}

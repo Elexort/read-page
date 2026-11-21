@@ -8,19 +8,26 @@
 # have glibc 2.31 and Python 3.9 / 3.8), dnf, pacman, zypper.
 img="$1"
 sha="$2"
+py=python3
 case "$img" in
   alpine*) apk add --no-cache python3 git >/dev/null || exit 1 ;;
+  rockylinux:8*|almalinux:8*) dnf install -y -q python39 git >/dev/null && py=python3.9 || exit 1 ;;   # glibc 2.28, the floor
   fedora*|rockylinux*|almalinux*|centos*) dnf install -y -q python3 git >/dev/null || exit 1 ;;
-  archlinux*) pacman -Sy --noconfirm --needed python git >/dev/null || exit 1 ;;
+  archlinux*) pacman -Syu --noconfirm python git >/dev/null || exit 1 ;;
   opensuse*) zypper --non-interactive -q install python3 git >/dev/null || exit 1 ;;
+  debian:11*)
+     # Debian 11 has left its mirrors for archive.debian.org: the packages of its own security repository 404 on the old ones
+     printf 'deb http://archive.debian.org/debian bullseye main\ndeb http://archive.debian.org/debian-security bullseye-security main\n' > /etc/apt/sources.list
+     export DEBIAN_FRONTEND=noninteractive
+     apt-get -o Acquire::Check-Valid-Until=false update -qq >/dev/null && apt-get install -y -qq python3 git >/dev/null || exit 1 ;;
   *) export DEBIAN_FRONTEND=noninteractive
      apt-get update -qq >/dev/null && apt-get install -y -qq python3 git >/dev/null || exit 1 ;;
 esac
-echo "image $img: $(python3 --version 2>&1), $(ldd --version 2>&1 | head -n 1)"
+echo "image $img: $($py --version 2>&1), $(ldd --version 2>&1 | head -n 1)"
 skill="$HOME/.agents/skills/read-page"
 git clone -q https://github.com/Elexort/read-page "$skill" || exit 1
 git -C "$skill" checkout -q "$sha" || exit 1       # the commit being tested, as a user's clone of it
-ci="python3 -X utf8 /src/tools/ci_install.py"
+ci="$py -X utf8 /src/tools/ci_install.py"
 rc=0
 $ci machine || rc=1
 $ci setup --follow --skill "$skill" --label first || rc=1

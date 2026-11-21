@@ -2031,6 +2031,24 @@ attempt("tidy keeps the npm in use and removes a Node of nodejs.org's or PyPI's 
         lambda: (sorted(os.listdir(os.path.join(dt, "node"))) == ["npm-11.19.1"], str(os.listdir(os.path.join(dt, "node")))))
 
 
+# a browser that cannot be had names the machine's own Chromium as its fix (an OS Playwright has no build for: Ubuntu 20.04)
+db, wb = work_in("rp-env-browserfix-")
+wb.env_py = sys.executable
+wb.sh = lambda cmd, timeout=900, env=None, cwd=None: (1, "Error: ERROR: Playwright does not support chromium-headless-shell on ubuntu20.04-x64")
+ok_b2, note_b2 = wb.browser()
+db2, wb2 = work_in("rp-env-browserfix2-")
+wb2.env_py = sys.executable
+wb2.sh = lambda cmd, timeout=900, env=None, cwd=None: (1, "getaddrinfo ENOTFOUND cdn.playwright.dev")
+wb2.browser()
+attempt("a browser Playwright has no build for is named with a fix - the machine's own Chromium; a download that failed says "
+        "once more or through a mirror first (a floor with no fix turned the container job red)",
+        lambda: (not ok_b2 and wb.problems[0]["part"] == "browser" and wb.problems[0]["fix"] == envsetup._system_fix("browser")
+                 and "PLAYWRIGHT_DOWNLOAD_HOST" in wb2.problems[0]["fix"] and envsetup._system_fix("browser") in wb2.problems[0]["fix"],
+                 str(wb.problems[0]["fix"])[:100]))
+attempt("macOS' certificate advice names SSL_CERT_FILE for a proxy that inspects TLS (neither Python reads the keychain)",
+        lambda: ((lambda saved: (setattr(sys, "platform", "darwin"), envsetup.cert_advice(), setattr(sys, "platform", saved))[1])(sys.platform)
+                 .count("SSL_CERT_FILE") == 1, ""))
+
 # ---------------------------------------------------------------- mirrors for a user in mainland China, and OCR in the user's own language
 attempt("a tessdata mirror: a folder or a template, https only; without one GitHub's raw host",
         lambda: (envsetup.tessdata_url("chi_sim", {}) == envsetup.TESSDATA_URL % "chi_sim"

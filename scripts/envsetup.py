@@ -813,7 +813,8 @@ def cert_advice():
     if sys.platform == "darwin":
         return ("this Python has no root certificates: run 'Install Certificates.command' in its folder under "
                 "/Applications/Python 3.x/ (python.org's Python ships none until then), or run --setup "
-                "with /usr/bin/python3")
+                "with /usr/bin/python3; behind a proxy that inspects TLS name a file with its root in "
+                "SSL_CERT_FILE (neither Python reads the keychain)")
     return ("this Python does not trust the certificate pypi.org presents: install the system's root certificates "
             "(sudo apt install ca-certificates), or - behind a proxy that inspects TLS - name a file with its "
             "root in SSL_CERT_FILE")
@@ -1384,7 +1385,12 @@ class Work:
         self.info["browsers"] = "browsers"
         rc, out = self.sh([py, "-E", "-m", "playwright", "install", BROWSER], timeout=1200)
         if rc != 0:
-            self.lack("browser", "Playwright's browser did not download: " + out[-120:])
+            # where Playwright has no build for this distribution (it says "does not support") the machine's own
+            # Chromium is the way; where the download failed, once more or through a mirror first
+            fix = _system_fix("browser")
+            if "does not support" not in out:
+                fix = "readpage.py --setup again (PLAYWRIGHT_DOWNLOAD_HOST names a mirror), or the machine's own: " + fix
+            self.lack("browser", "Playwright's browser did not download: " + out[-120:], fix)
             return False, "not downloaded: " + out[-120:]
         found = sorted(n for n in os.listdir(os.path.join(self.d, "browsers")) if n.startswith("chromium_headless_shell-"))
         return True, "%s %s" % (BROWSER, found[-1].split("-")[-1] if found else "?")
