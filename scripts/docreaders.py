@@ -374,11 +374,143 @@ def _grid_room(clock, rows, width):
 
 # ---------------------------------------------------------------- archives
 
+# A member's name is UTF-8 when its flag says so (bit 11); zipfile reads any other as CP437. Windows'
+# own zipper and many Chinese tools write the local code page and no flag: GBK names came out as
+# "╦╡├≈.txt", and an EPUB whose OPF names its chapters in UTF-8 lost them. A name whose CP437 reading
+# is no name anyone writes - box drawing, Greek, symbols - is UTF-8 when it decodes as UTF-8 (macOS
+# and Linux zippers with no flag), else the CJK code page that decodes every such name of the archive
+# into its script: the machine's own first, then kana for Shift-JIS, GB2312's characters for GBK,
+# Big5, Hangul for Korean. Plain ASCII and a CP437 name of accented letters stay as they are. Without
+# its code page on the machine, a Korean name of Hangul alone decodes as GBK too (its bytes are
+# GB2312's common characters): the code page of a Korean Windows is what tells them apart.
+CJK_CODECS = {936: "gb18030", 950: "big5", 932: "cp932", 949: "cp949"}
+
+
+def _latin(t):
+    """Is every letter of `t` past ASCII a Latin one (a CP437 name of accented letters: Größe, café)?"""
+    import unicodedata
+    return all(ord(c) < 0x80 or unicodedata.name(c, "").startswith("LATIN") for c in t)
+
+
+def _cjk_ok(t, codec):
+    """Is every character of `t` past ASCII one a name in `codec` is made of?"""
+    for c in t:
+        o = ord(c)
+        if (o < 0x80 or 0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF or 0xF900 <= o <= 0xFAFF
+                or 0x3000 <= o <= 0x303F or 0xFF00 <= o <= 0xFFEF or 0x2010 <= o <= 0x2027 or o in (0xB7, 0xD7)
+                or (codec == "cp932" and 0x3040 <= o <= 0x30FF)
+                or (codec == "cp949" and (0xAC00 <= o <= 0xD7A3 or 0x3130 <= o <= 0x318F))
+                or (codec == "big5" and 0x3100 <= o <= 0x312F)):
+            continue
+        return False
+    return True
+
+
+def _gb2312(t):
+    """Is every character of `t` past ASCII one of GB2312's (GBK's rows A1-F7): the ones names are made of,
+    where a Japanese or Big5 name read as GBK takes the rare ones of its extension."""
+    for c in t:
+        if ord(c) >= 0x80:
+            try:
+                b = c.encode("gbk")
+            except UnicodeEncodeError:
+                return False
+            if len(b) != 2 or not (0xA1 <= b[0] <= 0xF7 and 0xA1 <= b[1] <= 0xFE):
+                return False
+    return True
+
+
+def machine_cjk():
+    """The CJK code page of this machine, or "": Windows' ANSI code page (the one its zipper writes),
+    else the locale's language."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            return CJK_CODECS.get(ctypes.windll.kernel32.GetACP(), "")
+        except Exception:                                      # noqa: BLE001
+            return ""
+    lang = (os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE") or os.environ.get("LANG") or "").lower()
+    if lang.startswith(("zh_tw", "zh_hk", "zh_mo")):
+        return "big5"
+    return {"zh": "gb18030", "ja": "cp932", "ko": "cp949"}.get(lang[:2], "")
+
+
+def names_codec(raws, prior=None):
+    """The code page of an archive's names given the raw bytes of those with no UTF-8 flag: "utf-8", a
+    CJK code page, or "" - they are CP437, as zipfile reads them. `prior`: the machine's CJK code page
+    (machine_cjk() when None)."""
+    raws = [r for r in raws if any(b > 0x7F for b in bytearray(r))]
+    if not raws or all(_latin(r.decode("cp437")) for r in raws):
+        return ""
+    try:
+        for r in raws:
+            r.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+    clean = {}
+    for codec in ("gb18030", "big5", "cp932", "cp949"):
+        try:
+            texts = [r.decode(codec) for r in raws]
+        except UnicodeDecodeError:
+            continue
+        if all(_cjk_ok(t, codec) for t in texts):
+            clean[codec] = "".join(texts)
+    prior = machine_cjk() if prior is None else prior
+    if prior in clean:
+        return prior
+    if "cp932" in clean and any(0x3040 <= ord(c) <= 0x30FF for c in clean["cp932"]):
+        return "cp932"
+    if "gb18030" in clean and _gb2312(clean["gb18030"]):
+        return "gb18030"
+    if "big5" in clean:
+        return "big5"
+    if "cp949" in clean and any(0xAC00 <= ord(c) <= 0xD7A3 for c in clean["cp949"]):
+        return "cp949"
+    return next((c for c in ("cp932", "gb18030", "cp949") if c in clean), "")
+
+
+def fix_zip_names(z, prior=None):
+    """The names of zipfile `z`'s members with no UTF-8 flag read in the code page they were written
+    in (names_codec): each ZipInfo's `filename`, and the name `z` finds it by, become that reading;
+    its `orig_filename`, which zipfile checks against the member's own header, stays. Returns the
+    code page, "" when the names stay as zipfile read them."""
+    infos, raws = [], []
+    for i in z.infolist():
+        if not i.flag_bits & 0x800:
+            try:
+                raws.append(i.orig_filename.encode("cp437"))
+                infos.append((i, raws[-1]))
+            except UnicodeEncodeError:
+                continue
+    codec = names_codec(raws, prior)
+    if not codec:
+        return ""
+    taken = set(z.NameToInfo)
+    for i, raw in infos:
+        if not any(b > 0x7F for b in bytearray(raw)):
+            continue
+        try:
+            name = raw.decode(codec)
+        except UnicodeDecodeError:
+            continue
+        if name in taken:
+            continue
+        if z.NameToInfo.get(i.filename) is i:
+            del z.NameToInfo[i.filename]
+        i.filename = name
+        z.NameToInfo[name] = i
+        taken.add(name)
+    return codec
+
+
 class _Zip(object):
     """An archive's parts, each read up to its limit and all of them up to TOTAL_BYTES; what was
-    cut or could not be read is named in `cut` and `bad`."""
+    cut or could not be read is named in `cut` and `bad`. Its names are read in the code page they
+    were written in (fix_zip_names)."""
 
     def __init__(self, z):
+        fix_zip_names(z)
         self.z = z
         self.names = z.namelist()
         self.exact = set(self.names)

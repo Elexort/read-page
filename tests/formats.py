@@ -12,6 +12,7 @@ with code untouched, a DOCX's content controls and text boxes, a PPTX's groups a
 ZIP's files and their text.
 """
 import importlib.util
+import io
 import json
 import os
 import queue
@@ -977,6 +978,130 @@ try:
           and len(control.manifest.get("images") or []) == 2,
           "%.1f s against %.1f s, %d pictures" % (hostile.seconds, control.seconds,
                                                    len(hostile.manifest.get("images") or [])))
+
+    # ------------------------------------------------ KNOWN-ISSUES 167: an archive cut, damaged or no ZIP
+    # was answered "no converter for this file type", after a machine's markitdown had its 4 s
+    def noise_png(w, h):
+        raw = b"".join(b"\x00" + os.urandom(w * 3) for _ in range(h))
+
+        def chunk(t, d):
+            return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+        return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+    def said(r):
+        m = r.manifest
+        return "%s | %s | %s | %s" % (m.get("status"), (m.get("signals") or {}).get("status_reason"),
+                                       m.get("advice"), json.dumps(m.get("missing") or [])[:120])
+
+    def no_converter(r):
+        return "no converter" in json.dumps(r.manifest)
+
+    tmpc = tempfile.mkdtemp(prefix="rp-cut-")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for k in range(3):
+            z.writestr("notes/part%d.txt" % k, ("PART-%d-FACT " % k) + EN * 30)
+    whole = buf.getvalue()
+    third = zipfile.ZipFile(io.BytesIO(whole)).infolist()[2].header_offset
+    cutzip = os.path.join(tmpc, "bundle.zip")
+    with open(cutzip, "wb") as fh:
+        fh.write(whole[:third + 60])                  # in the middle of the third member
+    r = run_read(cutzip, env=env)
+    text, sig = r.file("content.md"), (r.manifest.get("signals") or {}).get("broken_archive") or {}
+    check("167: a cut ZIP is read from its whole members, and the answer says it is cut",
+          r.manifest.get("status") == "ok" and "PART-0-FACT" in text and "PART-1-FACT" in text
+          and "PART-2-FACT" not in text and sig.get("how") == "cut" and sig.get("whole") == 2
+          and "cut" in (r.manifest.get("advice") or "") and not no_converter(r), said(r))
+    check("... its listing names the member that is not whole, and the advice what gets the rest (a whole copy)",
+          "part2.txt (not read: cut)" in text and "whole copy" in (r.manifest.get("advice") or ""), said(r))
+    with open(os.path.join(os.path.dirname(HERE), "references", "manifest-schema.json"), encoding="utf-8") as fh:
+        schema = json.load(fh)["properties"]["signals"]["properties"].get("broken_archive") or {}
+    check("... and references/manifest-schema.json has every field of signals.broken_archive",
+          sig and set(sig) <= set(schema.get("properties") or {}), "%s %s" % (sorted(sig), sorted(schema.get(
+              "properties") or {})))
+    with open(cutzip, "wb") as fh:
+        fh.write(whole[:50])                          # inside the first member's data
+    r = run_read(cutzip, env=env)
+    check("167: a ZIP cut before any member is whole: an error that says so, not \"no converter\"",
+          r.manifest.get("status") == "error" and "not a whole archive" in str(
+              (r.manifest.get("signals") or {}).get("status_reason")) and "no member of it is whole" in (
+              r.manifest.get("advice") or "") and not no_converter(r), said(r))
+    s.routes["/cut.zip"] = (200, {"Content-Type": "application/zip"}, whole[:third + 60])
+    r = run_read(s.url("/cut.zip"), env=env)
+    check("167: a server's cut ZIP sent whole: --refresh fetches it again, the same bytes while its copy is cut",
+          r.manifest.get("status") == "ok" and "PART-1-FACT" in r.file("content.md")
+          and "--refresh" in (r.manifest.get("advice") or "") and "server's copy is cut" in (
+              r.manifest.get("advice") or ""), said(r))
+    try:
+        import docx
+        d = docx.Document()
+        d.add_paragraph("DOCX-FIRST-FACT " + EN * 5)
+        d.add_picture(io.BytesIO(noise_png(160, 160)))
+        d.add_paragraph("DOCX-LAST-FACT " + EN * 5)
+        dbuf = io.BytesIO()
+        d.save(dbuf)
+        data = dbuf.getvalue()
+        media = [i for i in zipfile.ZipFile(io.BytesIO(data)).infolist() if "media/" in i.filename][0]
+        cutdocx = os.path.join(tmpc, "report.docx")
+        with open(cutdocx, "wb") as fh:
+            fh.write(data[:media.header_offset + 2000])       # in its picture, everything after it gone
+        r = run_read(cutdocx, env=env)
+        text, sig = r.file("content.md"), (r.manifest.get("signals") or {}).get("broken_archive") or {}
+        check("167: a DOCX cut in its picture: its text is read, the archive named cut",
+              r.manifest.get("status") == "ok" and "DOCX-FIRST-FACT" in text and "DOCX-LAST-FACT" in text
+              and sig.get("how") == "cut" and not no_converter(r), said(r))
+        bad = bytearray(data)
+        k = media.header_offset + 30 + len(media.filename) + 500
+        bad[k:k + 64] = bytes(b ^ 0x5A for b in bad[k:k + 64])           # its picture's data broken
+        damaged = os.path.join(tmpc, "damaged.docx")
+        with open(damaged, "wb") as fh:
+            fh.write(bytes(bad))
+        r = run_read(damaged, env=env)
+        text, sig = r.file("content.md"), (r.manifest.get("signals") or {}).get("broken_archive") or {}
+        check("167: a DOCX whose picture does not unpack: its text is read, the member named (python-docx gave up)",
+              r.manifest.get("status") == "ok" and "DOCX-LAST-FACT" in text and sig.get("how") == "damaged"
+              and any("media/" in x for x in sig.get("not_whole") or []) and not no_converter(r), said(r))
+    except ImportError:
+        check.skip("167: a cut DOCX", "python-docx is not installed here")
+    ole2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 600       # a compound file, its directory's stream names
+    for name, data, want in (
+            ("old.docx", ole2 + "WordDocument".encode("utf-16-le") + b"\x00" * 900, "Word 97-2003"),
+            ("locked.xlsx", ole2 + "EncryptedPackage".encode("utf-16-le") + b"\x00" * 900, "password-protected"),
+            ("noise.epub", bytes(range(1, 256)) * 30, "no type this skill knows")):
+        p = os.path.join(tmpc, name)
+        with open(p, "wb") as fh:
+            fh.write(data)
+        r = run_read(p, env=env)
+        check("167: %s that is no ZIP is named for what it is (%s)" % (name, want),
+              r.manifest.get("status") == "empty" and want in str((r.manifest.get("signals") or {}).get(
+                  "status_reason")) and "not a ZIP archive" in str((r.manifest.get("signals") or {}).get(
+                      "status_reason")) and r.manifest.get("advice") and not no_converter(r), said(r))
+    # member names written in GBK with no UTF-8 flag (Windows' own zipper, many Chinese tools): zipfile reads
+    # them as CP437, and the listing and the headings said "╦╡├≈.txt"
+    zbuf, stand = io.BytesIO(), []
+    with zipfile.ZipFile(zbuf, "w", zipfile.ZIP_DEFLATED) as z:
+        for k, (name, body) in enumerate((("说明.txt", "GBK-NAMED-FACT the note. " + EN), ("数据/报告.txt", EN))):
+            raw = name.encode("gbk")
+            stand.append((("~%04d" % k).ljust(len(raw), "~").encode("ascii"), raw))
+            z.writestr(stand[-1][0].decode("ascii"), body)
+    zdata = zbuf.getvalue()
+    for st, raw in stand:
+        zdata = zdata.replace(st, raw)
+    gbkzip = os.path.join(tmpc, "gbk-names.zip")
+    with open(gbkzip, "wb") as fh:
+        fh.write(zdata)
+    r = run_read(gbkzip, env=env)
+    text = r.file("content.md")
+    check("a ZIP's members named in GBK with no UTF-8 flag are listed and headed by their names (were CP437)",
+          "- 说明.txt" in text and "## 说明.txt" in text and "数据/报告.txt" in text and "GBK-NAMED-FACT" in text,
+          repr(text[:160]))
+    s.routes["/text.zip"] = (200, {"Content-Type": "application/zip"},
+                             ("The file you asked for was moved to the archive server. " + EN * 2).encode())
+    r = run_read(s.url("/text.zip"), env=env)
+    check("167: text served as a ZIP is answered with its text, and said to be no archive",
+          "moved to the archive server" in r.file("content.md") and "is text" in (r.manifest.get("advice") or "")
+          and not no_converter(r), said(r))
 finally:
     s.close()
 sys.exit(check.done())

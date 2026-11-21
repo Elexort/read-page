@@ -180,7 +180,13 @@ def watch():
 threading.Thread(target=watch, daemon=True).start()
 import docreaders
 t0 = time.time()
-md, note = docreaders.read(sys.argv[2], sys.argv[3], t0 + float(sys.argv[4]))
+if sys.argv[3] == "zip":                   # readpage's reading of an archive that does not open whole
+    import readpage
+    got, info = readpage.zip_whole(sys.argv[2], os.path.dirname(sys.argv[5]))
+    md, note = json.dumps({"how": info["how"], "members": info["members"], "whole": len(info["whole"]),
+                           "broken": info["broken"][-3:], "more": info["more"]}), info["reason"]
+else:
+    md, note = docreaders.read(sys.argv[2], sys.argv[3], t0 + float(sys.argv[4]))
 with open(sys.argv[5], "w", encoding="utf-8", errors="replace") as fh:
     fh.write(md)
 print(json.dumps({"secs": round(time.time() - t0, 3), "note": note[:300], "peak": round(peak() / (1 << 20))}))
@@ -745,4 +751,124 @@ else:
     p = subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True, timeout=60)
     check("the readers' process cannot take more memory than its limit (RLIMIT_AS)",
           p.returncode != 0 and b"MemoryError" in p.stderr, p.stderr[-200:])
+
+
+# ------------------------------------------------ KNOWN-ISSUES 167: a cut archive read from its members' headers
+class Unseekable(io.RawIOBase):
+    """What zipfile writes to when it cannot seek: each member's CRC and sizes after its data."""
+    def __init__(self):
+        self.buf = io.BytesIO()
+
+    def writable(self):
+        return True
+
+    def write(self, b):
+        return self.buf.write(b)
+
+
+def cut_archive(name, members, descriptor=False, chunk=1 << 20):
+    """An archive of `members` - [(name, bytes, or (a block, times) written in pieces)] - with its
+    table of contents cut off; deflated, and with descriptor=True each member's sizes after its data."""
+    sink = Unseekable() if descriptor else io.BytesIO()
+    with zipfile.ZipFile(sink, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, data in members:
+            if isinstance(data, tuple):
+                with z.open(n, "w", force_zip64=True) as fh:
+                    for _ in range(data[1]):
+                        fh.write(data[0])
+            else:
+                z.writestr(n, data)
+        cut = sink.tell() if not descriptor else len(sink.buf.getvalue())
+    raw = (sink.buf if descriptor else sink).getvalue()
+    with open(path(name), "wb") as fh:
+        fh.write(raw[:cut])                    # where its table of contents would start
+    return name
+
+
+md, info = scaled(lambda n: cut_archive("many.zip", [("m%05d.txt" % k, b"x") for k in range(n)]), "zip", 2500, 10000)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: a cut archive of 10 000 members is read in linear time, every member whole",
+      fine_scaled(info, 150) and got.get("whole") == 10000 and got.get("how") == "cut"
+      and "rest were not" not in info.get("note", ""), show(info, md))
+cut_archive("more.zip", [("m%05d.txt" % k, b"x") for k in range(12000)])
+md, info = hostile("more.zip", "zip", wall=60, mb=150)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: ... 12 000 members: the first 10 000 are looked at, and the reason says the rest were not",
+      fine(info, 30, 150) and got.get("members") == 10000 and "rest were not" in info.get("note", ""), show(info, md))
+ZEROS = (b"\x00" * (1 << 20), 256)                # 256 MB of zeros, 256 KB deflated
+cut_archive("bomb.zip", [("bomb.bin", ZEROS), ("after.txt", b"AFTER-THE-BOMB")])
+md, info = hostile("bomb.zip", "zip", wall=60, mb=200)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: a member that unpacks to 256 MB is not unpacked past 32 MB, and the member after it is whole",
+      fine(info, 20, 200) and got.get("whole") == 1 and "over the size limit" in info.get("note", ""), show(info, md))
+cut_archive("bomb-dd.zip", [("first.txt", b"FIRST"), ("bomb.bin", ZEROS), ("after.txt", b"AFTER")], descriptor=True)
+md, info = hostile("bomb-dd.zip", "zip", wall=60, mb=200)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: ... the same with its size after its data: the reading stops there, the members before it whole",
+      fine(info, 20, 200) and got.get("whole") == 1 and "not read to its end" in info.get("note", ""), show(info, md))
+cut_archive("dd.zip", [("one.txt", b"ONE " * 1000), ("two.txt", b"TWO " * 1000)], descriptor=True)
+md, info = hostile("dd.zip", "zip", wall=30, mb=150)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: members whose sizes follow their data are read whole, by where their data ends",
+      fine(info, 10, 150) and got.get("whole") == 2, show(info, md))
+cut_archive("total.zip", [("big%d.bin" % k, (b"\x00" * (1 << 20), 30)) for k in range(5)])
+md, info = hostile("total.zip", "zip", wall=60, mb=200)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: five members of 30 MB: four are taken (128 MB in all), the fifth is over the limit, one at a time in memory",
+      fine(info, 30, 200) and got.get("whole") == 4 and "over the size limit" in info.get("note", ""), show(info, md))
+
+
+# ------------------------------------------------ member names in a code page, with no UTF-8 flag
+def raw_zip(name, members):
+    """An archive whose members' names are the bytes given and carry no UTF-8 flag - what Windows' own
+    zipper and many Chinese tools write: each is written under an ASCII stand-in of its length, whose
+    bytes are then replaced in the member's header and in the table of contents."""
+    buf, stand = io.BytesIO(), []
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for k, (raw, data) in enumerate(members):
+            s = ("~%04d" % k).ljust(len(raw), "~").encode("ascii")
+            stand.append((s, raw))
+            z.writestr(s.decode("ascii"), data)
+    out = buf.getvalue()
+    for s, raw in stand:
+        out = out.replace(s, raw)
+    with open(path(name), "wb") as fh:
+        fh.write(out)
+    return path(name)
+
+
+def names_of(p, prior=""):
+    with zipfile.ZipFile(p) as z:
+        codec = attempt(docreaders.fix_zip_names, z, prior) if hasattr(docreaders, "fix_zip_names") else None
+        return codec, z.namelist(), [z.read(n) for n in z.namelist()] if not isinstance(codec, Exception) else []
+
+
+GBK_NAMES = ["说明.txt", "数据/报告（终稿）.csv"]
+p = raw_zip("gbk.zip", [(n.encode("gbk"), ("FACT %d" % k).encode()) for k, n in enumerate(GBK_NAMES)] +
+            [(b"plain-ascii.txt", b"ASCII")])
+codec, names, datas = names_of(p)
+check("names: GBK with no UTF-8 flag read as GBK (it was CP437: \"╦╡├≈.txt\"), each member still unpacks",
+      codec == "gb18030" and names[:2] == GBK_NAMES and "plain-ascii.txt" in names and datas[:1] == [b"FACT 0"],
+      "%r %r" % (codec, names))
+for label, members, prior, want in (
+        ("UTF-8 with no flag (a macOS or Linux zipper)", [("中文说明.txt".encode("utf-8"), b"x")], "", ["中文说明.txt"]),
+        ("a CP437 name of accented letters stays", [("Größe.txt".encode("cp437"), b"x"), (b"ascii.txt", b"y")], "",
+         ["Größe.txt", "ascii.txt"]),
+        ("Shift-JIS, kana telling it from GBK (表 ends in a backslash byte)",
+         [("テスト.txt".encode("cp932"), b"x"), ("表示.txt".encode("cp932"), b"y")], "", ["テスト.txt", "表示.txt"]),
+        ("Big5", [("說明文件.txt".encode("big5"), b"x")], "", ["說明文件.txt"]),
+        ("Korean on a machine whose code page is Korean", [("보고서.txt".encode("cp949"), b"x")], "cp949", ["보고서.txt"]),
+        ("GBK on a machine whose code page is Chinese", [("说明.txt".encode("gbk"), b"x")], "gb18030", ["说明.txt"])):
+    codec, names, datas = names_of(raw_zip("names.zip", members), prior)
+    check("names: %s" % label, names == want and len(datas) == len(want), "%r %r" % (codec, names))
+CHAP = "第一章.xhtml"
+p = raw_zip("gbk.epub", [(b"mimetype", b"application/epub+zip"), (b"META-INF/container.xml", CONTAINER.encode()),
+                         (b"OEBPS/content.opf", ('<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" '
+                                                 'version="3.0"><manifest><item id="c" href="%s" media-type="application/'
+                                                 'xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>'
+                                                 % CHAP).encode("utf-8")),
+                         (("OEBPS/" + CHAP).encode("gbk"), xhtml("<p>GBK-CHAPTER-FACT 第一章的内容。</p>").encode("utf-8"))])
+md, note = docreaders.read(p, "epub")
+check("names: an EPUB whose chapter is named in GBK, its OPF in UTF-8, is read (the chapter was not found)",
+      "GBK-CHAPTER-FACT" in md, "%r %r" % (md[:80], note))
 sys.exit(check.done())

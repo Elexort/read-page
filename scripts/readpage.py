@@ -46,6 +46,7 @@ import re                                                           # noqa: E402
 import shutil                                                       # noqa: E402
 import socket                                                       # noqa: E402
 import stat                                                         # noqa: E402
+import struct                                                       # noqa: E402
 import subprocess                                                   # noqa: E402
 import tempfile                                                     # noqa: E402
 import threading                                                    # noqa: E402
@@ -3695,6 +3696,361 @@ def zip_subtype(src):
     return "other"
 
 
+# ---------------------------------------------------------------- an archive that does not open whole
+# zipfile reads an archive by its table of contents, which is at its end: a file cut short has none,
+# and one that is no ZIP at all has none either. Both were answered "no converter for this file
+# type", after a machine's markitdown had spent its 4 s on them (KNOWN-ISSUES 167). A cut or damaged
+# archive's members are read one after another from their own headers instead, and the whole ones
+# go into an archive of their own, which the readers take as they take any; a file that is no ZIP
+# is named for what it is. What one archive may unpack is capped as the readers' parts are.
+ZIP_WHOLE_PART = 32 * 1024 * 1024      # one member of an archive read so, unpacked
+ZIP_WHOLE_TOTAL = 128 * 1024 * 1024    # all of them together
+ZIP_WHOLE_MEMBERS = 10000              # members looked at; past them the rest is not
+_ZIP_LOCAL = struct.Struct("<4sHHHHHIIIHH")      # a member's own header (30 bytes)
+_ZIPS = {}                             # "read": what was wrong with the read's own archive, or None
+# what a file whose name or type says ZIP may really be, by its first bytes
+NOT_ZIP = ((b"\x1f\x8b", "a gzip file"), (b"7z\xbc\xaf\x27\x1c", "a 7-Zip archive"),
+           (b"Rar!\x1a\x07", "a RAR archive"), (b"BZh", "a bzip2 file"), (b"\xfd7zXZ\x00", "an xz file"),
+           (b"\x28\xb5\x2f\xfd", "a zstd file"), (b"MSCF", "a Windows cabinet file"),
+           (b"\x89PNG", "a PNG picture"), (b"\xff\xd8\xff", "a JPEG picture"), (b"GIF8", "a GIF picture"),
+           (b"MZ", "a Windows program"), (b"\x7fELF", "a Linux program"))
+OLE2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+# the streams that say what an OLE2 compound file holds (their names are UTF-16 in its directory)
+OLE2_KINDS = (("EncryptedPackage", "a password-protected Office file (its document is encrypted)"),
+              ("WordDocument", "a Word 97-2003 document (.doc)"),
+              ("Workbook", "an Excel 97-2003 workbook (.xls)"),
+              ("PowerPoint Document", "a PowerPoint 97-2003 presentation (.ppt)"))
+
+
+def not_zip(path):
+    """What a file whose name or type says ZIP is, when it does not start like one: a phrase ("a
+    Word 97-2003 document (.doc)", "text"), or "" when it starts as a ZIP does."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(8192)
+            if head[:8] == OLE2:
+                fh.seek(0)
+                body = fh.read(64 * 1024 * 1024)       # the directory may stand anywhere: a linear find
+                for stream, what in OLE2_KINDS:
+                    if (stream.encode("utf-16-le") + b"\x00\x00") in body:
+                        return what
+                return "an OLE2 compound file (an old Office format)"
+    except OSError:
+        return ""
+    if head[:4] in (b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"):
+        return ""
+    if not head:
+        return "an empty file"
+    for magic_bytes, what in NOT_ZIP:
+        if head.startswith(magic_bytes):
+            return what
+    if head[257:262] == b"ustar":
+        return "a tar archive"
+    if not looks_binary(head):
+        return "text"
+    return "data of no type this skill knows"
+
+
+def _zip64_sizes(extra, usize, csize):
+    """The sizes a member's own header gives, its ZIP64 field (0x0001) read: (unpacked, packed,
+    whether it has that field - then the sizes after its data are 8 bytes each)."""
+    i = 0
+    while i + 4 <= len(extra):
+        tag, n = struct.unpack("<HH", extra[i:i + 4])
+        if tag == 1:
+            vals = extra[i + 4:i + 4 + n]
+            k = 0
+            if usize == 0xFFFFFFFF and len(vals) >= k + 8:
+                usize = struct.unpack("<Q", vals[k:k + 8])[0]
+                k += 8
+            if csize == 0xFFFFFFFF and len(vals) >= k + 8:
+                csize = struct.unpack("<Q", vals[k:k + 8])[0]
+            return usize, csize, True
+        i += 4 + n
+    return usize, csize, False
+
+
+def _inflate(fh, csize, room):
+    """A deflated member's data from `fh` (at its start): (data, packed length, why). csize None:
+    its length is not in its header (a data descriptor follows the data), the stream's end tells it.
+    why is "" for data that ends where the stream does, "cut", "breaks" or "over" (more than
+    `room` bytes unpacked: read no further)."""
+    d = zlib.decompressobj(-zlib.MAX_WBITS)
+    out, n, used = [], 0, 0
+    left = csize
+    try:
+        while not d.eof:
+            want = 1 << 20 if left is None else min(1 << 20, left)
+            chunk = fh.read(want) if want else b""
+            if not chunk:
+                return b"", used, "cut" if left is None or left else "breaks"
+            used += len(chunk)
+            if left is not None:
+                left -= len(chunk)
+            data = chunk
+            while data and not d.eof:
+                piece = d.decompress(data, room + 1 - n)
+                out.append(piece)
+                n += len(piece)
+                if n > room:
+                    return b"", used, "over"
+                data = d.unconsumed_tail
+    except zlib.error:
+        return b"", used, "breaks"
+    return b"".join(out), used - len(d.unused_data), ""
+
+
+class _ZipOut(object):
+    """A new archive at `dest`, stored, written a member at a time (one is in memory, not all); the
+    file is made at the first member. An office package's .rels come last, each relationship to a
+    part the archive lacks taken out: python-docx, python-pptx and openpyxl give up on a package
+    whose relationship names a part that is not there."""
+
+    def __init__(self, dest):
+        self.dest, self.w, self.names, self.rels = dest, None, [], []
+
+    def add(self, name, data):
+        import zipfile
+        self.names.append(name)
+        if name.endswith(".rels"):
+            self.rels.append((name, data))
+            return
+        if self.w is None:
+            self.w = zipfile.ZipFile(self.dest, "w", zipfile.ZIP_STORED)
+        self.w.writestr(zipfile.ZipInfo(name), data)
+
+    def close(self):
+        import zipfile
+        names = set(self.names)
+        office = "[Content_Types].xml" in names
+        for name, data in self.rels:
+            if self.w is None:
+                self.w = zipfile.ZipFile(self.dest, "w", zipfile.ZIP_STORED)
+            self.w.writestr(zipfile.ZipInfo(name), _rels_kept(name, data, names) if office else data)
+        if self.w is not None:
+            self.w.close()
+
+
+def _rels_kept(name, data, names):
+    """A package's .rels with every relationship to a part the archive lacks taken out."""
+    folder = posixpath.dirname(posixpath.dirname(name))     # word/_rels/document.xml.rels -> word
+
+    def keep(m):
+        tag = m.group(0).decode("utf-8", "replace")
+        target = _attr(tag, "Target") or ""
+        if (_attr(tag, "TargetMode") or "").lower() == "external" or not target:
+            return m.group(0)
+        part = posixpath.normpath(target.lstrip("/") if target.startswith("/") else
+                                  posixpath.join(folder, urllib.parse.unquote(target))).lstrip("/")
+        return m.group(0) if part in names else b""
+    return re.sub(rb"(?is)<Relationship\b[^<>]{0,%d}/>|<Relationship\b[^<>]{0,%d}>\s*</Relationship\s*>"
+                  % (TAG_MAX, TAG_MAX), keep, data)
+
+
+def zip_salvage(path, dest):
+    """The members of an archive zipfile cannot open, read in order from their own headers: the
+    whole ones - stored or deflated, their CRC right, within ZIP_WHOLE_PART and ZIP_WHOLE_TOTAL -
+    are written to a new archive at `dest` (not written when none is whole). Returns {"how": "cut"
+    | "damaged", "members": how many were found, "whole": their names, "broken": [(name, why)],
+    "at": the byte where the reading stopped, "size": the file's, "more": a reason the rest was not
+    looked at, or ""}. Linear: each member is read once, its data at most up to the caps."""
+    size = os.path.getsize(path)
+    found, whole, broken, total, seen = 0, [], [], 0, set()
+    how, at, more = "cut", size, ""
+    out = _ZipOut(dest)
+    prior = docreaders.machine_cjk()          # a name with no UTF-8 flag: its code page (fix_zip_names)
+    with open(path, "rb") as fh:
+        pos = 0
+        while True:
+            fh.seek(pos)
+            head = fh.read(30)
+            if found >= ZIP_WHOLE_MEMBERS and head[:4] == b"PK\x03\x04":
+                more = "%d members looked at; the rest were not" % ZIP_WHOLE_MEMBERS
+                break
+            if head[:4] in (b"PK\x01\x02", b"PK\x05\x06", b"PK\x06\x06"):
+                how, at = "damaged", pos           # its table of contents is there, and zipfile could not read it
+                break
+            if len(head) < 30 or head[:4] != b"PK\x03\x04":
+                if len(head) >= 4:
+                    how, at = "damaged", pos       # bytes that start no member where one should start
+                break
+            _s, _v, flags, method, _t, _d, crc, csize, usize, nlen, xlen = _ZIP_LOCAL.unpack(head)
+            raw_name, extra = fh.read(nlen), fh.read(xlen)
+            if len(raw_name) < nlen or len(extra) < xlen:
+                break                              # cut in the middle of a member's header
+            codec = "utf-8" if flags & 0x800 else (docreaders.names_codec([raw_name], prior) or "cp437")
+            name = raw_name.decode(codec, "replace")
+            usize, csize, zip64 = _zip64_sizes(extra, usize, csize)
+            start = pos + 30 + nlen + xlen
+            folder = name.endswith("/")
+            found += 0 if folder else 1
+            descriptor = bool(flags & 8)           # its CRC and sizes follow its data
+            end = None if descriptor else start + csize        # where the next member starts
+            room = min(ZIP_WHOLE_PART, ZIP_WHOLE_TOTAL - total)
+            why, data = "", b""
+            if flags & 1:
+                why = "encrypted"
+            elif method not in (0, 8):
+                why = "packed in a way this skill does not unpack (method %d)" % method
+            elif method == 0 and descriptor:
+                why = "its size is not in its header"
+            elif method == 0:
+                if csize > room:
+                    why = "over the size limit"
+                else:
+                    data = fh.read(csize)
+                    why = "cut" if len(data) < csize else ""
+            else:
+                data, packed, why = _inflate(fh, None if descriptor else csize, room)
+                why = {"over": "over the size limit", "breaks": "its data breaks"}.get(why, why)
+                if descriptor and not why:
+                    fh.seek(start + packed)
+                    tail = fh.read(24)
+                    k = 4 if tail[:4] == b"PK\x07\x08" else 0
+                    width = 8 if zip64 else 4
+                    if len(tail) < k + 4 + 2 * width:
+                        why = "cut"
+                    else:
+                        crc = struct.unpack("<I", tail[k:k + 4])[0]
+                        end = start + packed + k + 4 + 2 * width
+            if why == "cut":
+                broken.append((name, "cut"))
+                break
+            if end is None:
+                # its end is known only where its data ends, and its data was not read to the end
+                broken.append((name, why))
+                more = "a member whose size is not in its header was not read to its end, nor what follows it"
+                how, at = "damaged" if why == "its data breaks" else how, pos
+                break
+            if not why and not folder and zlib.crc32(data) & 0xFFFFFFFF != crc:
+                why = "its CRC does not match its data"
+            if why:
+                broken.append((name, why))
+            elif not folder and name not in seen:
+                seen.add(name)
+                out.add(name, data)
+                whole.append(name)
+                total += len(data)
+            data = b""
+            pos = end
+    out.close()
+    return {"how": how, "members": found, "whole": whole, "broken": broken, "at": at, "size": size,
+            "more": more}
+
+
+def zip_mend(path, dest):
+    """An archive zipfile opens, whose members do not all unpack (a CRC that does not match, data
+    that breaks): the ones that do, within the caps, go into a new archive at `dest`. Returns what
+    zip_salvage() does, "how" being "damaged"; nothing is written when every member unpacks."""
+    import zipfile
+    whole, broken, total, seen = [], [], 0, set()
+    out = _ZipOut(dest)
+    with zipfile.ZipFile(path) as z:
+        docreaders.fix_zip_names(z)
+        infos = [i for i in z.infolist() if not i.is_dir()]
+        for i in infos[:ZIP_WHOLE_MEMBERS]:
+            room = min(ZIP_WHOLE_PART, ZIP_WHOLE_TOTAL - total)
+            if i.file_size > room:
+                broken.append((i.filename, "over the size limit"))
+                continue
+            try:
+                with z.open(i) as fh:
+                    data = fh.read(room + 1)
+            except Exception as e:                            # noqa: BLE001  (bad CRC, data that breaks)
+                broken.append((i.filename, "it does not unpack (%s)" % (str(e)[:60] or type(e).__name__)))
+                continue
+            if len(data) > room:
+                broken.append((i.filename, "over the size limit"))
+                continue
+            if i.filename not in seen:
+                seen.add(i.filename)
+                out.add(i.filename, data)
+                whole.append(i.filename)
+                total += len(data)
+    out.close()
+    damaged = [b for b in broken if b[1] != "over the size limit"]
+    if not damaged and os.path.exists(dest):
+        os.unlink(dest)                                       # every member unpacks: nothing to mend
+    return {"how": "damaged", "members": len(infos), "whole": whole if damaged else [],
+            "broken": damaged, "at": 0, "size": os.path.getsize(path),
+            "more": "%d members looked at; the rest were not" % ZIP_WHOLE_MEMBERS if len(infos) > ZIP_WHOLE_MEMBERS
+            else ""}
+
+
+def zip_whole(path, workdir):
+    """(the archive to read, what is wrong with it): `path` and None when zipfile opens it; else the
+    archive of its whole members (zip_salvage), or None when none is whole or the file is no ZIP.
+    What is wrong is a dict with "how" ("cut", "damaged" or "not a ZIP"), "what" for a file that
+    is no ZIP, and "reason", the line an answer gives."""
+    import zipfile
+    try:
+        with zipfile.ZipFile(path):
+            return path, None
+    except Exception as e:                                    # noqa: BLE001
+        debuglog.exc("zip: does not open", e)
+    what = not_zip(path)
+    if what:
+        return None, {"how": "not a ZIP", "what": what, "reason": "not a ZIP archive: the file is %s" % what}
+    dest = os.path.join(workdir, "_whole-%s.zip" % hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()[:8])
+    try:
+        info = zip_salvage(path, dest)
+    except Exception as e:                                    # noqa: BLE001
+        debuglog.exc("zip: salvage", e)
+        info = {"how": "damaged", "members": 0, "whole": [], "broken": [], "at": 0, "size": 0, "more": ""}
+    info["reason"] = zip_reason(info)
+    info["path"] = dest if info["whole"] else ""
+    trace("zip.salvage", how=info["how"], members=info["members"], whole=len(info["whole"]),
+          broken=len(info["broken"]), at=info["at"])
+    return info["path"] or None, info
+
+
+def zip_reason(info):
+    """The reason line of an archive that is not whole: what happened, and how many members are whole."""
+    if info["how"] == "cut":
+        where = "cut after %s" % human_bytes(info["size"])
+    elif info["at"]:
+        where = "damaged at byte %s of %s" % (exact_bytes(info["at"]), exact_bytes(info["size"]))
+    else:
+        where = "damaged"
+    n, found = len(info["whole"]), info["members"]
+    if not found:
+        return "not a whole archive: %s, before its first member" % where
+    bad = info["broken"][:3]
+    return "not a whole archive: %s; %d of the %d members found are whole%s%s" % (
+        where, n, found, " (%s)" % "; ".join("%s: %s" % b for b in bad) if bad else "",
+        "; " + info["more"] if info.get("more") else "")
+
+
+def zip_advice(info, local):
+    """The advice line for an archive that is not whole or no ZIP: what of it the answer holds, and
+    what gets the rest - a whole copy of a file on this machine, another fetch of a server's."""
+    if info["how"] == "not a ZIP":
+        what = info["what"]
+        if what.startswith("a password-protected"):
+            return ("the file is password-protected: this skill cannot open it; a copy saved without the "
+                    "password can be read")
+        if "97-2003" in what or what.startswith("an OLE2"):
+            return ("the file is %s, not the ZIP-based file its name or type says: this skill does not read "
+                    "that format; a copy saved as .docx, .xlsx or .pptx, or as PDF, can be read" % what)
+        if what == "text":
+            return "the file is text, not the archive its name or type says: its text is the answer"
+        return "the file is %s, not the archive its name or type says: there is no document in it to read" % what
+    n, bad = len(info["whole"]), [b[0] for b in info["broken"]]
+    if info["how"] == "cut":
+        held = ("%d of its members %s whole and read here, what came after %s is missing"
+                % (n, "is" if n == 1 else "are", "it" if n == 1 else "them") if n else "no member of it is whole")
+        what = "cut after %s" % human_bytes(info["size"])
+    else:
+        held = ("%d member%s not unpack (%s)%s" % (
+            len(bad), " does" if len(bad) == 1 else "s do", ", ".join(bad[:3]) + (", ..." if len(bad) > 3 else ""),
+            ", the other %d %s read here" % (n, "is" if n == 1 else "are") if n else ", and no other is whole")
+            if bad else "%d of its members %s read here" % (n, "is" if n == 1 else "are"))
+        what = "damaged"
+    rest = ("a whole copy of the file is needed for the rest" if local else
+            "--refresh fetches it again, and the same bytes come back while the server's copy is %s" % info["how"])
+    return "the archive is %s: %s; %s" % (what, held, rest)
+
+
 OFFICE_MAIN = {
     "docx": (rb"application/vnd\.ms-word\.(?:document\.macroEnabled|template\.macroEnabledTemplate)\.main\+xml|"
              rb"application/vnd\.openxmlformats-officedocument\.wordprocessingml\.template\.main\+xml",
@@ -3743,12 +4099,20 @@ def office_plain(data, sub):
     return out.getvalue()
 
 
+_OFFICE = {}          # the last office_fast(): "damaged" (a member did not unpack), "missing" (its library)
+OFFICE_LIBS = {"docx": "python-docx", "xlsx": "openpyxl", "pptx": "python-pptx"}
+
+
 def office_fast(path, sub):
     """The fast path: a library that reads the format directly, no markitdown startup.
 
     The libraries check the file extension, and our download is raw.zip - so feed them bytes.
+    What stopped it is in _OFFICE: a member that does not unpack ("damaged"), or the library not
+    installed here ("missing", its name on PyPI).
     """
     import io
+    import zipfile
+    _OFFICE.clear()
     try:
         data = open(path, "rb").read()
     except Exception:                                         # noqa: BLE001
@@ -3845,8 +4209,14 @@ def office_fast(path, sub):
                 if slide.has_notes_slide and slide.notes_slide.notes_text_frame.text.strip():
                     out.append("notes: " + slide.notes_slide.notes_text_frame.text)
             return "\n".join(out)
-    except Exception:                                         # noqa: BLE001
-        return ""
+    except ImportError as e:
+        debuglog.exc("office: library", e)
+        _OFFICE["missing"] = OFFICE_LIBS.get(sub, "")
+    except (zipfile.BadZipFile, zlib.error, EOFError) as e:
+        debuglog.exc("office: damaged", e)
+        _OFFICE["damaged"] = str(e)[:120] or type(e).__name__
+    except Exception as e:                                    # noqa: BLE001
+        debuglog.exc("office: reader", e)
     return ""
 
 
@@ -4351,25 +4721,35 @@ ZIP_TEXT = (".txt", ".md", ".markdown", ".csv", ".tsv", ".json", ".xml", ".yaml"
 ZIP_DOCS = (".pdf", ".docx", ".xlsx", ".pptx", ".epub", ".odt", ".rtf")
 
 
-def zip_text(path, c, workdir):
+def zip_text(path, c, workdir, broken=()):
     """A plain archive (not an office file or a book): what is in it, and the text of what can be
     read - text files as they are, documents through the same converters, one level deep. 30
     members at most, none over 20 MB unpacked, 60 MB in all; a member is unpacked under a name of
     our own, never its path. A document that gives no text says why under its name (its reader
-    stopped, the read's converter time spent on the others)."""
+    stopped, the read's converter time spent on the others), and so does a member that does not
+    unpack. `broken`: [(name, why)] of a cut archive's members that are not whole, listed after the
+    whole ones."""
     import zipfile
     out, read = [], 0
     try:
         with zipfile.ZipFile(path) as z:
+            docreaders.fix_zip_names(z)                # names in GBK, Shift-JIS... with no UTF-8 flag
             infos = [i for i in z.infolist() if not i.is_dir()]
-            out.append("Files in the archive (%d):\n\n%s" % (len(infos), "\n".join(
-                "- %s (%s)" % (i.filename, human_bytes(i.file_size)) for i in infos[:200])
-                + ("\n- ... and %d more" % (len(infos) - 200) if len(infos) > 200 else "")))
+            listed = ["- %s (%s)" % (i.filename, human_bytes(i.file_size)) for i in infos[:200]]
+            if len(infos) > 200:
+                listed.append("- ... and %d more" % (len(infos) - 200))
+            listed += ["- %s (not read: %s)" % b for b in list(broken)[:20]]
+            out.append("Files in the archive (%d%s):\n\n%s" % (
+                len(infos), ", and %d that are not whole" % len(broken) if broken else "", "\n".join(listed)))
             for n, i in enumerate(infos[:30], 1):
                 ext = os.path.splitext(i.filename.lower())[1]
                 if ext not in ZIP_TEXT + ZIP_DOCS or i.file_size > 20 * 1024 * 1024 or read > 60 * 1024 * 1024:
                     continue
-                data = z.read(i)
+                try:
+                    data = z.read(i)
+                except Exception as e:                        # noqa: BLE001  (a CRC that does not match, data that breaks)
+                    out.append("## %s\n\n(it does not unpack: %s)" % (i.filename, str(e)[:80] or type(e).__name__))
+                    continue
                 read += len(data)
                 if ext in ZIP_TEXT:
                     text, _enc = smart_decode(data, "")
@@ -4876,12 +5256,62 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
     kept and keep what it lost (references/documents.md), so --setup installs no pandoc, and no
     markitdown either. A machine's own pandoc, then its markitdown, are the last resort for an
     office file the office readers cannot read. `name`: a file's name inside an archive (its
-    tables are reported by it)."""
+    tables are reported by it, and so is an archive of it that is not whole).
+
+    An archive that does not open whole is read from its members that are (zip_whole); an office
+    file whose members do not all unpack, from the ones that do (zip_mend). What was wrong with the
+    read's own document is _ZIPS["read"], which its answer's status and advice are made of; a
+    member's goes into its note. A file that is no ZIP is named for what it is (text is its text),
+    and no machine's pandoc or markitdown is asked about either: they read archives as zipfile does."""
+    src, broke = path, None
+    if kind == "zip":
+        path, broke = zip_whole(path, workdir)
+        if not name:
+            _ZIPS["read"] = broke
+        if path is None:
+            text = ""
+            if broke.get("what") == "text":
+                try:
+                    with open(src, "rb") as fh:
+                        text = smart_decode(fh.read(MAX_PAGE_BYTES), "")[0]
+                except OSError:
+                    text = ""
+            return text, (broke["reason"] if name else "")
+    state = {"broke": broke}
+    text, note = _doc_text(path, kind, c, workdir, alternate, name, state)
+    if state["broke"] is not broke and not name:
+        _ZIPS["read"] = state["broke"]
+    if name and state["broke"]:
+        note = "; ".join(x for x in (state["broke"]["reason"], note) if x)
+    return text, note
+
+
+def _doc_text(path, kind, c, workdir, alternate, name, state):
+    """doc_text() of an archive that opens; state["broke"] is what was wrong with it, and an office
+    file whose members do not all unpack sets it (zip_mend)."""
     note = ""
     sub = zip_subtype(path) if kind == "zip" else ""
     secs = budget.cap(CONVERTER_TIMEOUT, floor=1.0)
     if sub in ("docx", "xlsx", "pptx"):
         fast = office_fast(path, sub)
+        if len(fast.strip()) <= 5 and not state["broke"] and _OFFICE.get("damaged"):
+            # a member python-docx, python-pptx or openpyxl met does not unpack: the ones that do
+            dest = os.path.join(workdir, "_mended-%s.zip" % hashlib.sha1(
+                os.path.abspath(path).encode("utf-8")).hexdigest()[:8])
+            try:
+                info = zip_mend(path, dest)
+            except Exception as e:                            # noqa: BLE001
+                debuglog.exc("zip: mend", e)
+                info = None
+            if info and info["broken"]:
+                info["reason"] = zip_reason(info)
+                info["path"] = dest if info["whole"] else ""
+                state["broke"] = info
+                trace("zip.mend", members=info["members"], whole=len(info["whole"]), broken=len(info["broken"]))
+                if not info["whole"]:
+                    return "", ""
+                path = dest
+                fast = office_fast(path, sub)
         if len(fast.strip()) > 5:
             return fast, ""
     if kind == "rtf" or sub == "odt":
@@ -4973,7 +5403,8 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
                             "and look at them")
                 return text, note
     if sub == "other":
-        text = zip_text(path, c, workdir)               # a plain archive: its files and their text
+        # a plain archive: its files and their text (a cut one's members that are not whole listed)
+        text = zip_text(path, c, workdir, (state["broke"] or {}).get("broken") or ())
         if text.strip():
             return text, note
     elif sub == "epub":
@@ -4981,7 +5412,9 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
         if md.strip() or not why.startswith("the reader failed"):
             return md, why or note or ("" if md.strip() else "no text in this EPUB")
         note = note or why
-    elif kind == "zip" and c["cli"].get("pandoc"):
+    if state["broke"]:
+        return "", note                                 # what is whole of it has been read
+    if kind == "zip" and sub not in ("other", "epub") and c["cli"].get("pandoc"):
         # a machine's own pandoc: the last resort for an office file the office readers cannot read
         # (a DOCX that is one formula; --setup installs none)
         md = pandoc_md(c["cli"]["pandoc"], path, sub if sub in ("docx", "pptx", "xlsx") else "", secs)
@@ -5932,9 +6365,17 @@ def gaps(c, ctx):
     if ctx.get("need_browser") and (ctx.get("browser_disabled") or not c.get("browsers")):
         spec_m.append({"what": "browser", "fix": fix("browser", "install Chrome or Edge, then pip install patchright"),
                        "gain": "JavaScript pages and hash routes (this page needs it)"})
+    # kind_doc: a PDF, which pymupdf, pdftotext or a machine's markitdown read. An EPUB, ODT or RTF is
+    # our readers' (the standard library), an archive that is cut or no ZIP no engine's: nothing to install
+    # (the gap was named for any archive, and pymupdf reads none of them here)
     if ctx.get("kind_doc") and not (libs.get("pymupdf") or cli.get("markitdown") or cli.get("pdftotext")):
         spec_m.append({"what": "documents", "fix": fix("pymupdf", "pip install pymupdf"),
                        "gain": "reading this file type"})
+    elif ctx.get("office_lib") and not (cli.get("markitdown") or cli.get("pandoc")):
+        # a DOCX, XLSX or PPTX whose library did not import here (python-docx, openpyxl, python-pptx),
+        # on a machine with neither of the last resorts
+        spec_m.append({"what": "documents", "fix": fix(ctx["office_lib"], "pip install " + ctx["office_lib"]),
+                       "gain": "reading this file type (%s)" % ctx["office_lib"]})
     if ctx.get("no_text_layer") and c.get("ocr_error") and not (cli.get("tesseract") or libs.get("tesserocr")):
         # OCR is installed and cannot start: a gap of this scan, said as one - not an `empty` with no word of it
         spec_m.append({"what": "ocr", "fix": ownenv.ocr_fix(c["ocr_error"]) or fix("tesseract", "reinstall tesseract"),
@@ -6793,6 +7234,7 @@ def zip_images(path, workdir, limit=PAGE_LIMIT):
     import zipfile
     try:
         z = zipfile.ZipFile(path)
+        docreaders.fix_zip_names(z)                  # the names an EPUB's spine gives, in a code page with no flag
     except Exception:                                # noqa: BLE001
         return []
     imgdir = os.path.join(workdir, "img")
@@ -7178,6 +7620,8 @@ def read(args):
     debuglog.begin()
     tables_reset()
     _DOCS["spent"] = 0.0                       # the read's converter clock for EPUB, ODT and RTF
+    _ZIPS.clear()
+    _OFFICE.clear()
     _CAPS_RUN.clear()
     _RENDER_STOP.clear()
     _BROWSER_UP.clear()
@@ -7662,12 +8106,22 @@ def read(args):
             # docx/xlsx/pptx/epub have no rendered pages: say it instead of returning nothing
             manifest["signals"]["screenshot_unsupported"] = (
                 "this is an archive (docx/xlsx/pptx/epub); --screenshots covers pages and PDFs")
-        manifest["chain"]["tried"].append("document:" + ("pymupdf" if kind == "pdf" else zip_subtype(raw_path)))
+        broke = _ZIPS.get("read")              # an archive that does not open whole: what of it is
+        read_path = (broke or {}).get("path") or raw_path
+        manifest["chain"]["tried"].append("document:" + ("pymupdf" if kind == "pdf" else
+                                                         "not-zip" if broke and broke["how"] == "not a ZIP"
+                                                         else zip_subtype(read_path)))
         if tables_signal():
             # the layout model was asked, or pages were left for it (in a PDF of an archive too)
             manifest["chain"]["tried"].append("tables:pymupdf4llm")
+        if broke:
+            manifest["signals"]["broken_archive"] = dict(
+                {k: broke[k] for k in ("how", "what") if broke.get(k)},
+                **({} if broke["how"] == "not a ZIP" else {
+                    "members": broke["members"], "whole": len(broke["whole"]),
+                    "not_whole": ["%s: %s" % b for b in broke["broken"][:20]]}))
         if kind == "zip":
-            zimg = zip_images(raw_path, workdir)
+            zimg = zip_images(read_path, workdir)
             if zimg:
                 ordered = any(e.get("order") for e in zimg)
                 # a picture the text names stands there; the rest follow in document order
@@ -8193,6 +8647,8 @@ def read(args):
     word_count = words_of(text)
     cut = bool(manifest["signals"].get("partial"))
     error_why = ""
+    # an archive that is cut, damaged or no ZIP at all: what was read of it is the text
+    broke = _ZIPS.get("read") if kind == "zip" and source == "http" else None
     if network_fail and source == "http":          # no reader or archive answered for it
         manifest["status"] = "error"
         error_why = "the host did not answer" + (": " + str(f.get("error"))[:160] if f.get("error") else "")
@@ -8217,6 +8673,10 @@ def read(args):
     elif by_code == "error":
         manifest["status"] = "error"
         error_why = "HTTP %s from the %s; its own page is the text" % (source_code, SOURCE_NAMES.get(code_from or source, source))
+    elif broke and broke["how"] != "not a ZIP" and word_count < 40:
+        # the members that are whole hold a few words or none: not the document (40, as a transfer cut)
+        manifest["status"] = "error"
+        error_why = broke["reason"]
     elif not (text or "").strip():
         manifest["status"] = "empty"
     elif word_count < 5 and not str(engine or "").startswith("server:"):
@@ -8233,7 +8693,7 @@ def read(args):
         "not_found": ("HTTP %s" % f["status"]) if f["status"] in (404, 410)
                      else "the text says the page is not there",
         "empty": ("binary body" if manifest["signals"].get("binary") else
-                  ("no text found (%d words)" % word_count)),
+                  broke["reason"] if broke else ("no text found (%d words)" % word_count)),
         "media_only": "the URL is a file, not a page",
         "too_large": ((manifest["signals"].get("limit") or "over the limit")),
         "ok": "%d words, engine %s" % (word_count, engine or "?"),
@@ -8297,6 +8757,8 @@ def read(args):
         manifest["advice"] = ("the page is gone; the archive was tried" if external_allowed else
                               "the page is gone; rerun with %s to try the archive" % out_flag if out_flag
                               else "the page is gone")
+    elif broke:
+        manifest["advice"] = zip_advice(broke, local)
     elif manifest["status"] == "empty":
         if manifest["signals"].get("binary"):
             manifest["advice"] = "the response is binary, not a page; there is no text to read"
@@ -8353,7 +8815,7 @@ def read(args):
             manifest["signals"]["cookies"]["stored"] = len(load_cookies(url))
 
     m, im = gaps(c, {"need_browser": need_browser, "browser_disabled": "browser" in SKIP,
-                     "kind_doc": kind in ("pdf", "zip"),
+                     "kind_doc": kind == "pdf", "office_lib": _OFFICE.get("missing") if kind == "zip" else "",
                      "blocked": blocked_http, "no_text_layer": bool(no_text_layer),
                      "ocr_missing": ocr_missing, "pdf_tables": pdf_tables_wanted,
                      "video": bool(VIDEO_URL.search(url))})

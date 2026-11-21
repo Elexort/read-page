@@ -120,6 +120,32 @@ check("empty machine + a JavaScript shell: browser and extractor asked for",
 m, i, text = gaps_for(mod, empty, {"kind_doc": True})
 check("empty machine + a document: a document reader is asked for",
       "documents" in m or "documents" in i, text[:90])
+# an EPUB, ODT or RTF is our readers' (the standard library), a plain or cut archive no engine's: nothing
+# to install for them - the gap was named for any archive (kind_doc was "pdf or zip")
+m, i, text = gaps_for(mod, empty, {"kind_doc": False})
+check("empty machine + an EPUB or ODT (our readers'): no document reader is asked for",
+      "documents" not in m and "documents" not in i, text[:90])
+m, i, text = gaps_for(mod, empty, {"office_lib": "python-docx"})
+check("empty machine + a DOCX whose library is not here: that library is named, not pymupdf",
+      "documents" in m and "python-docx" in text and "pymupdf" not in text, text[:120])
+d = tempfile.mkdtemp(prefix="audit-doc-")
+import zipfile  # noqa: E402
+with zipfile.ZipFile(os.path.join(d, "book.epub"), "w") as z:
+    z.writestr("mimetype", "application/epub+zip")
+    z.writestr("META-INF/container.xml", '<container><rootfiles><rootfile full-path="c.opf"/></rootfiles></container>')
+    z.writestr("c.opf", '<package><manifest><item id="a" href="a.xhtml" media-type="application/xhtml+xml"/>'
+                        '</manifest><spine><itemref idref="a"/></spine></package>')
+    z.writestr("a.xhtml", "<html><body><p>%s</p></body></html>" % ("An EPUB read by our own reader. " * 20))
+os.environ["READ_PAGE_CACHE"] = os.path.join(d, "cache")
+rc, out, _m = inproc([os.path.join(d, "book.epub"), "--json"], patch={"caps": lambda: caps_of()})
+try:
+    man = json.loads(out)
+except ValueError:
+    man = {}
+check("an EPUB read on a machine without pymupdf, pdftotext or markitdown asks for no document reader",
+      man.get("status") == "ok" and not [x for x in (man.get("missing") or []) + (man.get("improve") or [])
+                                         if x.get("what") == "documents"],
+      "%s %s" % (man.get("status"), json.dumps(man.get("missing"))[:120]))
 m, i, text = gaps_for(mod, empty, {"no_text_layer": True})
 check("empty machine + a scan: OCR is asked for", "ocr" in i or "ocr" in m, text[:90])
 m, i, text = gaps_for(mod, empty, {"video": True})

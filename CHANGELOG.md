@@ -8,6 +8,28 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **An archive cut, damaged or no ZIP** (KNOWN-ISSUES 167) was answered "no converter for this file type",
+  after a machine's markitdown had spent its 4 s on it. A cut or damaged archive is read member by member from
+  the members' own headers (`zip_whole`, `zip_salvage`), the whole ones read as the archive would be: a DOCX
+  cut in its picture reads its whole text, a plain ZIP lists the members that are not whole with why. An
+  office file whose members do not all unpack is read from the ones that do (`zip_mend`: python-docx gave up
+  on a picture with a bad CRC). `signals.broken_archive` says how, how many members were found and whole, and
+  which are not; under 40 words is `error`, more is `ok`, and the advice says what of it was read and what gets
+  the rest: a whole copy of a local file, `--refresh` for a server's (the same bytes while its copy is cut).
+  A file whose name or type says ZIP and whose bytes do not is named: a Word, Excel or PowerPoint 97-2003 file,
+  a password-protected Office file, gzip, 7-Zip, a picture, text (its text is the answer). Capped as the
+  readers are (32 MB a member, 128 MB in all, 10 000 members, one member in memory at a time): 10 000 members
+  in 0.3 s, a member that unpacks to 256 MB in 0.2 s and 98 MB. `zip_text` says under a member's name that it
+  does not unpack (one such member ended the listing's reading).
+- The "documents" gap (install pymupdf) is a PDF's alone (KNOWN-ISSUES 177): it was named for an EPUB or ODT
+  read on a machine without pymupdf, pdftotext or markitdown, which our readers read with the standard library.
+  A DOCX, XLSX or PPTX whose library does not import names that library instead.
+- **ZIP member names in a code page** (KNOWN-ISSUES 178, from a Chinese Windows audit): a name with no UTF-8
+  flag was read as CP437, so Windows' own zipper's GBK names came out as "╦╡├≈.txt", an EPUB named in GBK lost
+  its chapters, and a Shift-JIS 表 lost its backslash byte to a "/". A name whose CP437 reading is no name is
+  read as UTF-8 when it is, else in the CJK code page that decodes the archive's names into its script (the
+  machine's own first; kana for Shift-JIS, GB2312's characters for GBK, Big5, Hangul); ASCII and CP437 names of
+  accented letters stay (`docreaders.fix_zip_names`).
 - CI: the repository is public, so `macos.yml` runs on every push to dev, as `tests.yml` does.
 - **The installer's open rows** (KNOWN-ISSUES 142-145, 151):
   - Sources: every setting that sends an installer elsewhere than its default or skips a check - uv's index,
