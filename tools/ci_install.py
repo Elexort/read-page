@@ -557,6 +557,10 @@ def cmd_suites(a):
     print("suites run under %s" % py)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     env.pop("READ_PAGE_SETUP_WAIT", None)
+    if a.no_xutf8:
+        # the locale's encoding stays, but a test's own FAIL line must not end the suite when its detail holds a letter
+        # the code page lacks (Cyrillic under Big5, cp950: UnicodeEncodeError in print) - that is not what is tested
+        env.setdefault("PYTHONIOENCODING", ":replace")
     # what a read going into the environment would have: its programs first on PATH, its browsers and OCR data.
     # The suites also import the skill in-process, under the environment's Python but with no hop to set that up
     # (browser_live found no browser and skipped: it passed, testing nothing)
