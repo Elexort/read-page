@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+# a maintainer's own notes for this checkout, and Claude Code's local state (worktrees, settings)
+CLAUDE.local.md
+.claude/
+tests/corpus_results.json
+tests/fixtures/

@@ -1,0 +1,691 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "read-page manifest",
+  "description": "Contract of the JSON printed by scripts/readpage.py (schema 1). Documented here, enforced by tests/props.py: a manifest may not use a top-level or sub-field that is missing from this file, so this document cannot quietly drift from the code.",
+  "type": "object",
+  "required": [
+    "schema",
+    "generator",
+    "status",
+    "url",
+    "content",
+    "signals",
+    "files",
+    "dir"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "generator": {
+      "type": "string",
+      "const": "read-page"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "ok",
+        "blocked",
+        "login_required",
+        "not_found",
+        "empty",
+        "media_only",
+        "too_large",
+        "error"
+      ]
+    },
+    "advice": {
+      "type": "string",
+      "description": "one sentence, the single next step"
+    },
+    "dir": {
+      "type": "string",
+      "description": "the folder the artefacts are in"
+    },
+    "elapsed_ms": {
+      "type": "integer"
+    },
+    "cache": {
+      "type": "string",
+      "enum": [
+        "hit",
+        "miss",
+        "revalidated"
+      ]
+    },
+    "url": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested"
+      ],
+      "properties": {
+        "requested": {
+          "type": "string"
+        },
+        "final": {
+          "type": "string"
+        },
+        "http_status": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "charset": {
+          "type": "string"
+        },
+        "etag": {
+          "type": "string"
+        },
+        "last_modified": {
+          "type": "string"
+        },
+        "bytes": {
+          "type": "integer"
+        }
+      }
+    },
+    "content": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine"
+      ],
+      "properties": {
+        "engine": {
+          "type": "string"
+        },
+        "quality": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ]
+        },
+        "chars": {
+          "type": "integer"
+        },
+        "words": {
+          "type": "integer"
+        },
+        "headings": {
+          "type": "integer"
+        },
+        "cover": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "text words / visible words"
+        },
+        "large": {
+          "type": "boolean"
+        },
+        "restored": {
+          "type": "integer",
+          "description": "blocks of page.md the extractor dropped that were put back in place"
+        },
+        "restored_bytes": {
+          "type": "integer"
+        },
+        "outside": {
+          "type": "integer",
+          "description": "bytes of page.md still outside the text: menus, link lists, fragments, banners"
+        },
+        "title": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      }
+    },
+    "signals": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "status_reason is set by the code for every normal answer (including a crash); it is not required here so an older entry still validates.",
+      "required": [],
+      "properties": {
+        "status_reason": {
+          "type": "string"
+        },
+        "fragment": {
+          "type": "boolean"
+        },
+        "blocked": {
+          "type": "boolean"
+        },
+        "blocked_http": {
+          "type": "boolean"
+        },
+        "block_text": {
+          "type": "boolean"
+        },
+        "js_shell": {
+          "type": "boolean"
+        },
+        "soft_404": {
+          "type": "boolean"
+        },
+        "binary": {
+          "type": "boolean"
+        },
+        "note": {
+          "type": "string"
+        },
+        "login_hint": {
+          "type": "string"
+        },
+        "network": {
+          "type": "string"
+        },
+        "http_status": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tls": {
+          "type": "string"
+        },
+        "render_status": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "render_partial": {
+          "type": "boolean"
+        },
+        "browser_waited": {
+          "type": "string",
+          "description": "networkidle | mount:<selector> | body - the extra wait that produced the text, empty when the first pass had it"
+        },
+        "revalidated": {
+          "type": "boolean"
+        },
+        "extractors_agree": {
+          "type": "boolean"
+        },
+        "images_truncated": {
+          "type": "integer"
+        },
+        "images_denied": {
+          "type": "integer"
+        },
+        "images_private_skipped": {
+          "type": "integer"
+        },
+        "partial": {
+          "type": "boolean",
+          "description": "the transfer was cut (a timeout or a broken connection): the text may stop early"
+        },
+        "render_error": {
+          "type": "string",
+          "description": "the browser showed its own error page (ERR_..., HTTP ERROR 503); its text was not used"
+        },
+        "external_status": {
+          "type": "integer"
+        },
+        "external": {
+          "type": "string"
+        },
+        "browser_blocked": {
+          "type": "integer",
+          "description": "requests of a public page to the local network or a non-web scheme that the browser was not allowed to make"
+        },
+        "browser_inside": {
+          "type": "string",
+          "description": "where a public page's browser reached into the local network through a redirect (host:port) on a machine whose own proxy keeps netguard aside; its text was not used, and the advice names the flag that reads the page another way"
+        },
+        "images_reused": {
+          "type": "integer",
+          "description": "pictures taken by a hard link from another page of the same host"
+        },
+        "images_outside": {
+          "type": "integer",
+          "description": "pictures of the page the text does not show (menus, footers); page.md has them"
+        },
+        "images_ordered": {
+          "type": "boolean"
+        },
+        "meta_refresh": {
+          "type": "string"
+        },
+        "archived": {
+          "type": "string"
+        },
+        "rescued_after": {
+          "type": "string",
+          "description": "the text is a reader's or the archive's because the live page did not answer (\"no answer\") or answered 5xx (\"HTTP 503\"); the cache keeps such an answer 60 s, not 15 minutes"
+        },
+        "scanned": {
+          "type": "boolean"
+        },
+        "ocr_pages": {
+          "type": "integer"
+        },
+        "no_transcript": {
+          "type": "string",
+          "description": "a video address without subtitles: why, and the page itself was read as a page"
+        },
+        "ocr_timeouts": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "pages whose OCR did not finish in time; the text marks the gap, the other pages are kept"
+        },
+        "ocr_langs": {
+          "type": "string"
+        },
+        "ocr_missing_langs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "env_failed": {
+          "type": "string",
+          "description": "the skill's own environment (readpage.py --setup) has a Python that started and ended before the read began: why; this read ran in the machine's Python"
+        },
+        "ocr_error": {
+          "type": "string",
+          "description": "OCR is installed and does not start (tesserocr: a path it cannot open, a pack cut short): why; the answer names it as missing: ocr"
+        },
+        "cookies": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sent": {
+              "type": "integer"
+            },
+            "stored": {
+              "type": "integer"
+            }
+          }
+        },
+        "tables": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "a PDF's tables, laid out by the layout model, for every PDF of the read (the PDF itself, the PDFs of a ZIP, an archived copy; one 10 s a read for them all): the pages where a table stands as Markdown, how many tables, the model's seconds, the pages of the document, and `left` - pages that look like a table and were not laid out: the time a read has ran out (--download lays them all out), a page was too heavy for it (`heavy`), or the model stopped (`error`). Said also when the model was asked and kept nothing. With --alternate (`markdown`) the model lays out the document as Markdown, and `left` names the pages that stayed PyMuPDF's text",
+          "properties": {
+            "pages": {
+              "type": "string",
+              "description": "page numbers from 1 as ranges, as the advice writes them: \"2, 8-9, 28-600\""
+            },
+            "left": {
+              "type": "string",
+              "description": "page numbers from 1 as ranges, as the advice writes them: \"2, 8-9, 28-600\""
+            },
+            "heavy": {
+              "type": "string",
+              "description": "of `left`, the pages too heavy for a read's time (over 8 000 vector paths, or 2 000 words in one block of text): not asked, except with --download"
+            },
+            "more": {
+              "type": "boolean",
+              "description": "after the time ran out, pages were judged by their text alone: one with rulings only may look like a table and not be named"
+            },
+            "tables": {
+              "type": "integer"
+            },
+            "asked": {
+              "type": "integer",
+              "description": "pages the model answered about"
+            },
+            "secs": {
+              "type": "number"
+            },
+            "of": {
+              "type": "integer"
+            },
+            "error": {
+              "type": "string",
+              "description": "why the model did not work: it does not load here (pymupdf4llm needs onnxruntime), its process ended - the pages from there are in `left` - or a page failed (the other pages are still asked)"
+            },
+            "markdown": {
+              "type": "boolean",
+              "description": "--alternate: the pages are pymupdf4llm's Markdown, not the tables step's"
+            },
+            "files": {
+              "type": "array",
+              "description": "the PDFs inside a ZIP: each one's name, pages laid out, pages left (and too heavy), tables and pages",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "pages": {
+                    "type": "string",
+                    "description": "page numbers from 1 as ranges, as the advice writes them: \"2, 8-9, 28-600\""
+                  },
+                  "left": {
+                    "type": "string",
+                    "description": "page numbers from 1 as ranges, as the advice writes them: \"2, 8-9, 28-600\""
+                  },
+                  "heavy": {
+                    "type": "string",
+                    "description": "page numbers from 1 as ranges, as the advice writes them: \"2, 8-9, 28-600\""
+                  },
+                  "more": {
+                    "type": "boolean"
+                  },
+                  "tables": {
+                    "type": "integer"
+                  },
+                  "of": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "scheme": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "string"
+        },
+        "screenshots": {
+          "type": "integer"
+        },
+        "screenshot_tiles_needed": {
+          "type": "integer",
+          "description": "how many tiles the page has, when fewer were returned than that"
+        },
+        "screenshots_format": {
+          "type": "string"
+        },
+        "screenshot_unsupported": {
+          "type": "string"
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "page": {
+          "type": "string"
+        },
+        "raw": {
+          "type": "string"
+        },
+        "media": {
+          "type": "string"
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "screenshots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "canonical": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string"
+        },
+        "published": {
+          "type": "string"
+        },
+        "lang": {
+          "type": "string"
+        },
+        "site": {
+          "type": "string"
+        }
+      }
+    },
+    "privacy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        },
+        "refused": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "override": {
+          "type": "boolean",
+          "description": "--force-external sent a URL that may carry a secret"
+        },
+        "conflict": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "which flag met which rule: [\"force_external wins\", \"secret heuristic ignored\"] or [\"force_external refused\", \"internal host\"]"
+        }
+      }
+    },
+    "chain": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tried": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "images": {
+      "type": "array",
+      "description": "the text's pictures in the order they appear, then those of page.md or --download; the number is the marker's and the file's",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "n"
+        ],
+        "properties": {
+          "n": {
+            "type": "integer",
+            "description": "#n in the marker [img #n · ...] and the NN- of the file"
+          },
+          "url": {
+            "type": "string"
+          },
+          "alt": {
+            "type": "string"
+          },
+          "in": {
+            "type": "string",
+            "enum": [
+              "text",
+              "page",
+              "list"
+            ],
+            "description": "text: in content.md; page: page.md or --download only; list: a document's picture with no place in the text"
+          },
+          "file": {
+            "type": "string",
+            "description": "img/NN-words.ext; absent when it was not downloaded"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "dims": {
+            "type": "string"
+          },
+          "why": {
+            "type": "string",
+            "description": "why there is no file: 404, timeout, no time (N s), refused: ..., --deny-images"
+          },
+          "failed_at": {
+            "type": "integer",
+            "description": "when the network failed it (Unix seconds): an answer printed PICTURE_RETRY_AFTER (30 s) later asks it once more"
+          },
+          "retried": {
+            "type": "boolean",
+            "description": "it failed again when asked once more: it is not asked again"
+          },
+          "reused": {
+            "type": "string",
+            "enum": [
+              "link",
+              "copy"
+            ],
+            "description": "taken from another page of the same host instead of the network"
+          },
+          "etag": {
+            "type": "string"
+          },
+          "last_modified": {
+            "type": "string"
+          },
+          "revalidated": {
+            "type": "boolean",
+            "description": "--refresh asked with the validators and the server answered 304: the file was kept"
+          },
+          "order": {
+            "type": "integer",
+            "description": "a document's picture: its place in document.xml or the EPUB spine"
+          }
+        }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "missing": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "improve": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "archive": {
+      "type": "object"
+    },
+    "video": {
+      "type": "object"
+    },
+    "screenshots": {
+      "type": "array",
+      "description": "the page as 1280 px wide tiles, never scaled; N is how many were asked for",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "file",
+          "width",
+          "height",
+          "bytes",
+          "format"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "format": {
+            "enum": [
+              "png",
+              "jpg"
+            ]
+          }
+        }
+      }
+    },
+    "ignored": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "this call's arguments that are not read-page's flags, or values it cannot use: left out, the read went on; only in --json output, never in the saved manifest"
+    },
+    "ocr": {
+      "type": "object",
+      "description": "--ocr N only (never in the saved manifest): picture N, how its text was read, or why not",
+      "properties": {
+        "n": {
+          "type": "integer"
+        },
+        "file": {
+          "type": "string"
+        },
+        "engine": {
+          "type": "string"
+        },
+        "langs": {
+          "type": "string"
+        },
+        "pass": {
+          "type": "string"
+        },
+        "seconds": {
+          "type": "number"
+        },
+        "why": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

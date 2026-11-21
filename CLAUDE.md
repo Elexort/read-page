@@ -1,0 +1,66 @@
+# read-page: notes for working on this repo
+
+This file is for developing the skill. Agents that use it read `SKILL.md`; the engine is
+`scripts/readpage.py` with its modules in `scripts/`; the details agents may need are in `references/`.
+
+Notes about one maintainer's machine and way of working live in `CLAUDE.local.md`: it is
+git-ignored, so a contributor may keep a file of their own under that name.
+
+## Rules
+- The skill serves any agent, OS and shell, weak models included. Nothing is tailored to one
+  harness or to one machine.
+- `SKILL.md` stays the procedure, about 1 400 tokens; details go to `references/`.
+- The skill installs nothing without the user's consent. Keys are the user's own.
+- While the maintainer runs agent tests (headless agent sessions, weak models), `SKILL.md`,
+  `references/` and `scripts/` stay as they are; the maintainer does not always announce a run, so
+  ask when unsure.
+- Measure before adopting a change. Fix a defect with a failing test first.
+- Keep the documents current as you go, not at the end; a context compaction loses what is not
+  written down. A change carries its docs in the same commit: `CHANGELOG.md` (Unreleased),
+  `KNOWN-ISSUES.md` (a row, and the counts in `README.md`), test counts in `README.md`,
+  `references/*` and `references/manifest-schema.json`.
+
+## Tests
+- Each suite: `python -X utf8 tests/<suite>.py` from the repo root; it ends with `N ok, M failed`.
+  Run them with `PYTHONDONTWRITEBYTECODE=1` (Claude Code sets it; a plain terminal does not):
+  the suites import the skill's modules, and a `__pycache__` beside them is listed to agents.
+- Offline: reading sources blocks images speed mcp_parallel timeouts deadline formats statuses
+  security contract props fixes channel office_fixtures mcp_smoke setup_audit environment. Live:
+  browser_live, sources_live.
+- On a machine where `readpage.py --setup` has run, every suite that starts `readpage.py` or the
+  MCP server as a process tests the environment's engines (they go under its Python by
+  themselves); in-process checks use the Python the suite runs in. `READ_PAGE_SKIP=env` runs a
+  suite without it; CI has none.
+- While working, run the suites a change touches; before a commit, all of them (about 13 minutes).
+- Lint as CI does: `python -m ruff check --no-cache --select F scripts tests` (no `.ruff_cache` in
+  the skill's folder) and
+  `uvx vermin --target=3.8- --violations --no-tips --eval-annotations scripts tests`.
+- CI: `tests.yml` on every push (Ubuntu with Python 3.9 and 3.12, Windows, a browser job, lint);
+  `macos.yml` by hand before a release (`gh workflow run macos.yml --ref main`), not on every push.
+  Every suite runs even when an earlier one failed, so read all of a red run.
+- Bugs that belong to one OS (sockets and processes on Linux, paths and subprocesses on Windows)
+  show only there: CI's Ubuntu and Windows jobs, and its oldest Python (3.9), are the check.
+
+## Workflow
+- Two branches. `dev` is the development branch: the code, tests, CI, notes; work and commit
+  here. `main` is the skill alone - what a clone or a ZIP installs, and what the installed copy in
+  the skills folder is (a clone of main). Never commit to main by hand:
+  `python tools/publish.py --push --install <skills folder>/read-page` copies SKILL.md, README.md,
+  scripts/, references/, LICENSE and .gitattributes there, from dev's committed HEAD. Run it in a
+  dev working copy with a clean tree. Publish after every change: the suites green first, and not
+  on top of an agent test the maintainer said is running.
+- `--setup`'s versions are pinned: `scripts/envsetup.py` (uv, Python, Node, defuddle, tessdata),
+  `tools/setup_lock.py` (the Python packages; it writes `scripts/setup-lock.txt` with the SHA256 of
+  every file - the versions stay what the lock has until `PINS` moves them). uv's wheel and Node's
+  archive are pinned by SHA256 too (`UV_WHEEL_SHA256`, `NODE_SHA256`): they move with `UV_VERSION`
+  and `NODE_VERSION`, copied from PyPI's JSON and nodejs.org's `SHASUMS256.txt` (`tests/environment.py`
+  compares them with both when online). A pin moves only after the suites ran green with it. yt-dlp
+  alone is not pinned: the newest release that has been out three days, never older than the one
+  installed (`YTDLP_FLOATS` is what floats with it).
+- A packaged Windows app (MSIX; Claude's desktop app is one) gets a private copy of whatever its
+  processes write under `AppData\Local` or `AppData\Roaming`
+  (`AppData\Local\Packages\<app>\LocalCache\`): no other program sees it. `AppData\Local\Temp`
+  and the home folder are shared. To find out whether another program sees a file, look from
+  outside the app, never from inside it.
+- On Windows, stopping a background test run leaves its children alive: kill the tree with
+  `taskkill /T /PID <pid> /F` before starting another run.

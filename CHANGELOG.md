@@ -1,0 +1,1457 @@
+# Changelog
+
+## Unreleased (0.5.0)
+
+Two branches: `main` is the skill alone - SKILL.md, README.md, scripts/,
+references/, LICENSE and .gitattributes, 30 files - so a clone, a ZIP or an installer
+brings an agent nothing else; `dev` carries the code with its tests, CI, notes and this log.
+`tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
+of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
+
+**`readpage.py --setup`**
+- **one command installs every engine** into the skill's own environment, one folder of the user's
+  (`.read-page` in the home folder on Windows, `~/Library/Application Support/read-page`,
+  `$XDG_DATA_HOME` or `~/.local/share/read-page`; `READ_PAGE_HOME` moves it), never the skill's
+  folder: no questions (running it is the consent), no admin rights, the same pinned versions
+  everywhere - uv 0.13.9, CPython 3.13.18 (python-build-standalone), the 55 packages of
+  `scripts/setup-lock.txt` (curl_cffi, trafilatura, readability, html2text, PyMuPDF and
+  pymupdf4llm, youtube-transcript-api, Playwright, tesserocr with tesseract 5.5.4, pandoc 3.9 in
+  pypandoc_binary, Pillow, psutil, the Office readers), yt-dlp (alone not pinned, below),
+  Node 24.22.3 from nodejs.org checked against SHASUMS256.txt (nodejs-wheel-binaries from
+  PyPI when nodejs.org cannot be reached), defuddle 0.19.4 through that npm with its own 26
+  packages as of one day (`--before`), Playwright's
+  `chromium-headless-shell`, and English and Russian OCR data from tessdata_fast 4.1.0 with pinned
+  SHA256. Then every engine is checked on a sample. Its first line names the download (about 430 MB
+  on Windows, 480 on Linux, 380 on macOS) and what it keeps (1.2 GB on Windows), or says the folder is up
+  to date. From nothing 65-70 s on a 9 MB/s link (~48 of them downloads), an up-to-date
+  check 8 s; the steps side by side were built and measured (62/68 s against 68/65, WSL 83 against
+  79: the branches only shared the link) and not kept. (The first run, still with markitdown, took
+  1 min 47 s.) What it cannot do it names with this OS's command (OCR on Windows on
+  ARM and macOS 14 or older; a bare Linux's browser libraries). The work runs detached and the
+  command follows it for 100 s (to the end in a terminal), so a harness's timeout does not stop it;
+  a second `--setup` follows the first. Proxies: the machine's own (Windows' setting too) are passed
+  to uv, npm and Playwright; `PIP_INDEX_URL` becomes uv's index. Offline: one clear line, nothing
+  changed. Deleting the folder uninstalls it.
+- **the environment is used by itself**: `readpage.py` and `mcp_server.py` look at it before their
+  other imports and go on under its Python (POSIX: exec; Windows: a child on the same console in a
+  job that dies with the first process, its exit code and bytes passed through), its programs first
+  on PATH; the stdlib core works without it. +0.16 s a read (`--version` 0.18 -> 0.34 s).
+  `READ_PAGE_SKIP=env` keeps a run in its own Python; a broken environment is skipped and `--caps`
+  says why.
+- **on Windows the environment is in the home folder, not AppData** (found 2026-11-19 in agent
+  tests): Windows gives a packaged app - Claude's desktop app is one - a private copy of whatever
+  its processes write under AppData, so the environment an agent built from inside it did not exist
+  for another agent, a terminal or WSL ("not set up", every read in the machine's Python), and a second
+  `--setup` elsewhere would have fetched it all again. `.read-page` in the home folder is not
+  redirected (checked from WSL and from another agent's session) and is faster to reach from inside such an
+  app (a stat 49 us against 372; the hop 0.34 s against 0.40). uv's "Missing expected target
+  directory" at the Python step was the same redirection. macOS and Linux keep the OS's folder.
+- **yt-dlp is the one engine not pinned** (everything else is pinned and moves with the
+  skill; yt-dlp is kept current): `--setup` installs `yt-dlp[default]` in the newest release
+  that has been out three days (wheels only, under the lock's constraints; with yt-dlp-ejs), a
+  step of its own after the engines. A video read in the environment looks for a newer one every
+  three days - in a process of its own that no read waits for (`ytdlp.stamp`;
+  `READ_PAGE_SKIP=update` turns it off). The environment's yt-dlp gets the environment's Node for
+  YouTube's JavaScript challenges (`--js-runtimes`). The lock has 55 packages.
+- **`--alternate`, measured** (is the flag called at all, is it worth its engines).
+  238 hard pages read the way SKILL.md says, then again with the flag where the advice named it
+  and on a sample (72 pages both ways), and 14 headless agent sessions (three weak models) on
+  three walls, a thin script-built portal and a PDF
+  table. Agents call the flag when the advice names it and almost never otherwise: all 7 sessions
+  that met a wall called it at once (9 calls) and 6 went on to `--clear-cookies`; without advice,
+  one session of 7. At the 8 walls among those pages it opened nothing (the browser had been at 6
+  and met the same wall at the other 2). On pages that read `ok` the browser gave half as much text again or
+  more on 7 script-built portals of 72, less on 3, the same on the rest, at 6.8 s against 2.5.
+  What changed:
+  - a wall's advice no longer names it: `--allow-external` when the readers were not allowed yet,
+    `--force-external` when they were not asked, else no flag - "use another source, or see When
+    nothing works"; an empty page gets `--alternate` only when the browser has not run, else
+    `--screenshots`;
+  - a wall's own cookie is no stale session: the `--clear-cookies` hint (on 9 of the 11 walled
+    reads) needs cookies an earlier read had stored, and a read that ends `blocked` or
+    `login_required` drops the cookies it got there - and puts back the ones it found as they were
+    (a wall that re-set the session's own cookie, as a challenge cookie set on every answer does,
+    had left the jar with the wall's value until 2026-11-21);
+  - a page of under 200 words that carries 40 KB or more of data for its own scripts goes to the
+    browser by itself (`shipped_state`; not JSON-LD, which is for search engines - a product page
+    of 144 words went to the browser for 3.2 s and the same words): 4 of 168 HTML
+    pages, 30, 9 and 5 times the text on three of them (soundcloud 50 -> 1 526 words, aliexpress
+    79 -> 818, ivi 163 -> 894, 7-11 s instead of 1-5), the same text on one. An agent on ivi had
+    1.9 KB of 15, and gave up;
+  - `--alternate` on a scan with a few words of its own (a stamp, a page number) answered `empty`:
+    the text layer is now judged first, and pymupdf4llm's Markdown is taken only when it kept half
+    of the document's words;
+  - SKILL.md says when: a text thinner than its page, not a wall (edited lines, 5 698 -> 5 689
+    bytes); its description no longer promises text from an image or audio URL (they are saved
+    as files; a video gives its subtitles).
+  The flag stays: it is the one way to make the browser read a page
+  whose HTTP text passed for complete, and it costs no engine of its own any more - what it
+  alone used now works on every PDF read, below.
+- **a PDF's tables come as tables, without a flag** (PyMuPDF's own
+  finder and other tools were measured first, to see whether a lighter engine does it without
+  a loss). PyMuPDF's text has a table one cell a line. Measured on 94 tables of 9 arXiv papers
+  whose cells are known (their HTML on ar5iv, 889 rows) and 17 tables printed from HTML (250
+  rows), counting the rows that come out as a table row with each cell its own: PyMuPDF's
+  `find_tables()` 2 % and 65 % (9 % with `refine`), with tables made of figures; pdfplumber
+  0-17 % and 48-65 %, with thousands of rows that are no table; pymupdf4llm without its model
+  2 % and 64 %; with its layout model 68 % and 99 %. No lighter tool does it, so the model
+  earns its 77-83 MB on every read instead of behind a flag nobody called:
+  - the pages that look like they hold a table (a caption line, twelve lines that are one
+    number, or eight rulings: 49 % of 398 pages, 94 % of those where the model found one) go
+    through the model, and its tables stand as Markdown where the blocks they cover stood; the
+    rest of the page is PyMuPDF's text as before. First the cells were the model's own text, and
+    a table that would lose a tenth of its blocks' words was not used - which let cut and
+    scrambled cells through (below, "the page's own words");
+  - the model has 10 s a read; the pages it did not reach are in `signals.tables.left` and in
+    the advice, which names `--download` (no time limit: every page that looks like a table)
+    with an estimate of its seconds; `READ_PAGE_SKIP=tables` turns the step off; without the
+    model `improve` says how many pages look like a table;
+  - onnxruntime is held to four threads that do not spin while they wait (`calm_onnx`): as the
+    library sets it up a page took 0.23 s on 20 cores but 4.5 s on four slow ones and 1.8 s
+    (2.5 at most) on two, with 2.4 s of CPU for 0.3 s of work; now 0.23, 0.51 and 0.32 s. This
+    is also why `--alternate` on a PDF measured 0.4-1.8 s a page earlier that day;
+  - `--setup`'s report and `--caps` have a line for the model (`pymupdf4llm`);
+  - a cell that spans columns comes from the model cut at the grid's lines ("BLEU" over two
+    columns as "BL" and "EU", one value under both as "3.3 ·" and "1018"): cells of one line
+    are joined where the words on their two sides stand as near as words of one phrase; a
+    table whose box runs through a word of the page (an invoice's "Melbourne" as "lbourne") is
+    left as text;
+  - not `find_tables()` with the model switched on: its cells come out scrambled there (610.01
+    as "61001 .", PyMuPDF 1.28.2);
+  - two weak models asked for one cell of a table they cannot know by heart (the printed ones):
+    one right on 5 of 32 from PyMuPDF's text and 16 with the tables, the other
+    3 of 20 and 13 of 21; on the papers, whose numbers are widely quoted, the first 32 of 37
+    either way.
+- **a PDF's tables: the page's own words, inside the read's deadline** (an independent review
+  of 2026-11-20 found the tables above putting wrong text where right text stood, and one page
+  holding a read past its deadline; measured on the same corpus - 29 PDFs, 398 pages, 9 papers
+  with known cells - with the same scorer, before and after on one machine, the same day):
+  - the cells are the page's words: the model gives a table's box and its grid of cells, and
+    each cell gets PyMuPDF's whole words of the text blocks the table stands for - each word in
+    the cell that holds its centre, else the nearest (by bisection of the grid's lines). The
+    model's own cells had a character where more than half of it was inside, so a grid line cut
+    a word ("1 Intr | oduction", GPT-3's contents), a row line scattered a header's letters
+    ("Cbid CN dl" for "Combined ConvNet models"), points and commas across a line went ("5121"
+    for "5.1.2.1", "$32200"), and the tenth of words a table could lose let them through: on
+    the corpus 187 words of PyMuPDF's text missing and 277 added, now 0 and 0;
+  - a block is the table's when half its words' centres are inside its box (not its box's
+    centre: a block 32 % inside came twice, as a line and in the table), and a caption's lines
+    never are - its line and those that go on with it, each alone at its height, stay text where
+    they stood (VGG's Tables 3, 4 and 9 and Mask R-CNN's Table 7 had lost theirs: caption lines
+    137 of 142 -> 142); a table stands in place of its blocks only when its cells hold exactly
+    their words;
+  - cells one header spans are joined by the gap between the last word of one and the first of
+    the next alone (with whole words no word crosses a border); not a word set on its side, whose
+    height is its length (ViT's "Caltech101" and "CIFAR-100" had become one header), which the
+    box-cut test leaves out too (NIST 800-63B's table was lost to a rotated "Cryptographic");
+  - rows of the papers whole on one line 78 % -> 89 %, as table rows 70 % -> 74 %, tables kept
+    69 -> 74 of 94, the printed tables 99 % -> 100 % (no time limit); under the default 10 s the
+    same on a quiet machine (GPT-3's 30 pages with tables took the model 8.5 s), and on a busy one
+    70 % -> 73-78 % and 62 % -> 65-70 % (GPT-3's pages that look like a table did not all fit, 98
+    and 141 of its 242 rows whole). Measured and kept: the box-cut
+    test (without it 7 more rows whole, from tables that took sub-captions and an invoice's bank
+    line into cells) and the joined spans (11 rows more as table rows);
+  - the model runs in a process of its own (`scripts/pdftables.py`), and the read stops waiting
+    for it when its time is up: its call cannot be interrupted, and one page held a read past its
+    deadline and the MCP server's kill. The pages go to it one by one while the next are chosen,
+    and a process still at work at the end is killed. The process costs 0.15-0.22 s a read on a 20-core Windows machine
+    beside the model's own load of 0.7-0.8 s. Whole reads (the CLI, default limits, before ->
+    after): Attention 2.1 -> 2.4 s (4.7 -> 5.2 on four slow cores), GPT-3 9.7 -> 10.7 s (its 10 s
+    used to the end, 18 -> 20 pages laid out), NIST 800-63B 7.3 -> 7.2 s, a paper with no table
+    1.7 -> 2.0 s (3.6 -> 4.4 on four slow cores: two pages asked, nothing found); a plain read
+    0.6-0.7 s as before;
+  - a page over 8 000 vector paths or 2 000 words in one block of text is not asked in a read's
+    time: 20 010 separate strokes (a scatter plot drawn point by point) took the model 20-27 s,
+    and 8 040 words 8.5-17 s; no page of the corpus has over 4 975 paths or 976 words in a block.
+    It is in `left` and `heavy`, and the advice says it was too heavy; `--download` asks it. The
+    counts do not catch every slow page (2 010 strokes took 11 s), the killed process does: a
+    page of 5 010 strokes (20 s in the model) read in 2.2 s with a deadline of 2 s, 4.9 s with
+    5, 10.8 s with the real 55 (before: 20.7 s each); heavy2 and dense2 0.7-0.8 s (27.5 s and
+    17 s);
+  - one tables clock a read: every PDF of a read - in a ZIP, an archived copy - shares the 10 s,
+    and the manifest reports them (`signals.tables.files`, by name; the advice names their
+    pages): six copies of the Fed's H.8 in a ZIP read in 11.1 s against 48.1 s, unreported;
+  - `signals.tables` also when the step spent its seconds and kept nothing (a paper with no
+    table: 2 pages asked), and `error` when the model does not work: it does not load
+    (pymupdf4llm 1.28.2 does not even import without onnxruntime), or a page failed, which no
+    longer stops the other pages. `--caps` has a line for onnxruntime, and `improve` names it;
+  - `--alternate` on a PDF stays inside the read's time: pymupdf4llm's Markdown in calls that fit
+    what is left (calls of ten pages after a warm-up of two since the review below), the pages no
+    call reached stay PyMuPDF's text and are named, with `--download` in the advice. 600 pages of
+    tables read in 49.7 s, 111 of them as Markdown, against 262 s;
+  - onnxruntime's threads come from the CPUs the process may use where the OS says it
+    (`os.sched_getaffinity`, Linux), not the machine's count; on Windows `os.process_cpu_count()`
+    ignores the affinity mask (20 under a mask of 4), so there four threads may share two CPUs.
+- **the tables fix reviewed** (a second independent review, 2026-11-21: 0 high, 3 medium, 10 low;
+  the first review's findings closed on its runs, the numbers reproduced). Fixed, measured on the
+  same corpus and scorer, a failing test first:
+  - `--alternate` under load: one Markdown call of all that fit at 0.5 s a page (57 pages with
+    50 s left) was killed at the deadline with every page, and the step then said nothing - four
+    reads of GPT-3 at once on two slow cores, as the MCP server runs them, took 51 s each and gave
+    no page as Markdown, the advice speaking of tables. Now a warm-up call of two pages gives the
+    model's rate, then calls of ten pages at most that fit what is left, their headings levelled
+    by the heading sizes of every call so far (as one whole call on Attention, GPT-3, BERT and the
+    W-4); and what came back is said either way - `markdown`, `left`, "pages 27-75 are PyMuPDF's
+    plain text, not Markdown (the time for the layout ran out)". The same four reads: 26-27 of the
+    75 pages each as Markdown in 50 s; GPT-3 alone 26.6 s against 36.4;
+  - prose and notes inside a table's box were cut into cells at their word gaps where a cell held
+    two lines (a W-4's TIP paragraph, EfficientNet's footnotes over 13 cells; 52 cuts in 6
+    tables), and the exact-words check could not refuse them - it holds by construction, a guard
+    against loss and duplication, not placement. Such a line now stays text before or after the
+    table, as a caption does: no cut left, the rows whole the same (788 of 889), 654 as table
+    rows (653), every table and caption as before;
+  - a wall that re-set the session's own cookie or expired it had the last word in the jar (only
+    the names a wall brought were dropped): the entries before the read's first save are kept,
+    and a read that ends at a wall puts back what it changed;
+  - the model's process ends with the read: a thread watches the read's process (Windows: a wait
+    on its handle, POSIX: the parent), so a read killed from outside does not leave it at its page
+    18-24 s more (0.01 s); it starts with `-E -B`, so a caller's PYTHONPATH (another Python's
+    PyMuPDF) no longer costs every PDF its tables - xchild too. The tests reach it through
+    `READ_PAGE_TEST_MODEL_PATH`, which only `pdftables.py` reads. Left for the `--setup` work: the
+    hop's job is made after its child started, outside the venv launcher's (KNOWN-ISSUES 128);
+  - PubMed: a search for one record's number (`?term=ID`) and the old mobile address
+    (`/m/pubmed/ID`, which NCBI sends to the home page) go to the API;
+  - the cookie-wall phrases count up to 150 words on a page with no sections of its own (no
+    h2-h6): a 102-word block page served with 200 read as `ok`; the 127-word help page stays `ok`;
+  - the pages after the model's process ended are named, as the time's end names them, with why;
+    after the time `signals.tables.more` says a page of rulings only may be missing;
+  - a word is on its side by its line's direction, not its box (821 short horizontal words were
+    taken for rotated ones: Apple's "September 28, | 2024" stayed split); the words, blocks and
+    directions come from one text page (2.2 ms a page against 2.8 for two);
+  - JSON-LD is no data for the page's scripts: a short product page no longer goes to the browser;
+  - `signals.tables`' page lists are ranges ("28-600"): grid600's 573 numbers made the object
+    2 966 characters of every MCP answer;
+  - measured and not taken: splitting a grid row whose cells each hold k lines on shared heights
+    into k rows (5 rows more as table rows, 2 rows whole lost, 13 more rows that hold no table
+    row) - two rows of a page in one grid row stay together (KNOWN-ISSUES 127).
+- **the `--setup` review's findings, the first group** (an independent review of the installer and
+  the hop, 2026-11-20: 2 high, 7 medium, 10 low; the review's own inputs reproduced, a failing test
+  first, KNOWN-ISSUES 134-141 and 128). `tests/environment.py` 28 -> 87, `tests/setup_audit.py`
+  32 -> 35:
+  - **OCR under a path outside ASCII** (Windows, a profile named in another alphabet: `Иван`):
+    tesserocr hands tesseract the path in the ANSI code page, so OCR was dead - `--setup`'s check
+    said 4 of 5, the report said "Nothing is missing", a scan read as `empty`. tessdata now goes by
+    its 8.3 short name (`GetShortPathNameW`) when its path is not ASCII; OCR counts as working
+    (`caps()`, the report, `_tesserocr()`) only after tesseract has started on a pack; where it
+    does not (no short name, a damaged pack) a scan says `missing: ocr` with why (`signals.ocr_error`,
+    and the advice), and the fix named is `READ_PAGE_HOME` on an ASCII path. The real tesserocr
+    with the eng pack under a Cyrillic folder: `Failed to init API` before, "Setup check 2026" after;
+  - **the yt-dlp updater cannot go back**: it asked for `yt-dlp[default]` with no floor, under the
+    skill's current lock and a global three-day cutoff, so a lock pin younger than that sent uv to
+    yt-dlp 2022.3.8.2 (no `default` extra; exit 0, success, stamp written). Now
+    `yt-dlp[default]>=<installed>`, under the lock the environment was built from (a copy in
+    `envs/<id>/`; the skill's lock only where its hash is the folder's), the date only on what
+    floats (`--exclude-newer-package` for yt-dlp, yt-dlp-ejs, brotli, mutagen, pycryptodomex,
+    websockets), and a result older than the installed one is put back. A dry run:
+    2026.10.26 -> 2022.3.8.2 rc 0 before, "no solution" rc 1 (kept) after;
+  - **`--setup` follows only a run that is at work**: the updater held `setup.lock` for its whole
+    run and a `--setup` started meanwhile replayed the last run's log and exited 0 with nothing
+    done. Only a state that is not done, whose process is alive and whose lock is held is followed;
+    the updater has its own lock (`ytdlp.lock`) that a `--setup` waits for (5 min at most) and then
+    holds; a lock that cannot be opened is nobody's, a folder that cannot be written is said at
+    once; no pause after the updater's last try;
+  - **a Python with no root certificates** (python.org's on macOS before "Install
+    Certificates.command") is named, with the fix, instead of "--setup needs the internet";
+  - **`fetch()` refuses a body shorter than its Content-Length** (a cut `deu.traineddata` was kept
+    and every later `--setup` kept it), OCR language names with an underscore (`chi_sim`,
+    `deu_latf`, `srp_latn`) are fetched, a name that is no pack's is said, and a pack with no pinned
+    hash is kept only when tesseract starts with it (the check starts every pack);
+  - **detached work in a job that kills on close** (a harness that runs each command in one): the
+    worker and the updater died with the command, and the updater's stamp had already said "looked".
+    `_detached` says which way it went; an attached `--setup` is followed to its end, the updater is
+    not started where the job would end it; the stamp is touched after an update that worked (a
+    failed look waits an hour). The hop (KNOWN-ISSUES 128) puts itself in its job before it starts
+    the child, so everything it starts is born inside it - the same job nests inside a harness's
+    (checked: it does, and a breakaway from the inner job stops in the harness's, which is then the
+    one that ends the work). What a harness's job does to detached work is asked of a child that has
+    broken away - the job it lands in is the first that lets nothing leave - because a venv's
+    `python.exe` (an agent's usual way to start the skill on Windows) runs its interpreter in a job of
+    its own, kill on close and silent breakaway, nested in the harness's and all that interpreter
+    sees; the child is run by the base Python for the same reason, and with `-B` (`-I` ignores the
+    caller's no-bytecode wish). The first version read the job it was in: under a launcher it said
+    "free" and the work died with the command (found by CI's Python 3.9 venv on Windows). The hop
+    killed alone with a venv launcher below it left 2 of 4 processes alive before (5 of 6 runs),
+    none after (3 of 3);
+  - defuddle's `--before` is a full timestamp (`2026-11-19T00:00:00Z`): npm read the bare date as
+    midnight UTC and it binds defuddle's own version too; the same 27 packages (a real install of
+    each form against an environment already built), and a test that the pinned version was published
+    before it;
+  - the lows: the Linux browser advice no longer runs a user-writable interpreter as root
+    (`sudo apt-get install <the libraries>` from `playwright install-deps --dry-run`); a misspelled
+    `--setup` (`--stup`) is not sent into the environment; a tar on a Python without filters
+    (macOS's 3.9.6) extracts files and folders first and each link only where its place and
+    target resolve inside (a link chain wrote outside before, in WSL); defuddle is run as
+    `node <dist>/cli.js`, not through the npm `.cmd` shim, and any `.cmd` has its arguments quoted
+    for cmd.exe, not for the C runtime (an `&` in a profile folder's name split the command).
+- **the `--setup` review's findings, the second group** (KNOWN-ISSUES 147-150). `tests/environment.py`
+  87 -> 98:
+  - **what is downloaded is checked by content**: the lock carries the SHA256 of every file of
+    its 55 pins (`tools/setup_lock.py` with `--generate-hashes`: 1 099 hashes, 94 KB; the same
+    names, versions and markers as before, compared; a pin moves only through `PINS`). uv checks
+    hashes in `-r` and in `-c` (a wrong one fails both, tried), so the one-at-a-time fallback and the
+    yt-dlp step are covered, and yt-dlp, which floats and has none, installs under them. uv's wheel
+    (18 files, PyPI's JSON and its simple index agree) and Node's archive (8, nodejs.org's
+    SHASUMS256.txt) are pinned by SHA256 in `envsetup.py` and fetched against those - a mirror
+    serves the bytes, never their checksum; a file that is not pinned is not fetched, and a test
+    compares the tables with PyPI and nodejs.org (a typo would refuse every machine). The browser
+    (Playwright's download: TLS and a size, no hash anywhere) and yt-dlp are TLS only, and README and
+    `references/engines.md` say so. The environment id moves with the lock's text, so the next `--setup`
+    builds a folder for it from uv's cache;
+  - **one certificate store**: urllib trusted the OS's, uv its bundled Mozilla roots, Node its
+    own; behind a proxy that inspects TLS the check and uv's first download passed and the next step
+    failed on a certificate, with no advice. `UV_SYSTEM_CERTS=1` and `NODE_USE_SYSTEM_CA=1` (uv
+    0.13.9's `--system-certs` and Node 24's `--use-system-ca`, read in their own help; Node's store
+    118 roots bundled, 271 with the system's 153; Playwright's driver, Node 24.21, reads it too) are
+    set for every installer unless the user set them, and a step that fails on a certificate says so
+    once;
+  - **an environment Python that starts and fails** (an antivirus takes a DLL it needs): the
+    read was empty with the interpreter's own exit code, which SKILL.md calls a wrong call. A
+    start-up handshake - the parent makes a file, the child removes it as its first act - finds a
+    child that never reached the read; the read then runs in the machine's Python with an
+    `environment:` line (`signals.env_failed`), and `--caps` says why. On Windows every run, on POSIX
+    the first of each build (`setup.started`; after it `exec` is kept, and only that start is
+    guarded);
+  - **the docs say what lands outside the folder and what installs by itself**: `node-compile-cache`
+    and `pycache` in the temp folder, the read cache, yt-dlp's cache; the yt-dlp update of a video
+    read and `READ_PAGE_SKIP=update` (README had no word of it); the setup report no longer says
+    "Nothing here installs by itself" - it installs nothing, and says that a video read updates
+    yt-dlp when the environment is in use. Moving those files into the folder is planned (row 151).
+- **an archive's pictures: four defects** (three found by an independent review of the document
+  readers on 2026-11-20; the fourth left over from the review above;
+  KNOWN-ISSUES 129-132), each with a failing test first, before -> after on one machine:
+  - the picture order of an EPUB or a docx ran outside the read's clock and its scans were not
+    linear. `<rootfile\b[^>]*full-path` (and the patterns for `<item`, `<itemref`, `<img`, a docx's
+    `<Relationship` and `<a:blip`) ran to the end of the file from every `<x ` that never closes,
+    and every picture was looked for in a list: a 1.3 KB EPUB whose container holds 40 000
+    `<rootfile ` took 68.9 s for the order alone, 79.6 s through the CLI (the review: 82 s), past
+    the read's 55 s. Now a tag is read as `[^<>]{0,8192}` (XML has no `<` inside a tag), a set
+    stands beside each list, a chapter the spine names again is scanned once (1 500 itemrefs of one
+    500-picture chapter: 6.0 s -> 0.01 s), and the step is the read's: 10 s at most, less when the
+    deadline is nearer (`budget`, the step `picture-order`), and with no time left there is no
+    order - the book's or none, `images_ordered` unset - not a guess. The container: 0.00 s; 30 000
+    pictures of one chapter 7.3 s -> 0.18 s; of a docx 8.7 s -> 0.24 s; 40 000 unclosed `<item `
+    in the OPF 7.1 s -> 0.00 s; 7 000 unclosed `<img ` in a chapter 5.1 s -> 0.00 s. The CLI read
+    of the broken container still takes 6.9 s: pandoc cannot read the book, and a machine's own
+    markitdown is asked next - the converter's time, not the order's. An archive with no picture
+    has nothing to order and is not scanned;
+  - one picture the archive does not hold dropped all of an EPUB's pictures: `picture_phase`
+    replaced the manifest's list with the text's remaining links, so the missing one was `#1`
+    again, the text kept `[img #1]` and `[img #2]` pointing nowhere, and `--refresh` deleted their
+    files. Now the pictures with a file keep their entries and the others are numbered after them:
+    an EPUB of two pictures and a third not in the archive lists `#1` and `#2` with their files
+    and `#3` as not downloaded, the files stay under `--refresh`, and no two markers share a number;
+  - `zip_images()` counted only the pictures it kept against its 250 MB, so a package of copies
+    (or of counter pixels with a gigabyte of zeros behind their header) was unpacked and hashed
+    whole each time: 40 copies of a 63 MB picture in 2.6 MB of EPUB took 5.15 s. Now every byte
+    unpacked counts, and a copy - the same declared size and CRC - is skipped before it is read:
+    one copy is unpacked, 0.17 s; eight 2 MB counter pixels under a 5 MB budget: 8 unpacked -> 2.
+    The 100x ratio check still starts at 64 MB: a flat BMP legitimately compresses further, and
+    the byte count is what bounds the work;
+  - the model's process watched the read's process by `OpenProcess(SYNCHRONIZE)` and, on Windows,
+    ended when it got no handle: a sandbox that refuses that access (PID 4, the System process,
+    does: error 5) would have ended it at once and every PDF would have lost its tables without a
+    word. Now only "no such process" (error 87) ends it; where it cannot watch it goes on, and
+    stdin's end ends it with the read. The test runs a child Python on PID 4 (it stays), on a
+    process that has ended (it ends) and on one that is killed (it ends 0.0 s after).
+- **PubMed** (found by a run without paid keys, 2026-11-20: 69 of 71 pages, the
+  other miss a site answering 503 to everyone). Its page answers a client that did not run its
+  script with HTTP 203 and "Cookies must be enabled ... reload this page to continue": that
+  read as `ok`, 14 words, no advice. The phrase is a wall's now (`blocked`) - on a page of a few
+  words: a help page of 127 words titled "Please enable cookies" read as `blocked` too (the two
+  cookie phrases count under 60 words, and under 150 on a page with no sections of its own;
+  PubMed's wall has 14, NCBI Bookshelf's 34) - and a
+  PubMed record is read through NCBI's own E-utilities with no flag (`api:pubmed`: the citation,
+  the authors, the abstract by section, the identifiers, the MeSH terms; only the record's
+  number leaves; 0.6-0.9 s). A book's record (a chapter of StatPearls or GeneReviews: 40 288 of
+  them) comes from the same call - the chapter, its authors, the book, its editors and
+  publisher, the abstract, the sections, the Bookshelf ID; the old address
+  `www.ncbi.nlm.nih.gov/pubmed/ID`, still in many references, goes to the API too (both were
+  `blocked`), as do `?term=ID` and the old mobile `/m/pubmed/ID`; an exponent stays one ("10^-16", not "10-16"); the 4 MB cap counts the unpacked
+  text of a gzipped answer.
+- **README: the install on top** (for someone who came only to install): an answer example
+  and an Install section right under the pitch - three steps, a `git clone` line per agent (Claude
+  Code, Codex/Cline/goose, Cursor, Gemini CLI, OpenCode, GitHub Copilot), the ZIP way, `--setup`,
+  update and remove - and a link to it in the first lines. The commands say `$HOME`, not `~`:
+  Windows PowerShell 5.1 and `cmd` do not expand `~`, and the clone landed in a folder named `~`
+  (checked in PowerShell 5.1 and 7, cmd and bash).
+- **no markitdown** (only if quality does not drop - measured, references/documents.md):
+  EPUB goes through pandoc with its HTML leftovers cleaned (`clean_pandoc`: wrappers out, code
+  untouched, pictures as markers, an HTML table one row a line) - on 12 EPUBs the same words,
+  headings, tables and pictures as markitdown, 0.8-3.6 s a book against 3.2-4.4; a DOCX is read in
+  its own order with its content controls and text boxes, a PPTX with its groups and tables (only
+  markitdown read those before); a plain ZIP is listed and its files read (`zip_text`); a YouTube
+  transcript when yt-dlp has none comes from youtube-transcript-api directly (the same words on
+  four videos, 4-6x faster, with timestamps). The environment: 16 packages and 74 MB fewer. A
+  machine's own markitdown stays the last resort; the setup report no longer recommends it.
+- **OCR in-process**: a scanned PDF's pages go through tesserocr when it is there (each page with
+  its own clock), the tesseract command stays the fallback; the OCR languages are the packs in
+  `READ_PAGE_TESSDATA`. tessdata_fast was chosen over tessdata_best by measurement: the same quality
+  (clean CER 0.19 against 0.48 %, poor scans 39.6 % both), three times faster, a quarter of the size.
+- **the advice says `readpage.py --setup`** wherever it installs the missing engine
+  (`missing:`/`improve:`, the setup report), and the machine's own command only for what it cannot
+  (curl, lynx, pdftotext - unneeded beside PyMuPDF and the extractors -, and tesseract where no
+  tesserocr build exists). SKILL.md says so in three edited lines, 5 699 -> 5 696 bytes.
+- tests: `environment.py` (28 checks, offline: a real venv as a fake environment - used, its tools
+  first, exit codes and UTF-8 through the hop, skipped, broken, no loop, the MCP server through it,
+  --setup offline and while another runs, its first line with the sizes, archive members outside
+  their folder refused, uv's wheel for the machine, every promised engine pinned, yt-dlp out of the
+  lock and looked for every three days, the folder outside AppData on Windows, defuddle's own
+  packages as of one day); fixes 139 (a wall's
+  own cookie, the session kept - by its value too, when a wall re-sets or expires it -, a stamped
+  scan with `--alternate`), reading 19 (a wall's advice with and without the readers, an empty
+  page without a browser, the thin app page, JSON-LD that is no app's data); each new
+  check was seen failing on the commit before. A real Google Doc's address is out of the tests
+  (a made-up id; the live case reads `READ_PAGE_TEST_GDOC`). formats 69 (a PDF's table as rows, its
+  numbers and the text around it once, the pages in the manifest, the off switch, a PDF with no
+  table - in-process too, where the model's process is not even started -, the model's time and
+  `--download`, the hint without the model, a spanning cell put together, a box that cuts a word;
+  then, with a stub of the model that cuts the way the real one did: a word a grid line runs
+  through whole, a header a row line runs through one cell, every word of the page once, the
+  caption inside the box kept as text; two headers on their side not joined, a word outside the
+  grid in the nearest cell; a page that fails and a model that does not load said; one clock for
+  three PDFs of a ZIP; pages too heavy not asked; a slow page against a deadline of 4 s;
+  `--alternate` on 200 pages against 6 s; a ZIP's tables reported by file; then, after the second
+  review: a footnote cut at its spaces kept as one line of text, a short horizontal word not on
+  its side, a date split by a column line joined, the pages after the model's process ended
+  named, a caller's PYTHONPATH kept from the model, `--alternate` cut by its time saying which
+  pages are plain text, and the model's process gone within a second of a read killed mid-page);
+  statuses 43 (the cookie wall, an article with its words, a short help page about
+  cookies, a 102-word block page served with 200, an archived PDF's tables), sources 42 (PubMed
+  through E-utilities; a book's record, the old address, `?term=ID` and the mobile one, an
+  exponent and a gzipped answer, the cap on the unpacked text). setup audit 32 (pymupdf4llm
+  without onnxruntime), props 81 (`signals.tables` as ranges, against the schema).
+  `tools/setup_lock.py` writes the lock. With the environment all 21 suites are green on Windows, and in WSL Debian
+  13 (`--setup` from nothing there: 1 min 19 s, 1.4 GB, every engine answers, the browser too) the
+  19 offline ones. Found on the way: the hop's `-E` dropped the caller's PYTHONDONTWRITEBYTECODE
+  (now passed on as `-B`), and a run's first imports wrote their `.pyc` into the private cache
+  readable by others (the umask is now set before them, POSIX); a suite that puts a fake tool on
+  PATH runs outside the environment (`READ_PAGE_SKIP=env`), and an in-process MCP call that needs
+  OCR is skipped when the suite's own Python has none.
+- tests: `probe.py`, `compare.py` and `sweep.py` are gone (live comparison tools that needed another
+  skill, or a search skill, that is not published); check names no longer carry the ids of the
+  notes they came from; `props.py` traded a check that was always true for one that a read into a
+  folder with a non-ASCII name writes its manifest there.
+
+**A safety net before any behaviour changes.**
+- **lint in CI**: ruff with the pyflakes rules and vermin for Python 3.8, a job of its own. Unused
+  names are gone; the three known defects stay visible, each tagged `noqa`:
+  a timeout never marks the answer partial (`nonlocal` is missing), `too_large_out` is not
+  defined, and the `ocr-langs` row is dead code after `return`.
+- **`READ_PAGE_TEST_PUBLIC_HOST`**, for tests only: exactly that one address counts as public, so
+  the main channel (curl_cffi) finally runs against a local server. Every other loopback address,
+  `localhost` and metadata hosts stay private. Unset, nothing changes.
+- tests: `harness.py` (a route server, a CLI run into a temp folder that reads `manifest.json` and
+  the files rather than stdout, checks); `advsrv.py`, adversarial pages from the review (encodings,
+  `#/` routes, late JS, walls, 5xx, truncated, stalled and trickling bodies, redirects to `file://`
+  and to a private host on 127.0.0.2, a gallery, a Referer-guarded image host, a flaky server);
+  `channel.py`, the main channel offline (9 checks, in CI with curl_cffi); `corpus_offline.py`,
+  61 saved real pages run through extraction with no network - the pages stay out of git,
+  `corpus_urls.txt` rebuilds them.
+
+**CI again, and a switch to measure ad blocking.**
+- **`--download` pictures work on Python 3.9 again**: a picture with no size limit was read as
+  `read(-1)`, which 3.10+ takes for "all of it" and 3.9's http.client turns into `bytearray(-1)`:
+  every such picture failed with "negative count". Found by the first CI run since the push
+  (Ubuntu, Python 3.9); `read(None)` reads all on every version.
+- The readability test skips where readability-lxml is not installed (the CI runners), as the
+  defuddle tests do.
+- **A status from Chrome's `--dump-dom` keeps the server's code**: with no Playwright the browser is
+  Chrome's command line, which knows no HTTP status, and a 419 "Sorry." page it rendered came out
+  `empty` instead of `blocked` - on any machine with Chrome and no Playwright, the CI runners among
+  them. The server's code for the same address now decides, and the reason names it the server's.
+- tests: the warm MCP process is looked for among all descendants (a Windows venv's python.exe is a
+  launcher, the real interpreter its child).
+- **A rescue after a moment's failure lives a minute, and its advice says what happened**: an agent
+  found it - runoob did not answer once, the archive copy of January came back with "the live page
+  is gone", and every read for 15 minutes got that copy though the page was back a minute later.
+  Such an answer (a reader's or the archive's after no answer or a 5xx: `signals.rescued_after`) is
+  served from the cache for 60 s; the advice says "did not answer" or "answered HTTP 503" and names
+  `--refresh`, and "is gone" stays for a 404/410.
+- tests: the fake defuddle that never answers keeps node alive with a timer - on Linux a pending
+  promise alone let it exit, and the CI saw a quick failure, not the stuck parser meant.
+- **A picture at its own address keeps its ending**: one whose type was not PNG, JPEG, GIF or WebP
+  was saved as `raw.png` - an agent's offline copy of gov.uk had its SVG logo and its icons so.
+  SVG, ICO, AVIF and BMP are known by their type, any other picture by its address's ending.
+- **page.md's links are whole addresses, as content.md's**: html2text was given no base, so
+  page.md said `/help/cookies` where content.md said `https://www.gov.uk/help/cookies`, and the
+  same agent joined 102 links itself. page.md, the main block and readability's text resolve links
+  and pictures against `<base href>` or the page's address.
+- **netguard stops taking connections when it is closed, on Linux too**: Linux keeps a socket
+  listening while another thread waits in `accept()` on it, so after `close()` the guard went on
+  taking connections - under its own rules - until the read's process ended, seconds later. Nothing
+  outlived the read: every read is a process of its own, MCP's too (an earlier note here said an
+  MCP process kept a thread a read; it does not). `shutdown()` first wakes that `accept()`. The
+  check had never run on Linux: CI's job stopped at an earlier failure each time.
+- CI: every suite runs even when an earlier one failed (`if: !cancelled()`; the job still fails),
+  so one red step no longer hides the rest - on Linux, security and every suite after it had not
+  run for ten days.
+- Measured, nothing changed: an ad and tracker list in the browser (a popular ad-block DNS filter, 67
+  pages read twice with nothing else blocking) refused 341 names and 5 % of responses but made no
+  read faster (wall p50 7.48 -> 7.79 s), so the browser keeps no list (KNOWN-ISSUES, decisions).
+- `CLAUDE.md`: notes for working on this repo - rules, tests on three systems, CI, traps.
+- **A flag that is not read-page's no longer stops the read**: a model invented `--to 407`
+  from `--from` and the whole call failed with argparse's usage. Now the page is read and an
+  `ignored:` line names what was left out; a misspelled flag is the flag meant, silently
+  (`--screenshot`, `--allow-extrnal`, `--form`: one edit for a short name, two for a longer one,
+  one near flag only - `--allow-images` is not "meant" as `--deny-images`); a bad `--from` or
+  `--file` value is left out the same way, and a stray value
+  taken for the URL gives the URL back. MCP's tools do the same with an argument outside their
+  schema, which used to refuse the call. `--json` names them too; the saved manifest does not.
+- **Python's compiled modules stay out of the skill's folder**: some harnesses show the agent every file
+  of a skill's folder, and `scripts/__pycache__` was 28 of them. They go to the user's temp
+  folder (on Linux and macOS inside `read-page-<uid>`, 0700, checked: a `.pyc` planted by another
+  user would run as our code; no safe folder, no cache), for every read's processes too; a start
+  stays as fast (0.17 s).
+- "1 pictures not downloaded" reads "1 picture".
+- **`--ocr N`: the text drawn in picture N, for a model that cannot see it**: two models without vision
+  spent 18 to 84 calls reading Figure 1 with tesseract by hand.
+  On demand only, as MCP's picture `read` is - the answers stay as long as they were. An SVG gives
+  its own text; other pictures go through tesseract twice, in grey and as dark ink on light
+  (threshold 120), and the reading with more confident words wins: Figure 1 gave 15 of its 16
+  labels in 0.5 s. tesserocr in-process when installed, else tesseract's command. MCP:
+  `read_url(ocr=N)`, `read(file=img/..., ocr=true)`.
+- CI: macOS runs on demand only, before a release - not nightly.
+- tests: every suite drops the user's own `READ_PAGE_DEBUG` / `READ_PAGE_DEBUG_DIR` - set for agent
+  runs, they sent the suites' logs to the agents' log folder, and the debug checks found none.
+- macOS CI runs again: the `macos-15` runner picked the job up at once, after the `macos-13` runs
+  had waited a day each and been cancelled.
+- `READ_PAGE_TEST_BLOCKLIST=FILE`, for measurements only: netguard refuses the names of a host list
+  (an ad-block DNS filter, a hosts file) before any lookup, and the debug log counts them.
+
+**A measured set, a held-out sample, five shells; seven defects it found are fixed.**
+- **An archived copy that comes gzipped is unpacked**: Wayback's `id_` hands a page as its site
+  sent it, gzipped as often as not, with or without a `Content-Encoding` header, and urllib
+  unpacks nothing. Crunchbase's copy was decoded as KOI8-R, and 199 KB of mojibake came back as
+  `ok`, "100% of the page". gzip and deflate are unpacked now, a cut snapshot as far as it goes;
+  brotli or zstd without their modules is no text, and the chain says why
+  (`archive:wayback (... cannot unpack it)`), never the wrong text.
+- **A picture that failed is asked once more, not by every answer**: one lost to a dead host, a
+  server error or a dropped connection gets `failed_at`; an answer printed 30 s or more later asks
+  it once again (`PICTURE_RETRY_AFTER`), and after a second failure it is not asked. Every answer
+  from the cache had asked dmoz's dead picture hosts again - 0.55 s instead of 0.23 - and a host
+  that never answers would have cost the whole 6 s phase each time. A picture the phase cut, one
+  never printed and one `--deny-images` named are asked whenever printed, as before.
+- **readability's Markdown is not wrapped**: html2text's default 78 columns split a photo's alt
+  and address over three lines on Le Monde, so the picture stayed a raw `![...](...)` with a broken
+  address and no marker, and paragraphs were cut into lines. `body_width = 0`, as page.md has.
+- **An outline too long for its room is thinned, not dropped to the top level**: Pride and
+  Prejudice's 66 chapters did not fit the 2.5 KB, so the outline was the book's title alone and the
+  last chapter was 16 answers away. When the levels that fit give fewer than 12 rows and finer
+  headings exist, the next level down is listed thinned evenly - every k-th, the last one, the
+  coarser rows kept - with a closing "… N more between these"; now it is 2 answers. A list too long
+  even at its top level, and the block rows of a text without headings, are thinned the same way
+  instead of cut after their first rows; a page whose headings were all second-level and too many
+  had had no outline at all.
+- **defuddle no longer drops a term's link inside a sentence**: its clutter list removes any
+  element whose id or class holds one of about 590 words, "next-" among them, inline elements too;
+  the WHATWG specs give each term's link an id like `data-state:next-input-character`, and the
+  parsing chapter read "Consume the:" 81 times. An inline element (a, span, dfn, code, ...) loses
+  its id before defuddle sees the page; a footnote reference keeps it (by its id, its class or its
+  role - docutils' are `id="id1" class="footnote-reference"`). On the 61 saved corpus pages the
+  WHATWG chapter gains 4 528 words, Wikipedia's LLM article 29, and no page loses a word. A block container named so
+  (`<section id="next-steps">`) already came back by the block rule. Classes stay (code languages,
+  math), so an inline element's class can still cost its words (KNOWN-ISSUES 80).
+- **An inline SVG diagram is one line of its labels**: defuddle passes inline `<svg>` through as
+  markup, and SQLite's syntax diagrams were 13.6 KB of path data, a third of lang_with.html's text.
+  Each becomes `[diagram: WITH RECURSIVE cte-table-name AS ( select-stmt ) ...]`; one without labels
+  (an icon) goes; an SVG inside a code block is an example and stays.
+- **page.md stays the whole page**: it was swapped for a copy of the text whenever it had fewer
+  characters, and the text's long absolute links (defuddle writes them so) outgrow page.md's
+  relative ones - 7 HTML pages of a measured run (SQLite, namu.wiki, opennet, samlib, qiita,
+  aozora, an archived python.org) had lost their menus and links that way. Words count now, links'
+  addresses not, and the text stands in only below half of them: a script shell the browser
+  filled, a site API's own page.
+- `BUILD` 12: a copy cached before these fixes (an archive's mojibake, a wrapped readability text)
+  is not served; a picture's manifest entry may carry `failed_at` and `retried` (the schema has them).
+- CI: the macOS workflow asked for `macos-13`, an image GitHub retired on 2025-12-04 - the
+  "cancelled under capacity pressure" runs of 2026-11-02 were that label. It asks for `macos-15`.
+
+**SKILL and documents.**
+- **SKILL.md is the procedure: about 1 400 tokens**, 5.6 K characters instead of 17 K. The
+  command and its three rules (`--allow-external` for a public page from the start, up to two
+  minutes for the command, no pipe on its output), how to read the answer (`--from N`, `page.md`
+  for how the site is organised, `--screenshots` for how it looks, the picture markers), the
+  statuses and the advice, the rules, the flags, what to do when nothing works, and the reader
+  with no Python. Everything else moved, unchanged, to `references/answer.md`: the files, every
+  status, every flag, privacy and the network, the manifest, limits, cookies, pictures, video, MCP.
+- When nothing works - another source without asking; else ask once, naming what would get
+  each page: a tool to install, or the user's own browser through a tool the agent has (behind
+  their login, or where they see the page differently: signed in, an ad blocker, their region);
+  else say what was tried and ask for a paste.
+- The text comes in the answer, `--from N` goes on; in Windows PowerShell 5.1 a saved file is
+  read with `Get-Content -Encoding UTF8` (without it a UTF-8 file comes out garbled - checked).
+- Three lines with no Python - the page with curl, Markdown from Jina by POST
+  (`--data-urlencode`, so a `#/` or Cyrillic address survives), the latest Wayback copy
+  (`web/2id_/URL`, `--compressed`: it comes gzipped) - run in bash, PowerShell 5.1 and 7
+  (`curl.exe`) and cmd.
+- The README's floor is Python 3.8 (what vermin checks), the 98-page sweep is dated and the
+  226-page check stand beside it, the docs list counts the rows it has; KNOWN-ISSUES 22
+  gives the measured size.
+- The setup report names neither LibreOffice nor ffmpeg - the reader runs neither, and
+  `--caps` no longer looks for them - and its language-pack row, dead code after a `return`, works:
+  with tesseract and English alone it offers another `.traineddata`.
+- `caps()` once a run: the HTTP attempts take the read's own (each check of the kept one walks
+  PATH: 3 ms).
+- tests: `setup_audit.py` 27.
+
+**Netguard, the browser's only way out.**
+- **A hole found and closed.** Playwright's request routing, the browser's guard until netguard,
+  saw only the first URL of a redirect chain. A public page that fetched its own `/hop`, answered
+  by a 302 to 127.0.0.2, got the internal answer into its text; a meta refresh to such a hop made
+  the internal page itself the text, no CORS needed. The HTTP tiers check every hop and were never
+  open to it.
+- **netguard** (`scripts/netguard.py`): the browser of a public page goes out through a SOCKS5
+  proxy of the reader's own on 127.0.0.1, which only that browser uses. Every connection - a
+  redirect hop, a frame, a WebSocket - is checked once on the very addresses it then goes to
+  (`browser_policy`), and an internal one never opens: the tests count the internal service's log,
+  +0. Chrome hands the proxy every name, so the browser's DNS rebinding window is closed too
+  (KNOWN-ISSUES 51), and the `--dump-dom` path, which had no guard at all, goes through it (52).
+  Fonts and media of a text render are off by flags, WebRTC is held to the proxy. TLS stays end to
+  end; the site sees the same machine and the same browser. It steps aside for an internal page, a
+  machine whose browser has a proxy of its own, WebKit and `READ_PAGE_SKIP=netguard`: there the
+  request rule guards, and a watch on the responses drops the DOM of a page whose hop answered
+  from inside (`chain.skipped`, `signals.browser_inside`); the advice then says so outright and
+  names `--allow-external`, which reads the page through a remote reader instead.
+- A/B against the request rule on 67 sites, a fresh process each, the order alternating: on a fast machine
+  355.2 against 356.3 s in all (p50 4.52 / 4.56), on an emulated weak laptop 489.2 against 506.9
+  (p50 6.69 both); the reader's own CPU 27 % less on the fast machine and 30 % less on the weak one (relays instead of a
+  Python call for every request); the same wall verdicts; no real site had a connection refused.
+  The texts that differ are live pages - the request rule against itself differs on 9 of the 14.
+  `--screenshots` of Wikipedia's Cat: 6.8 against 6.6 s, the same picture.
+- tests: `security.py` 40 (36 on Windows; netguard through a SOCKS5 client of our own: what
+  passes and what does not, a megabyte whole, forty connections at once, nothing new after
+  close), `browser_live.py` 32 (the traps: a fetch, a meta refresh and a navigation through a hop,
+  a WebSocket, cloud metadata, [::1], a name that resolves inside, the `--dump-dom` path, a
+  machine's own proxy, and the advice when the text was dropped).
+
+**The debug log is a file.**
+- **`READ_PAGE_DEBUG=1` writes a log, not answer lines** (a model retells
+  what it is shown the worse the weaker it is; a file read by whoever debugs loses nothing).
+  `debug/<started>-<pid>.jsonl` in the read's folder, or every read of a test session in
+  `READ_PAGE_DEBUG_DIR`; nothing in the answer or the manifest, which MCP hands to the model. One
+  JSON line per event: `run` (version, flags, the machine), `caps`, `step`, `event`, `decide` (each
+  rule with all it looked at: after HTTP, extraction, browser needed, browser text, status),
+  `browser` (launch, page open, loaded, every poll that changed something, settled), `net` (every
+  response and failure, redirect hops included), `picture`, `error` (38 places that swallowed an
+  exception now say where, what and the last frames) and `summary`. A key is named, never printed;
+  a query value that looks like a credential is masked.
+- tests: `deadline.py` 22 (the log is a file, nothing of it in the answer or the manifest, no
+  secrets in it, `READ_PAGE_DEBUG_DIR`).
+
+**Every step on a timeline, a fairer fuse for the pictures, the browser at once for
+a tiny page.**
+- **`READ_PAGE_DEBUG=1`** records every step of a read as it ends (`scripts/budget.py`): when it
+  started, how long it took, its own cap and the cap the deadline left it, and how it ended - `ok`,
+  `cap`, `deadline`, `stall` or `fail`. The answer gets `debug:` lines (the steps, the deadline's
+  use, each step that ended early and why), the manifest a `debug` block. Off by default and
+  changes nothing else; it is how this check counted the fuses. (The follow-up above moved all of
+  it into a log file.)
+- **The check**: the version before against this one on 226 URLs on a fast machine and 113
+  on an emulated weak laptop (two E-cores under a 1.03-CPU cap), a fresh process per read. The fast machine:
+  p50 2.9 -> 2.1 s, p90 8.5 -> 6.6, p99 18.5 -> 15.7, max 94.5 -> 22.9; weak p50 5.5 -> 4.8, p90
+  16.7 -> 11.9, p99 35.2 -> 25.3, max 57.8 -> 30.9. No status is worse once the fixes below were
+  in, and every text that changed is explained (live feeds; baidu's CSS that passed for text; CNN,
+  below). How often each fuse fired: HTTP, defuddle, readability, trafilatura, the site APIs,
+  yt-dlp, the converters and OCR never; the browser once in 51 reads (a wall's load that never
+  ended, now cut at 10 s); the pictures in 2 of 130 reads on the fast machine and 3 of 65 weak - hence:
+- **Pictures get 6 s, not 4.** With no limit, 129 reads of picture-heavy pages took p50 1.1 s,
+  p95 2.6, at most 5.8; 4 s would have cut 2.3 % of them (NASA's pictures still arriving, a 14 MB
+  photo among them; one stuck picture), 6 s none. A connection silent for 4 s is still stuck at
+  4 s, and near the deadline the phase is what the tail leaves, about 4 s, as before.
+- **A tiny page with a script starts the browser at once**: under 300 characters of text and any
+  script, not a 404/410/5xx. crates.io and AliExpress have two scripts, Telegram one, so the
+  three-script rule for a shell missed them, and their browser waited 0.6-1.2 s on a fast machine and 2.4-3.4 s
+  on a weak laptop for three extractors to find nothing. When a browser was started early, the HTTP
+  pass's readability and trafilatura run once it has its page open (at most 3 s later): on a weak
+  laptop they no longer take the CPU from Chrome's start, and the HTTP text is decided as before.
+  (The "light" HTTP pass that skipped them for a shell is gone.) Against the code before these two
+  changes, on 26 URLs: the weak profile's reads took 276.9 s in all instead of 309.5, the same
+  statuses and texts; pictures were cut in 1 of 34 reads instead of 3 of 35.
+- Fixed by the check:
+  - a wall the browser met was refused when HTTP had only an empty shell, so the answer said
+    `empty`, not `blocked` (figma): a browser wall stays out only when HTTP had a real text;
+  - a news front page counted as huge and lost its article extraction (CNN: 6 MB of HTML, 1 MB
+    without its scripts): huge is measured without scripts and styles;
+  - HTTP overran its cap by up to 10 s on a slow server: curl itself ends the transfer at the
+    step's end;
+  - a host that never answered: no extraction of an empty body and no https upgrade on a port of
+    its own (16.1 -> 7.9 s);
+  - four processes saving cookies on two slow cores lost 2-4 of 120: Windows refuses to replace a
+    file another process is reading, and the error was swallowed. The replace waits that out, the
+    count is made under the lock, each writer has its own temporary file: 120 of 120;
+  - a printed window's three rounds of pictures share one phase (they could take 12 s);
+  - every wait on the browser is bounded: the read's own wait never runs past half the tail, a
+    launch at most 20 s (Playwright's default is 3 minutes), the exit's close at most what is left;
+  - a render started early and then not needed takes no screenshots;
+  - no DNS lookup of every picture host before the phase (ESPN: 14 hosts, a second): a private
+    address is refused, and counted, when its picture is fetched;
+  - an alt with escaped brackets (trafilatura's `![Rack \[File: AP\]](...)`) left its picture a raw
+    link;
+  - a site's API runs without the page's own request beside it: it answered on all 16 reads, and
+    that request cost the site a hit and a weak laptop CPU for nothing;
+  - a `#/` route whose browser failed gets its landing page's text, not nothing;
+  - the MCP server stops a read still running at 58 s (`HARD_SECONDS`) with a reason, and keeps
+    an answer the read had printed before its exit hung;
+  - `no time (N s)` names the phase, rounded (it said 3 s for a 3.97 s phase).
+- tests: `deadline.py` 19 (the debug list; no body, no extractor), `images.py` 40 (the escaped
+  alt; the slow picture now trickles past the 6 s phase), `mcp_parallel.py` 14 (the backstop),
+  `browser_live.py` 23 (the tiny page and the order of its extractors).
+
+**The printed window's pictures, the headless shell first.**
+- **Every picture is numbered from the first call** - content.md's, then page.md's own - and the
+  manifest lists each with its address, alt, line and state. An answer downloads the pictures of
+  the lines it prints that have no file yet: the first block's, a `--from` block's, page.md's when
+  page.md is printed. A long page no longer waits for all of them on its
+  first read (Moscow: 146 pictures, 8.6 s against 4.5 without). A picture the 4 s phase cut, or
+  the network lost, is fetched again the next time its lines are printed; a 404 or a refused address is not asked again. A counter the page sizes 1-2 px gets
+  no number. `BUILD` 11.
+- **The headless shell first for a text-only render** when Playwright's is installed: the A/B on
+  67 sites gave the same text and walls as Chrome, at p50 4.6 against 5.2 s on a fast machine and 6.4 against
+  13.2 s on an emulated Celeron. Screenshots keep Chrome.
+- tests: `images.py` checks the window, the listed pictures and the retry (39).
+- The page's own request runs beside yt-dlp and beside a site's API (asked from the start):
+  a video read no longer waits for the watch page after the subtitles, a failed API for the page.
+
+**Formats.**
+- **RTF and OpenDocument by their content.** `{\rtf` is RTF whatever the server calls it, and
+  an archive's `mimetype` file is read: an ODT is no longer taken for an EPUB (it came out `empty`).
+  pandoc converts both to markdown; without it the stdlib readers keep the text (RTF escapes
+  decoded, ODT headings and paragraphs in order).
+- **a file on this machine** (a path or a `file://` URL) goes through the same converters with
+  no network at all, and is copied, never moved. Over MCP only inside read-page's own folders.
+  Another scheme, or a path that is no file, is a wrong call (exit 2).
+- **`--alternate` reads a PDF with pymupdf4llm** when it is installed: headings and tables as
+  markdown.
+- **markitdown reads a YouTube transcript** when yt-dlp gives none; a description alone does
+  not count.
+- tests: `formats.py` (18); `fixes.py` checks the wrong calls the new rule leaves.
+
+**Screens instead of tiles, rescue tiers at once, the browser started when sure.**
+- **Screenshots are screens** (`scripts/screens.py`):
+  `--screenshots N` counts screens of a 1280x784 window (default 2), scrolled one by one; with
+  Pillow or PyMuPDF two are glued into one 1280x1568 picture, without them they come alone and
+  `improve:` names Pillow. Per screen one wait (pictures, fonts, a quiet page; at most 0.6 s), a
+  header bar kept on screen 1 and hidden after, other fixed or sticky elements hidden by opacity,
+  reduced motion; an inner scroller is scrolled where the page uses one; PNG, JPEG q95 over 3.75 MB;
+  the deadline keeps what was taken (`signals.screens`, `screens_needed`). The full-page clip took
+  10-49 s a tile and left the lower pictures blank; Wikipedia's Cat, three screens: 13.2 s in all.
+  PDFs come as the same pictures, two screens each. MCP: `screenshots: true` is two screens, each
+  picture captioned with its screens ("screens 1-2 of 14").
+- **Rescue tiers at once**: on HTTP's answer the readers and the archive start together (a dead
+  host or a 5xx), the readers beside the browser (a wall's status or header), the archive for a
+  404, the readers from the start with `--force-external` - each one the read would ask anyway.
+  A 404, 410 or 5xx no longer goes to the browser (it gets the same answer) unless it is a wall.
+- **The browser starts when it is sure to be needed**: with the read for a `#/` route,
+  `--screenshots` and `--alternate`; right after HTTP for a shell or a wall, beside the extraction.
+  Not for every read: on an emulated Celeron a browser launching beside reads that never use it
+  took them from 5.5 to 11.9 s (p50); on a fast machine it would save 0.7 s.
+- The defuddle worker numbers its pages, so the page and an archive copy extracted at once each
+  get their own answer.
+- tests: `browser_live.py` checks screens, gluing and the Pillow hint; `fixes.py` the PDF pictures.
+
+**The browser waits by a measured rule, renders only text, and closes later.**
+- **When a page is done** (`scripts/settle.py`), measured on 67 sites on a fast machine and on an emulated
+  Celeron: the text unchanged 1 s with nothing - scripts included - in flight for 1 s in a row; or
+  unchanged 2 s whatever is in flight; an error status quiet 1.5 s; an empty body 3 s, unless an
+  empty mount node waits to be filled. A poll the page's scripts held back is work, not quiet.
+  The fast machine: p50 5.4 s from the launch, no text lost (the old rule 6.3 s, 2 lost); on the weak laptop 3
+  of 67 lost against 12. One budget of 20 s for load and settle (a weak laptop needs it: VK filled
+  its page 12 s after DOMContentLoaded); the extra 5 s phase for empty shells is gone.
+- **A text-only render** loads no pictures, media or fonts; **page.md** is html2text's markdown of
+  the visible DOM (headings, links, pictures, tables kept) instead of innerText; the browser
+  **closes in its own thread** while the text is extracted (its cookies are saved before exit).
+- **The browser runs only where it can help**: a weak HTTP text *and* a script, an empty mount
+  node or a wall (a static page cannot change in a browser), or a `#/` route. Its text replaces
+  the HTTP text only when the HTTP text was the reason it ran, and not when it is a wall the HTTP
+  text was not or has fewer words.
+- tests: `fixes.py` checks the rule on recorded shapes (scripts in flight, a held-back poll, rbc's
+  401, analytics, placeholders, empty mount nodes, walls).
+
+**One deadline, extraction that cannot hold a read, a cheaper start** (55 s for every read; sized
+for a weak laptop; network cut by stall).
+- **Every read ends by 55 s**, the CLI and MCP alike (`scripts/budget.py`): MCP harnesses cancel a
+  call at about 60 s and a cancelled call returns nothing. Each step keeps its own bound, a fuse,
+  and takes no more than the deadline leaves after the tail (block rule, pictures, answer: 6 s).
+  HTTP has no fixed 20 s any more: a slow but moving transfer runs until 14 s before the deadline
+  (a stall is still cut by the connect timeout and the 1 KB/s floor); the browser, the readers,
+  the archive, the site API, yt-dlp and the converters stop by the deadline. `--download` has none.
+- **defuddle as one worker per read** (`scripts/ddworker.py`, `ddworker.js`): node loads defuddle's
+  modules and warms up while the HTTP request is in flight, then answers the page, the rendered
+  DOM and an archive copy with the CLI's own call - the same markdown as `defuddle parse
+  --markdown`. Python makes page.md, the main block and the visible length beside it. Its limit is
+  the deadline; still working then, page.md is the text (`signals.extract_late`). Measured on an
+  emulated Celeron: extraction p50 4.9 -> 2.9 s, p99 20.1 -> 12.4 s; the old 10 s CLI cap had
+  changed the engine on 4 of 61 long pages there.
+- **readability and trafilatura side by side, in processes the read can stop** (`scripts/xchild.py`,
+  the extractors in `scripts/engines.py`), only when defuddle is weak or missing, as before.
+- **A page over 3 MB of HTML is its own page.md**: no article extractor; html2text and crude_text
+  run side by side in processes of their own (`signals.huge`; `--alternate` still runs them all).
+  The 16 MB HTML spec took 155 s and 1.2 GB; now 10.5 s. ECMAScript (7.8 MB) 55 -> 5.8 s, the Emacs
+  manual (5.8 MB) 39 -> 5.1 s; content.md had come out at 95-100 % of page.md anyway. The visible
+  text's script regex scanned to the end of the page for every unclosed block: one pass now (16 MB:
+  2.5 -> 0.4 s; crude_text 4.6 -> 0.7 s).
+- **OCR pages side by side**, under one bound (30 s) instead of 30 s a page.
+- **A cheaper start**: a tool's path is looked up once per process (13 Windows PATH walks a read),
+  urllib's openers - and the system certificate store - load on first use, and curl_cffi is
+  imported without markdownify, bs4 and readability (it pulls them in for a method this skill
+  never calls; 0.2 s).
+- **MCP keeps one warm process** for the next call (`readpage.py --serve-once`): Python started and
+  the imports done; it serves one call and exits, and a new one starts as it is taken.
+- **Playwright's current Chromium is found**: `browsers()` looked for `chrome-win/`, `chrome-linux/`
+  and `chrome-mac/` only; current builds are Chrome for Testing (`chrome-win64/`, `chrome-linux64/`,
+  `chrome-mac-arm64/...`). The headless shell is listed last.
+- tests: `deadline.py` (15 checks); `timeouts.py` checks the cut PDF against the deadline.
+
+**Speed, locks, MCP.**
+- **A cached answer asks nothing about the machine**: `caps()` ran before the cache check
+  and cost 0.3 s of the 0.6 s a hit took; a hit is 0.3 s now (Python's start and import are the
+  rest). On a miss `caps()` is kept for an hour in `caps.json` and asked again the moment PATH, a
+  PATH folder, site-packages, the Python or the tessdata folder changes - an install is seen at
+  once, which is what the old day-long cache got wrong. The setup report and `--caps` ask fresh.
+  Each tool name is looked up once, not twice (19 PATH walks were 11).
+- **Locks**: a site's cookie jar is read, merged and written under a file lock (msvcrt or
+  fcntl, never longer than 5 s): four processes saving 120 cookies of one host lose none. A page
+  folder is locked for a read, so a second call for the same page waits and gets the cached answer
+  instead of writing the folder at the same time.
+- **A killed run's `.part` files are gone at the next start, in `img/` too**.
+- **The disk floor**: a download stops when less than 1 GB is free - the spool looks
+  at the free space when the body first goes to disk and every 64 MB after, curl gets
+  `--max-filesize`; the part is deleted, the status is `error` with the reason and advice.
+- **MCP calls run at once**: each `read_url` is `readpage.py` in a child process, four at a
+  time, its answer written whole under a lock; four pages of 2.5 s answer in 4.2 s.
+  `notifications/cancelled` kills the call's process tree (0.3 s) and the call never answers; on
+  Linux and macOS readpage gets SIGTERM first and kills curl and the converters itself, since they
+  run in sessions of their own (found on WSL: the page kept trickling to an orphaned curl).
+  The curl channel also refuses to start a `--download` when the disk is already under the floor.
+- **MCP pictures**: `inline_images` attaches only content pictures - not the
+  same picture 3+ times, 48 px or less, 1 KB or less, nor a logo, icon, avatar or badge of 100 px
+  or less - each right after its marker, several on one line too. PNG or JPEG only; a long side
+  over 1 568 px is scaled; a PNG over 3.75 MB becomes one JPEG at q95; screenshots asked for go
+  first, then the biggest pictures, while the answer stays inside 25 000 tokens (the text plus
+  `ceil(w/28)*ceil(h/28)` and 150 for the path line a picture costs), 256 pictures and 20 MB. A
+  picture that did not fit keeps its marker and a note counts it. Pillow converts (GIF, WebP,
+  AVIF, BMP) and scales, PyMuPDF renders SVG; the setup report has a `pillow` row.
+- tests: `speed.py` (8 checks) and `mcp_parallel.py` (12), both in CI; `mcp_smoke.py` and
+  `setup_audit.py` follow the new contract.
+
+**Pictures and where they live.**
+- **Every picture of the text is a numbered marker in its place**:
+  `[img #3 · 100x80 3K · Diagram of the flow] img/03-diagram-of-the-flow.png` - the number is the
+  file's (`NN-` and words from the alt, the address or `image`, Cyrillic in Latin letters), the alt
+  stays inside the brackets, the path comes last. It is the last step on any path: an extractor's
+  text, a block put back from page.md, a reader's, the archive's, a site's API (an X post's photos),
+  a video's cover. A picture that was not downloaded says why and keeps its address
+  (`not downloaded: 404`, `no time (4 s)`, `--deny-images`). In one answer a repeat prints as
+  `[img #3]`, a tiny one with a short alt as the alt; content.md keeps every marker full. Replaces
+  `[12x12 7Kb] img/pencil.png`, `[image] name.png` and the all-or-nothing `## Pictures` list.
+- **Pictures follow their blocks**: a picture block next to the shown text goes
+  back where it stood; a picture the extractor took out of a paragraph it kept goes back right
+  after the paragraph. A picture beside a menu or a footer stays out, and so does one whose alt
+  reads like a banner ("Follow us"); a menu entry with a picture is a menu, not a captioned figure
+  (GitHub's header promos, pkg.go.dev's icons), and a picture wrapped in a link to its full size is
+  still a figure. Only a block of five words or more vouches for the picture beside it: Wikipedia's
+  logo sits next to a "Search" link. On the 61 offline corpus pages the extractors keep 260
+  pictures, the rule adds 141 (Wikipedia's figures, the Joel Test's own pictures), 310 stay only
+  in page.md. page.md keeps its pictures now (html2text no longer strips them
+  and no longer wraps lines, which could split a link); trafilatura keeps them too; a lazy picture's
+  `data-src` replaces its placeholder for every extractor; tracking pixels are shown nowhere.
+- **What is downloaded follows what is printed**: the text's pictures within 4 s;
+  page.md's when page.md is printed (`--file page.md`, a fragment, MCP `file`) - also from the
+  cache or a continuation, the lines do not move; every picture of the page with `--download`.
+  `--deny-images` names them all, and a later read without it fetches them for the cached text with
+  no new read of the page. `signals.images_outside` counts the page's other pictures.
+- **Documents**: a DOCX or PPTX picture stands where the paragraph or the slide has it; pictures a
+  document does not place are listed after the text in document order, ten lines at most.
+- **Storage**: a page folder starts with its host, `pages/<host>-<key>`; a picture
+  another page of the same host already has is a hard link to that page's file (a copy where the
+  file system has no links), with no request: `signals.images_reused`, `images[].reused`. Deleting
+  one folder never breaks another. The 7-day host picture store is gone (old ones are removed);
+  the host folder keeps the cookies. `BUILD` 10: a 0.4 cache entry is not served.
+- A marker's path ends clean: a picture inside a link is `marker (link)`, a caption glued to it
+  starts a new line, a table's `|` gets a space. Two pages read into one `--dir` keep their own
+  `01-logo.png` (the second is `01-logo-2.png`). A 304 keeps the file and says `revalidated`.
+- The manifest's `images` lists the text's pictures in order with `n`, `in`, `why`; the schema
+  describes every field.
+- tests: `images.py` (34 checks, in CI). `props.py` and `fixes.py` moved to the new contract;
+  `harness.run_read` finds the folder of a read in a shared cache.
+
+**One wall, one credit.**
+- **A paid reader that met the wall ends the paid part of the chain.** Firecrawl, Exa or Tavily
+  reaching the page and finding its wall (or a 401/403/429/451) means the next paid reader would
+  meet it too: in measurements Exa and Tavily never gave text where Firecrawl and the free Jina did
+  not, and Amazon's wall cost three credits. The free readers are still asked; a paid reader that
+  failed for its own reason (no credits, a timeout) is still replaced by the next. The note says
+  `exa: not asked, firecrawl met the wall`. tests: `sources.py` 33.
+
+**Sources.**
+- **The readers are one chain, in the measured order**: Firecrawl, Jina, Exa,
+  Tavily, defuddle.md (14 hard pages: 11, 8, 10, 7 and 4 opened; Exa third so its credits go to
+  search). A reader without its key is skipped, so without keys it is Jina, then defuddle.md. The
+  first real text ends the chain - no credit is spent after it; a wall, fewer than 40 words, the
+  service's own error (`402`) or 12 s without an answer moves on; a `404` a reader saw ends it. Each
+  key goes only to its own service; `JINA_API_KEY` is sent when set. Exa gets `livecrawl` and
+  Firecrawl `maxAge: 0` on `--refresh`. defuddle.md's YAML front matter goes, its title stays. The
+  setup report and `caps.keys` list all four keys.
+- **A site's own API where the ordinary path fails** (`scripts/siteapi.py`): a Stack
+  Exchange question (the question and up to 10 answers by votes), an npm package (the version's
+  2-4 KB document and the README streamed out of its tarball - the registry's whole document is
+  7-15 MB for react or typescript and has no README for them), a Hacker News item (the story and
+  30 top comments, fetched in parallel), a post on X (fxtwitter, which gets only the post number,
+  not the account or the query). No flag; 10 s; a failure reads the page as before and
+  `chain.tried` says `api:<site>:failed`. Engine `api:<site>`, the JSON in `raw.json`.
+  `--alternate` and `--screenshots` skip it.
+- **What the extractor dropped goes back** (`scripts/blockrule.py`): a block of
+  `page.md` that the text lacks - prose, code, a table, a captioned figure, and the heading over
+  them - goes in after its kept neighbour. Menus, link lists (also as a browser's plain lines, and
+  layout tables of links), fragments and cookie banners stay out. The header says
+  `defuddle + 4 blocks of page.md` and `outside the text: 2.6 KB of menus, links and fragments -
+  page.md`; `content.restored`, `restored_bytes` and `outside` in the manifest. Python's tutorial
+  gets 3.1 back; on a measured corpus 23 of 60 pages change, +2.1 % on the ordinary ones, and RFC
+  9110 goes from 5.5 KB (trafilatura) to 374 KB.
+- tests: `sources.py` (31 checks, in CI: the order, the keys, what moves the chain on and what ends
+  it, the bounds, each adapter on a local API and its fallback), `blocks.py` (18 checks, in CI;
+  every paragraph, code block and table of `page.md` in the text exactly once); `sources_live.py`
+  runs the same against the real services (20 checks, by hand, spends a few credits). A CLI test
+  never sends the user's keys: `harness.run_read` drops them.
+
+**Reading.**
+- **Encodings a server forgot to say**: a BOM first, then the header (latin-1 and ascii count as
+  unsaid - servers send them by default), `<meta>`, UTF-8, each kept only when the text reads like
+  its script; then the bytes (`charset_normalizer`); then a repair guess. windows-1251 never raises an
+  error, so it used to win every guess: KOI8-R, Shift_JIS, GBK, EUC-KR and UTF-16 came out as
+  mojibake or `empty` (UTF-16 even counted as binary for its zero bytes). Ten cases, all right now.
+- **A `#/` or `#!` route goes to the browser**, and its text wins over the landing page the server
+  sends for every route.
+- **"Settled" means done**: the text has not changed for 0.8 s, no script/XHR/fetch is in
+  flight, the main node is neither empty nor "Loading...". A static page whose mount node is empty
+  or a placeholder starts the browser however long its menu is. Content 0.8 s and 3 s late is read.
+- **A dead host or a 5xx with `--allow-external` goes to the readers, then the archive**:
+  "a host that never answered is not a wall" kept dmoz.org and lib.ru unread; with the readers'
+  20 s bound it costs at most that. A rescued page is `ok` with a note saying which tier gave it.
+- **One more try on 502/503/504** inside the HTTP step, a second later.
+- **Only a video's own address takes the subtitle path**: `vimeo.com/about` and `tiktok.com/about`
+  were `empty`. A video without subtitles is read as a page, `signals.no_transcript` says why.
+- **Jina by POST**: the address in the body keeps `#/` routes and Cyrillic paths (a GET lost
+  the route and failed with an `'ascii' codec` error); a "cached snapshot" is asked again with
+  `x-no-cache`; a wall Jina met is not text.
+- **No curl and no curl_cffi: urllib reads the page** with the same redirect checks and bounds;
+  "the host did not answer" was said when nothing had been asked.
+- **defuddle gets the page's address** through a `<base href>`: relative links were
+  `about:blank/...`. The extractors get the final address after redirects.
+- tests: `reading.py` (12 checks, in CI); `browser_live.py` gains the hash-route and late-JavaScript checks (21).
+
+**Timeouts.**
+- **Every step has its own bound, and there is still no whole-run deadline.** HTTP 20 s for all its
+  attempts (fingerprints, plain curl, the https upgrade); browser 20 s; readers 20 s (12 s each,
+  the next only while time is left); archive 20 s for the CDX lookup and the snapshot together, once
+  per run; converters 10 s; OCR 30 s a page; pictures 4 s; `yt-dlp` 20 s. Worst case on a wall with
+  `--allow-external` ~105 s instead of ~228 s - under the 120 s an agent's shell waits by default.
+- **A trickle ends**: `stream=True` made curl_cffi's read timeout mean "less than 1 byte a
+  second", so a page that dripped 22 bytes a second held the call for 154 s. Now below 1 KB/s for
+  10 s in a row the transfer is cut (curl too: `--speed-limit`/`--speed-time`), and the step's end
+  cuts a faster trickle; what arrived is kept with `partial`. Measured: a trickle ~12 s, a stall after
+  half a page ~16 s with the half kept. A cut transfer does not start the browser: it would wait for
+  the same slow server.
+- **One browser**: channels were listed whether installed or not (ten "browsers" on a machine
+  with two) and Chrome came twice, as a channel and as its own path. Now a browser is listed once,
+  only when its program is on disk, and a second one is tried only when the first fails to start -
+  a page one Chromium cannot render, another cannot either.
+- **A dropped connection is tried once more** on a new one (an empty reply or a reset), and an
+  `error` always has advice: check the address, try again in a minute (a failure is not cached), or
+  the flag that would try a reader or the archive.
+- **A cut document says why**. Still arriving when the 20 s ran out: `too_large`, "the
+  PDF was still arriving when 20 s ran out: 160K of 1.9M", advice `--download`. The server stopped
+  sending, or the connection broke: `error`, "the server stopped sending the PDF after 12K of 195K"
+  - a document stuck at 1 KB is not "too large". A PDF needs its last bytes and a cut ZIP is not
+  mended (that is deferred); HTML, text and JSON are kept as they arrived, and the advice names the
+  cause (stopped sending, the step ran out, the connection broke).
+- **What arrived is kept on every bound**: the HTTP body on both channels, the browser's DOM on a
+  load timeout, a slow Jina reader's text and a half-arrived archive snapshot (both `partial`). OCR
+  names a page that did not finish (`signals.ocr_timeouts`, a marker in the text) instead of a
+  silent gap; a yt-dlp out of time says so instead of "no subtitles". Pictures in flight are counted
+  (`images_truncated`); a converter out of time leaves the page to the other extractors. When a
+  later tier's text replaces a cut HTTP text, its `partial` no longer describes the answer and goes.
+- the pictures the text shows are fetched first, so 4 s go to the diagram the article talks about,
+  not to a front page's logos.
+- tests: `timeouts.py` (15 checks, in CI on every OS); `fixes.py` patches the new bounds.
+
+**Honest statuses.**
+- **`ok` needs a successful answer from the tier whose text it is.** The code of that tier decides:
+  401/407 → `login_required`; 403/419/429/451 → `blocked`; 404/410 → `not_found`; any other 4xx
+  or 5xx → `error`, with the server's own page kept as the text and `reason: HTTP 503 from the
+  server`. Before, `/500`, `/503` with text, httpbin's 400 and Hacker News' 419 ("Sorry.") were all
+  `ok`. A 403 from the server and a 200 from the browser is `ok`: the browser's text counts.
+- **Rotation on any refused 4xx** (not only 403/429), then **plain curl once**: Hacker News answers
+  419 to every browser fingerprint and the page to curl.
+- **Walls without words first, then in twenty languages** (en, ru, uk, de, fr, es, pt, it, nl, pl,
+  cs, tr, sv, ja, zh, ko, ar, hi, id, vi): a `cf-mitigated: challenge`, `x-vercel-mitigated` or
+  `x-amzn-waf-action` header; Cloudflare, DataDome, PerimeterX, Imperva, AWS WAF or Anubis markup on
+  a short page; then the phrases, folded (no case, no accents), counted in the title, the first
+  heading or the first lines of a page under 300 words, or anywhere on a page under 40. "Just a
+  moment" counts only when it is all the title says. An article that quotes the wall stays `ok` in
+  every language, and so does "Access denied: a short history of paywalls". Anubis and X's
+  "Something went wrong" are walls now. Chinese and Japanese are counted by character.
+- **The browser's own page is never the text**: `chrome-error://`, "This site can't be
+  reached", "HTTP ERROR 503" - `signals.render_error` names it, the browser's text is dropped.
+- **A cut transfer says so**: a timeout or a broken connection sets `signals.partial` (it
+  never did: `nonlocal` was missing), the first line says `partial`, the advice names `--refresh`
+  and `--download`; a stub of a few words is `error`, not a page.
+- **Only answers are cached**: `ok`, `media_only`, `not_found`, `login_required`. A network
+  failure, a wall, an error page or a stub is read again on the next call instead of being served
+  for 15 minutes.
+- **No `data:` payload anywhere**: `content.md`, `page.md`, the answer and the manifest
+  carry `data:image/png;base64,<81K sha1:3f2a9c1b>` instead of a megabyte of base64; an inline
+  picture is saved as `img/inline-<hash>.png`, and `--deny-images` names it the same way.
+- an archived copy goes through the same type detection as a live answer: a PDF in the
+  archive is read as a PDF, not decoded as HTML; `too_large_out` exists, so a body over the cap
+  is `too_large` with the cap named instead of a `NameError`.
+- schema: `signals.partial`, `render_error`, `external`, `external_status` (written before, never
+  declared).
+- tests: `statuses.py` (35 checks, in CI on every OS), `browser_live.py` gains the check of the browser's error page (18).
+
+**Security.**
+- **Only http(s), on every hop**: a redirect, a picture, a meta refresh or a browser request to
+  `file://`, `ftp://` or any other scheme is refused, private page or not; curl also gets
+  `--proto =http,https --proto-redir =http,https`. Before, a URL that looked private could redirect
+  anywhere: `/f/abc123def456gh` → `file:///…` put a local file into the answer, and
+  `<img src="file:///…">` on such a page was copied into `img/`.
+- **Two rules instead of one heuristic.** `host_is_private()` is the network rule: only the host
+  decides - an IP literal in any form, an internal name, or a name that *resolves* to an internal
+  address (`localtest.me`: loopback, RFC 1918, CGNAT, link-local, ULA - not 198.18.0.0/15, which a
+  fake-IP proxy such as Clash answers for every name); a public page never reaches the local network. `url_has_secret()` is
+  the reader rule only: credentials, a credential-like query key, a sharing or reset link, an
+  opaque run of 32+ characters (measured: 1.2 % of 249 public URLs flagged, 11 of 11 secret shapes
+  caught; the old token rule flagged 22 %, `python3-tips` and `oauth2-server` among them, which
+  also switched off the TLS channel and the readers for them).
+- **`--force-external` never sends an internal host**: the reader could not open it;
+  the manifest records `privacy.conflict: ["force_external refused", "internal host"]` and the
+  local result stays. It still sends a URL that may carry a secret, recorded as
+  `["force_external wins", "secret heuristic ignored"]`; `--allow-external` keeps such a URL local
+  and the advice names `--force-external` instead of repeating the flag that was just ignored.
+- **The browser stays out of the local network**: on a public page every request is routed and
+  one to an internal host or a non-web scheme is aborted - scripts, frames, meta refreshes,
+  WebSockets; service workers are blocked so nothing slips past the route.
+  `signals.browser_blocked` counts them.
+- **Referer is the origin** (`scheme://host[:port]/`), as a browser sends it to another site; an
+  internal page sends none to an outside host, and https never tells http. Before, a picture retry
+  after a 403 sent the full page URL, `?token=` included.
+- Chrome run without a browser library gets a throwaway `--user-data-dir` (it wrote a profile into
+  HOME); a server's `Content-Disposition` name never replaces a file in the folder or one of ours
+  (`victim.txt` → `victim-2.txt`, `manifest.json` → `manifest-2.json`).
+- **The cache is the user's own**: `<tmp>/read-page-<uid>`, 0700, files 0600 (umask during a read);
+  a folder of that name that is a link, belongs to someone else or cannot be closed is not used -
+  the run takes a fresh `mkdtemp` folder. Windows keeps `%TEMP%/read-page`, already per user.
+- schema: `privacy.conflict` is a list of strings (it always was in the code), `signals.browser_blocked`.
+- tests: `security.py` (32 checks on Linux, 28 on Windows where the POSIX cache checks are
+  skipped) in CI on every OS; `browser_live.py` gains two checks of the browser's guard (17); `fixes.py` and
+  `channel.py` follow the two rules. Known: DNS rebinding and Chrome's `--dump-dom` without a
+  browser library stay open (KNOWN-ISSUES 51, 52).
+
+**The output contract.**
+- **The answer is printed, not the manifest**: a header (status, engine and `cover` as "87% of the
+  page", the date of an archive copy, which file and how big, `from cache`, `fragment`, seconds;
+  then `url:`, `reason:`, `files:`, `advice:` and at most two `missing:`/`improve:` lines), then the
+  text. One answer is at most **9 980 bytes and 495 lines**, counted on what is written (UTF-8, LF,
+  stderr included): Codex passes 10 000 bytes to a non-OpenAI model, Roo Code 10 240, Cline 500
+  lines, and each cuts the rest differently. A text that fits comes whole; a longer one gets an
+  outline (headings with line numbers, levels dropped until it fits 2.5 KB; without headings, one
+  row per block), the first block cut at a paragraph, and `── next: line N of T → the same command
+  with --from N --file content.md ──`. `scripts/answer.py` holds it; the CLI and the MCP server both
+  call it.
+- **`--from N`** prints the block that starts at line N of the same file from the saved copy, with
+  no network; past the last line it says so. When there is no saved copy (or with `--refresh`) the
+  page is read again and a `note:` line says the lines may have moved. **`--file page.md`** answers
+  with the whole page; a fragment answers with `page.md` by itself. **`--json`** prints the manifest
+  as before. A `--from` without `--file` (and an MCP `read` without `file`) goes on in the file read
+  last (a `--file` switches it), kept in the manifest, so a forgotten flag never switches texts under the
+  line numbers; the pointer still names the file.
+- **Exit codes**: 0 whenever an answer is printed, whatever its status (`login_required` was 1); 1
+  an internal error, said on stdout; 2 a wrong call (unknown flag, a URL that is not http(s)), said
+  on stderr - a `file://` URL was a status `error` manifest.
+- **One name per action**: `--allow-images` and `--print` are gone (pictures are on by default, the
+  answer is the text), `--screenshot` is `--screenshots`, abbreviations are refused, so an old flag
+  fails loudly. MCP: `read_url` lost `allow_images` and gained `file`/`from`; `read` takes `dir`,
+  `file`, `from` - `offset`/`limit` are refused. `TEXT_LIMIT`, `--print`'s 24 000-character crop,
+  `parts/` and `content.parts` are gone.
+- **No line longer than 1 998 characters** (2 000 with CR LF; or 6 000 bytes) in
+  `content.md`/`page.md`: a longer one is cut after its last sentence end that fits (`。！？` need no
+  space after them), else at a space, else exactly at the limit; table rows and code lines too, and
+  every piece is kept. Claude Code's Read, OpenCode and Kimi CLI drop the rest of a longer line. A
+  raw file read through MCP keeps its lines; a line longer than a whole answer (a minified page)
+  shows its head and says how much was left out.
+- stderr is empty on success: library noise goes to `<cache>/stderr.log` (kept under 1 MB) unless
+  `READ_PAGE_TRACE` is set; stdout is UTF-8 with LF on every OS.
+- an early exit (a cap hit before any text) now has its `status_reason` too, so every status but
+  `ok` prints a `reason:` line; the `files:` line names only the files that exist.
+- the 15-minute cache counts from the read (or a `304`): showing a cached copy - a plain repeat, a
+  `--from` block or a picture top-up - used to restart the clock, so a page read block by block
+  never went stale. `--refresh` still restarts it, after a `200` or a `304`.
+- tests: `contract.py` (73 checks: budget on English, Russian, Chinese and heading-less pages, the
+  blocks put together equal `content.md`, outline rows are real headings, `--from` with the server
+  gone and with no saved copy, `--file page.md` going on in page.md, the cache age through repeats,
+  `--from`, a `304`, a changed page and expiry, exit codes, line cuts in English, Chinese, a table
+  row, a 5 000-character token and four-byte characters, MCP `read_url`/`read`/`from`); in CI on
+  every OS. The other suites read the manifest with `--json`.
+
+## 0.4.6 - 2026-11-02
+
+- **`--screenshot [N]`**: the page as images for a vision model, when there is no text to read.
+  1280 px wide, tiles of 1568 px tall, **nothing scaled** - 1280 is the width pages are laid out for
+  (measured: ten sites, none needed a horizontal scrollbar, text column 750-960 px) and 1568 is what
+  a vision host keeps. Chromium captures each tile from the full page (`full_page` + `clip`), so a
+  60 000 px page needs no stitching; fixed/sticky overlays are hidden and animations frozen.
+  PDFs are rendered by pymupdf into the same tiles; archives say they have no pages.
+  Manifest: `screenshots`, `files.screenshots`, `signals.screenshots`,
+  `signals.screenshot_tiles_needed`, `signals.screenshots_format`, `signals.screenshot_unsupported`;
+  MCP: a `screenshots` argument and one captioned image block per tile.
+- tests: five offline checks (mode key, no browser, PDF tiling, last tile shorter, missing browser
+  named) and nine live ones across CLI and MCP, including "an independent decoder (MuPDF) opens
+  every tile"; `browser_live.py` is 15 checks now.
+- a **block page keeps its words**: extraction used to be skipped for a wall, so when the browser
+  tier then failed the answer was empty even though the page itself said "Just a moment...".
+  Only a JavaScript shell (no text by definition) skips extraction now.
+- a caller that asked for fewer tiles than the page has is told so: the MCP header says
+  `1 image(s) of 2 the page has` and the caption reads `screenshot 1/2`, not `1/1`.
+- measured on 14 real pages: median 4 tiles needed (1-18), five pages fit in one; the default
+  stays one tile on purpose (a scan page or a canvas app is one screen, a long article is not).
+- CI: macOS moved to its own nightly/dispatch workflow (`macos.yml`) after GitHub cancelled macOS
+  runners under capacity pressure on three pushes in a row; push runs are ubuntu (3.9, 3.12) and
+  windows, plus the browser job on both.
+
+## 0.4.5 - 2026-11-02
+
+- **an EPUB keeps its picture order**: the spine of the package document says which
+  chapter comes first, and every `<img>`/`<image xlink:href>` inside it is ranked by
+  that, so `order` in the manifest and the MCP image blocks follow the book instead of
+  the archive. Closes the last `partly` in `KNOWN-ISSUES #5`.
+- the Linux wrappers are tested instead of assumed: CI fabricates `/snap/bin/chromium`
+  and the flatpak export with `sudo`, and `tests/setup_audit.py` asserts the browser
+  detector finds them (the last open half of #20; a real desktop launch is what is left).
+
+## 0.4.4 - 2026-11-02
+
+- **no URL means the setup report**, not an error: `readpage.py` with no arguments lists what this
+  machine can already do, what is missing (each line: what it buys and the command to install it),
+  and both keys, then exits 0. The skill still installs nothing - it names, the user decides.
+- a shell that is still empty after the browser budget gets a **second chance that watches the
+  text**: 5 s in total, 1.5 s for requests still in flight plus 3.5 s polling the body and the usual
+  mount nodes (`#app`, `#root`, `#__next`, ...). Closes the rest of KNOWN-ISSUES #12; the manifest
+  records `signals.browser_waited` (`networkidle`, `mount:#app` or `body`).
+- `signals.browser_waited` added to `references/manifest-schema.json` (the contract, `BUILD` stays 8).
+- **one session for every engine**: the stored jar is handed to the headless browser (a members-only
+  page that only renders for a logged-in session read `empty` before, `ok` in 4.3 s after) and to
+  `yt-dlp` (`--cookies`, members-only videos); a cookie the page sets in JavaScript goes back into
+  the same jar. Measured with a local gate: `status=ok, 1596 chars, signals.cookies.sent=1` against
+  `status=empty, 7 chars, sent=0` before the fix.
+- the setup report is a **table**, not a list of strings: `setup_rows()` is the single source
+  for what the skill detects and what it recommends, the install command follows the OS
+  (`winget` / `brew` / `apt`), `readability` and `lynx` are finally recommended (they were used
+  but never named), and two dead detections (`markdownify`, `youtube_transcript_api`) are gone.
+- **tests/setup_audit.py**: the advice is tested in both directions on synthetic machines -
+  nothing missing goes unnamed, and nothing installed is still asked for. It caught three real
+  defects: `readability` never recommended, a `curl` row that did not match the detected name,
+  and an `ocr-langs` row that claimed to work on machines without tesseract.
+- **tests/browser_live.py**: the browser tier is now proven against local servers - a shell
+  that mounts in 250 ms, a shell that mounts after the 10-second budget, and a members-only
+  page that renders only with the stored session (6 checks).
+- CI runs that browser suite on **ubuntu, windows and macOS**, alongside the offline suites on
+  ubuntu 3.9/3.12, windows 3.12 and macOS 3.12; the bundled Chromium is found where macOS keeps
+  it (`~/Library/Caches/ms-playwright`).
+- README rewritten around what the tool is for: one call, an honest receipt, the numbers.
+- **a unicode folder no longer breaks the plain-curl tier**: `curl.exe` receives argv in the ANSI code page, so `-o`/`-D` pointed at a Cyrillic path failed with status `000` and no error text at all. curl now runs inside an ASCII staging folder with relative names and Python moves the body into place (`KNOWN-ISSUES #45`). A curl exit with no HTTP status is reported as `curl exit N` instead of an empty status 0.
+
+## 0.4.3 - 2026-11-01
+
+A production-hygiene cut: no new tier, no manifest shape change (`BUILD` stays 8).
+
+- a video transcript keeps its **timestamps**: cues are grouped into blocks of up to 30 seconds and
+  each block starts with `[0:18] ...`, so a claim can be cited by time. The untouched cue file is
+  copied to `transcript.vtt` next to the text.
+- `--version` prints the skill version, the manifest schema and the cache build.
+- OCR language packs are checked instead of assumed: `--caps` lists them (`ocr_langs`), a requested
+  pack that is missing is reported (`signals.ocr_missing_langs`) and named in `improve[]` with the
+  file to install, while OCR falls back to the packs that exist.
+- the per-host picture store no longer doubles the disk: it hard-links the page's own file, and a
+  reused picture is linked into the page folder (measured: 10 pages x 6 shared pictures = 0.4 MB,
+  store 0 bytes).
+- `references/video.md`: what a real "video understanding" needs (ASR, frame OCR), what was
+  rejected (a vector index inside a CLI) and what is still undecided.
+- `--caps` is no longer cached for a day: it is the command people run right after installing a
+  language pack or `curl_cffi`, and the cache made it lie. ~150 ms, once per run.
+- `references/manifest-schema.json` publishes the manifest contract, and `tests/props.py` validates
+  every manifest the suite produces against it (unknown keys fail), so the file cannot drift.
+
+## 0.4.2 - 2026-11-01
+
+A cookies-and-honesty release. The cookie jar shape and the cache key change: `BUILD` 8 (old page
+entries are ignored, old cookie jars are still read once and rewritten).
+
+**Cookies that behave like cookies**
+- every entry now carries the `Domain` it was set for and its own expiry; a cookie set for
+  `example.com` is also sent to `app.example.com`, a host-only cookie stays on its host, and an
+  expired or `Max-Age=0` cookie is dropped instead of lingering until the TTL.
+- a cookie is stored under the host that *set* it, not under the URL the run started from
+  (`http -> https`, `example.com -> www.example.com` used to lose it).
+- the two HTTP tiers share one jar: the plain-`curl` tier gets it as a netscape file and its answer
+  is merged back, so a session survives a fingerprint fallback.
+- two runs on one host merge instead of overwriting each other's cookies.
+- picture requests send the site's jar (hotlink protection by cookie now works). `signals.cookies`
+  reports how many were sent and stored.
+- a wall that may be our own stale session says so: the advice names `--clear-cookies`
+  (renamed from `--fresh-session`; `fresh_session` in MCP is now `clear_cookies`). `--refresh`
+  still keeps cookies. No legacy alias is kept: the flag is `--clear-cookies` only.
+- `Path` and `Secure` are honoured: a cookie scoped to `/app` is not sent to `/other`, and a
+  `Secure` cookie never travels over plain http (the plain-`curl` tier is handed a pre-filtered
+  file, so curl's own jar reader cannot disagree).
+- cookies set by the `curl_cffi` tier were never stored: `r.cookies` iterates *names*, so the old
+  loop found no attributes and the exception was swallowed. The cookie objects live in
+  `r.cookies.jar` and are read from there now.
+
+**Redirects, names, politeness**
+- a `<meta http-equiv="refresh">` stub is followed (one hop, checked for a private target,
+  recorded in `signals.meta_refresh`). Such a page used to come back as `empty`.
+- a downloaded file takes the server's name from `Content-Disposition` (`filename` and
+  `filename*`), so `/download?id=7` gives `report-2026.pdf` instead of `raw.pdf`.
+- `robots.txt` and `X-Robots-Tag: noai` stay unread, as decided; `SKILL.md` and `README.md` now say
+  so explicitly instead of staying silent.
+
+**Extraction**
+- `cover` and `fragment` are counted in **words** again, not characters: the visible text is
+  stripped of tags and scripts and compared word by word. On the 30-URL corpus 11 cover values
+  moved (wikipedia 1.0 -> 0.871, tailwind 0.382 -> 0.448) and no fragment flipped.
+- a candidate text is scored `words + 2 per heading`, so a structured article is preferred over a
+  slightly longer pile of leftovers (a comments section used to win on length alone). The chosen
+  engine did not change on the corpus, and the 12-URL comparison stays 12/12 with 0 silent losses.
+
+**Pictures**
+- a site's shared pictures are fetched once per host: `hosts/<host>/assets.json` maps a picture URL
+  to the file the host already served, and later pages of the same site take it from there.
+  Measured: 10 pages x 6 shared pictures = 6 requests instead of 60. `--refresh` bypasses the
+  store for a URL it already knows (so a changed picture is noticed), reuse is reported in
+  `signals.images_reused`, and the store is pruned at 7 days.
+- a docx keeps its picture order: `document.xml` is parsed for the flow of `a:blip` references
+  (resolved through `document.xml.rels`), so the MCP image blocks come in reading order even when
+  the archive stores them differently (`order` on each entry, `signals.images_ordered`).
+
+**Documents and MCP layout**
+- a scanned PDF is now read: if `tesseract` is installed, the rendered pages are OCR'd and the
+  text comes back as `document:ocr` (`signals.ocr_pages`, `signals.ocr_langs`; `READ_PAGE_OCR_LANGS`,
+  `READ_PAGE_TESSDATA`). Without tesseract the answer still says what to install. Measured on a
+  synthetic scan: "SCANNED REPORT / Total 42 units" read back correctly; the Russian page reads
+  back "СКАН-ОТЧЁТ № 42 / Итого: 42 единицы" with `READ_PAGE_OCR_LANGS=rus+eng`.
+- a scan is recognised on the `pdftotext` path too, so a machine without pymupdf reports
+  `no text layer` and the `ocr` hint instead of a bare `empty`.
+- page-specific hints (ocr, browser, video) come before generic "install curl_cffi" lines: the
+  list is truncated at three and a scan used to lose its own hint.
+- MCP: a picture's caption line (`[240x160 7Kb] img/one.png`) is its own text block right above the
+  image, so text and pictures now alternate as paragraph -> path -> picture. Verified by eye on a
+  page with numbered pictures and on `wikipedia.org/wiki/Cat`.
+
+**Browser waiting**
+- one 10-second budget per browser covers loading *and* settling: a page with stable text returns in
+  ~0.3 s, a JavaScript shell is waited for until the budget runs out, something that paints at 12 s
+  is dropped as `empty` on purpose. Previously the settle window was a flat 1.5 s.
+
+**Smaller**
+- pictures are named even when the extractor dropped every `<img>` (trafilatura on a machine
+  without defuddle): the files are listed at the end of `content.md`, and the MCP server attaches
+  them from the manifest instead of returning a text-only answer.
+- a child process that spawns its own children no longer defeats the timeout: the whole process
+  group is killed, so a hung converter or browser cannot hold a call open (68 s -> the configured
+  bound on a trickling page).
+- WSL: the inherited Windows PATH is ignored for tools and browsers. `which defuddle` used to
+  return the npm shim under `/mnt/c`, and every read paid the full 20-second converter timeout.
+- a crashed run now prints `url.requested`, `dir` and `signals.status_reason`, so the MCP server can
+  still read the folder it left behind.
+- `run_tool` is covered by a test: argv everywhere, a shell only for `.cmd`/`.bat` on Windows, and a
+  URL with shell metacharacters never reaches a command line.
+- `KNOWN-ISSUES.md` rewritten: 35 rows with honest statuses, the rejected ideas recorded as
+  decisions, the `robots.txt`/credit-counter/one-module questions closed by decision.
+- the installed set is listed in `README.md`.
+
+## 0.4.1 - 2026-10-31
+
+A session and cache follow-up. No manifest shape change: `BUILD` stays 7.
+
+- cookies live in one folder per host for 6 hours by default (2-24 h via
+  `READ_PAGE_COOKIE_HOURS`), shared by every page of that host; a same-name cookie is replaced,
+  a cookie returned with an empty value is deleted. Nothing accumulates past the TTL.
+- `--refresh` means "the page answer may be stale", not "start a new session": it no longer
+  clears the host's cookies. `--fresh-session` (CLI) / `fresh_session` (MCP) is the explicit reset.
+  Documented in `SKILL.md`, `README.md` and `references/mcp.md`.
+- the one Russian code comment is translated; the multilingual login markers stay, because they
+  are matching data, not prose.
+
+## 0.4.0 - 2026-10-31
+
+A correctness and safety release: the contract now holds under flags, private URLs, hostile pages
+and MCP edge cases. `BUILD` 6 (the cache key changed, old entries are ignored).
+
+**Cache and flags**
+- one URL keeps one folder (`sha1(url|BUILD)`); the flags that produced an answer live in the
+  manifest (`_mode`), and a cached answer is *served* only when they match. `--allow-external` and
+  `--alternate` re-read in the same folder instead of returning the old blocked answer.
+- `--allow-images` after `--deny-images` reuses the cached text and only adds the pictures (one
+  local pass; the page is not fetched again).
+- `--dir DIR` is honoured on a cache hit: the artefacts are copied into DIR and `dir` points there.
+- `missing[]`/`improve[]` are reported on a cache hit too (the MCP header used to hide them).
+
+**Privacy and safety**
+- no flag lifts the private-URL rule. `--force-external` means "do not prefer the local text"; for a
+  loopback/RFC1918/credential-bearing URL it is still refused and `privacy.why` says so.
+- the `blocked` advice no longer tells the agent to repeat `--allow-external` on a private URL.
+- `looks_private()` rewritten: `ipaddress`-based (IPv4/IPv6, loopback, link-local, CGNAT, reserved,
+  IPv4-mapped), integer/hex/octal hosts (`2130706433`, `0x7f000001`, `0177.0.0.1`), `localhost`,
+  metadata names, private suffixes, credentials in the authority, token-like path segments.
+- pictures are checked too: a public page naming `127.0.0.1` or `169.254.169.254` gets the link in
+  the text but no request (`signals.images_private_skipped`); a picture redirect is checked per hop.
+  A page that is itself private may still use its own private pictures.
+- redirects of the main URL are followed by hand in both HTTP tiers, so every hop is checked.
+
+**Size and time**
+- bodies above 8 MB are spooled to disk and never held whole: `--download` has **no size and no
+  time limit** and streams straight to `raw.*` (a 120 MB file costs 33 MB of RSS, measured).
+  Without the flag a download stops at `MAX_DOWNLOAD` 250 MB and a file at `MEDIA_LIMIT` 100 MB,
+  with `too_large` decided from `Content-Length` before the body is read.
+- `MAX_PAGE_BYTES` 64 MB is the point where HTML/text stops being parsed into one string; the file
+  itself is still downloaded whole.
+- no whole-run deadline: each mechanism has its own attempts x timeout (HTTP 25 s x up to 4
+  fingerprints, browser 10 s x 3, reader 60 s, archive 20 s, picture 6 s; the table is in
+  `references/engines.md`). A browser that times out still yields the DOM it has
+  (`signals.render_partial`), instead of being thrown away.
+- the plain-curl tier sends `--compressed`: a gzip response is no longer decoded as cp1251 garbage.
+- zip entries are refused by their declared size, not after being read: a 120 KB docx with a 120 MB
+  entry went from 248 MB peak RSS to 26 MB.
+
+**Classification (the old thresholds produced four false statuses)**
+- `empty`/`not_found`/`blocked`/`login_required` are word-based and look at `<title>`/`<h1>`:
+  a 51-character status page is `ok`, a 781-character article about 404s is `ok`, a page quoting
+  "access denied" is `ok`, a newsletter form is `ok`.
+- a body that is binary (NUL or >10 % control bytes, not HTML) is `empty` with
+  `signals.binary`; it used to be `ok` with 98 400 characters of garbage.
+- an error page served at `*.png` is no longer `media_only` (the HTTP status is checked first).
+
+**Pictures**
+- `<base href>` is honoured when resolving picture URLs.
+- a name collision is checked against files already in `img/`, not only the current run: two pages
+  in one `--dir` no longer overwrite each other.
+- `--refresh` removes only the files the previous manifest lists, so a user's own `raw.txt` in a
+  `--dir` folder survives.
+
+**MCP (same core, no duplicated policy)**
+- `TEXT_LIMIT`, the download cap and the deadline are imported from `readpage.py`; the server keeps
+  only client-side image limits.
+- `allow_images=false` works (it was in the schema and read nowhere).
+- `read` only accepts folders this skill wrote (a cache entry, or a `--dir` with our manifest); a
+  prompt-injected model can no longer use it to read `C:\Windows\win.ini`.
+- the crop is counted in characters and cuts a long line: a 500 000-character single-line page used
+  to return 500 001 characters against a 24 000 limit.
+- a JSON-RPC batch gets `-32600` instead of crashing the loop and leaving the client hanging.
+- unknown arguments are rejected with the allowed list (the schema already said
+  `additionalProperties: false`).
+- `read` with an offset past the end says "end of file" instead of "showing 501-500".
+- `read_url` exposes `download`, matching the CLI.
+
+**Elsewhere**
+- only `http(s)` is accepted: `file:///...` gets a clear `error` instead of `empty` + "try --alternate".
+- `--caps` stays; the module docstring no longer lists flags removed in 0.3.0; `UA` says 0.4.
+- `SKILL.md` is rewritten: where files go, what each status returns, a sample manifest, the flags,
+  the limits, links to `references/`.
+- `defuddle`/`markitdown` are called with an argv list (a `.cmd` on Windows still needs `cmd.exe`);
+  a path with a quote can no longer change the command.
+
+**Second pass (same day, after review feedback)**
+- `--download` really has no limits: the body is spooled into the work folder (not a side temp dir),
+  `curl` loses `--max-time`/`--max-filesize`, curl_cffi loses the read timeout, and free disk space
+  is checked before writing. 120 MB file: 33 MB peak RSS.
+- no global deadline; connect 7.5 s + read 10 s, 3 fingerprints (was 4 x 25 s); Firecrawl/Jina 20 s;
+  converters 20 s; pictures 32 in parallel; a body or a DOM that arrived before a timeout is kept.
+- one folder per URL again (the `mode` hash is gone); the flags live in the manifest, a re-read
+  replaces the text and keeps the files, and `--allow-images` tops up pictures without refetching.
+- `--refresh` revalidates: `If-None-Match`/`If-Modified-Since`, `304` -> `cache=revalidated`.
+- pictures: two different names are two files even with identical bytes (a marker always resolves);
+  same name + different bytes -> `-2`, documented in `SKILL.md`.
+- `media_only` and `too_large` write a one-line `content.md` that names the file, so "read
+  content.md" never hits a missing file.
+- flag conflicts are resolved by precedence: `--force-external` wins over the private-URL heuristic
+  and says so in `privacy.conflict`; `--allow-external` does not.
+- cookies set by a redirect are kept for that run (never persisted).
+- heuristics stay honest (a long page is not forced to `ok`); `signals.status_reason` says which rule
+  fired, so a status can be checked instead of trusted - the content is always there.
+- `--refresh` revalidates per file: `ETag`/`Last-Modified` for the page **and for each picture**, so
+  one changed picture does not re-download the other 599. It no longer wipes the folder; files the
+  new version does not reference are pruned at the end.
+- cookies are kept per host for 15 minutes (shared by every page of that host), never persisted
+  longer, dropped by `--refresh`.
+- two TLS fingerprints by default; a third only when both answered a plain 403.
+- a duplicated sweep result file is deleted; the
+  "230 pages" claim is withdrawn in `KNOWN-ISSUES.md`.
+- `tests/fixes.py`: 60 offline checks, one per fix above.
+- `BUILD` 7.
+
+## 0.3.0 - 2026-10-30
+
+A contract release: the manifest says what to do instead of listing arrays, the MCP server became
+useful to a model, and pictures are part of the result.
+
+- status: `ok|blocked|login_required|not_found|empty|media_only|too_large|error`; `next` and
+  `exhausted` removed, `advice` (one sentence) added.
+- login: three levels - strong (401, redirect to `/login`, `/signin`, `/auth`, accounts.google.com)
+  and medium (password form, "sign in to continue") give `login_required`; weak (a mention on a
+  short page, a password on a long one) only sets `signals.login_hint`. The footer is never
+  counted (substack: marker at 92.7 % of the text). Content is returned in every case.
+- images: every `<img>/<source>` is downloaded - own host and CDN - into `img/` with original
+  names, sha1 dedupe, tracking pixels dropped, `-2` on collision; the text gets
+  `[12x12 7Kb] img/pencil.png` after each image block. No image count limit; the download is
+  time-bounded and what it cuts is reported. Images inside docx/epub are extracted too.
+- single-file endpoints: `media_only` (image/audio/video saved as is), `too_large` over 100 MB
+  with `--download` to override. (0.3.0 claimed a 250 MB page cap here; it was not implemented
+  until 0.4.0.)
+- Google Docs/Sheets/Slides: the export endpoint (docx/xlsx/pptx) is the primary path, not a
+  rescue; the JavaScript shell is only a fallback. A live doc gave 11 pictures and footnote-safe
+  text in 2.4 s.
+- docx: footnotes and endnotes are read from `word/footnotes.xml`/`endnotes.xml` - the extra 13 %
+  of text that markitdown reported was real content, not noise.
+- flags: `--allow-external` (alias `--public`), `--force-external` (alias `--external`, implies
+  allow), `--alternate`, `--download`, `--print`, `--refresh`, `--dir`; `--browser`, `--images`,
+  `--more`, `--sensitive` removed.
+- fetch: the TLS fingerprint is chosen by measurement, not by recency. Over 14 sites the newest
+  profiles (`chrome136`-`chrome152`, `edge101`, and the `chrome` alias) are exactly the ones npm
+  and medium reject, while `chrome151` and `safari184` pass 12/14 and `firefox135` is the only one
+  amazon accepts. The rotation is `chrome151 -> firefox135 -> safari184 -> chrome124` - at most
+  four attempts, only after 403/429, one attempt on 12 of 14 sites. The list is filtered against
+  the targets the installed `curl_cffi` actually has. No randomised fingerprints (sites use
+  allowlists); no bot User-Agent on top of a browser handshake.
+- `--download` means no policy limits: file size, page size, image count, image time.
+- without `--download` the text comes first: pictures may spend only what is left of a 10-second
+  budget, the rest is reported as `images_truncated`.
+- a short answer from a JSON/text endpoint (a DOI resolver, an API) is `ok`, not `empty`.
+- the default work directory is the cache entry itself, so pictures are never copied twice.
+- a weak login signal is only reported on short pages (a shop with 27 835 characters and a header
+  modal was getting a false "text may be partial").
+- a dead connection is not retried by the second HTTP client; a TLS-level reset still falls back
+  to plain curl.
+- `READ_PAGE_TRACE=1` prints one `RP_LOG event=. k=v` line per step.
+- a wall served with HTTP 200 and a few hundred characters is `blocked`, not `ok`.
+- an exception inside one tier prints a manifest with `status=error` and an advice line.
+- readers are not called when the host never answered at all.
+- tests: a manual probe and a live sweep (both since removed); `tests/props.py` offline
+  checks; `tests/sites.md` registry; `KNOWN-ISSUES.md`.
+- `BUILD` 5.
+
+## 0.2.0 - 2026-10-29
+
+- manifest: `page.{title,description,author,published,canonical,lang,site}` from `<meta>`,
+  OpenGraph and JSON-LD, so citations do not need a second request.
+- images: WebP dimensions in the manifest (VP8X, VP8, VP8L).
+- tests: `tests/props.py` - paths with spaces and Cyrillic, crop/`--more` continuity, cache reuse,
+  page metadata.
+- docs: install/update section in README, `version`/`updated` in the frontmatter.
+- `BUILD` 3.
+
+## 0.1.0 - 2026-10-29
+
+- First working cut: one command, JSON manifest with `status/exhausted/next`, `content.md` +
+  `page.md` + `raw.*`, coverage-aware extractor choice, headless fallback, archive before paid
+  readers, `--public` privacy gate, documents (PDF/DOCX/XLSX/PPTX/EPUB), video transcripts,
+  15-minute cache, parts/outline for long pages, cropping, MCP frontend.

@@ -1,0 +1,141 @@
+name: macos
+
+# The offline suites on macOS (macos-15, arm64): paths, subprocesses and browser discovery differ
+# there. It is started by hand before a release (`gh workflow run macos.yml --ref main`), not on every push.
+on:
+  workflow_dispatch:
+
+jobs:
+  offline:
+    name: offline (macos)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install optional engines
+        shell: bash
+        run: |
+          python -m pip install --quiet --disable-pip-version-check trafilatura html2text \
+            pymupdf python-docx openpyxl python-pptx pillow psutil curl_cffi
+
+      - name: the CLI answers --version, --caps and the setup report
+        shell: bash
+        run: |
+          python -X utf8 scripts/readpage.py --version
+          python -X utf8 scripts/readpage.py --caps
+          python -X utf8 scripts/readpage.py
+
+      - name: reading (encodings, dead hosts and 5xx to readers, video pages, Jina by POST, urllib)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/reading.py
+
+      - name: sources (the readers in order, keys to their own service, the site APIs and their fallback)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/sources.py
+
+      - name: blocks (what the extractor dropped goes back in place; menus stay out)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/blocks.py
+
+      - name: images (numbered markers in place, the printed view's pictures, hard links between pages)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/images.py
+
+      - name: speed (a cached answer asks nothing, caps kept until PATH changes, cookie lock, the disk floor)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/speed.py
+
+      - name: MCP in parallel (four calls at once, cancel kills the call, which pictures become image blocks)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/mcp_parallel.py
+
+      - name: timeouts (every step bounded, a trickle ends, one browser, a dropped connection)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/timeouts.py
+
+      - name: deadline (55 s a read, defuddle worker, extractors that can be stopped, huge pages, warm MCP)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/deadline.py
+
+      - name: formats (RTF and ODT by content, a local file, pymupdf4llm, YouTube pages)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/formats.py
+
+      - name: statuses (codes, walls in twenty languages, cut transfers, the cache)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/statuses.py
+
+      - name: security (only http(s), no way into the local network, readers, cache)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/security.py
+
+      - name: the answer contract (budget, outline, --from, exit codes)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/contract.py
+
+      - name: property suite
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/props.py
+
+      - name: fix suite
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/fixes.py
+
+      - name: main HTTP channel offline (curl_cffi against a local server)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/channel.py
+
+      - name: setup advice, empty machine and full machine
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/setup_audit.py
+
+      - name: office fixtures (docx/xlsx/pptx)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/office_fixtures.py
+
+      - name: MCP protocol smoke
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/mcp_smoke.py
+
+  browser:
+    name: browser (macos)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: install Playwright and its Chromium
+        shell: bash
+        run: |
+          python -m pip install --quiet --disable-pip-version-check playwright pymupdf
+          python -m playwright install chromium
+
+      - name: the browser tier reads a shell, waits for a late mount, carries the session
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/browser_live.py
