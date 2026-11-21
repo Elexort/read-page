@@ -24,7 +24,7 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
 - The "documents" gap (install pymupdf) is a PDF's alone (KNOWN-ISSUES 177): it was named for an EPUB or ODT
   read on a machine without pymupdf, pdftotext or markitdown, which our readers read with the standard library.
   A DOCX, XLSX or PPTX whose library does not import names that library instead.
-- **ZIP member names in a code page** (KNOWN-ISSUES 178, from a Chinese Windows audit): a name with no UTF-8
+- **ZIP member names in a code page** (KNOWN-ISSUES 178, seen on Windows set to Chinese): a name with no UTF-8
   flag was read as CP437, so Windows' own zipper's GBK names came out as "╦╡├≈.txt", an EPUB named in GBK lost
   its chapters, and a Shift-JIS 表 lost its backslash byte to a "/". A name whose CP437 reading is no name is
   read as UTF-8 when it is, else in the CJK code page that decodes the archive's names into its script (the
@@ -48,6 +48,12 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   shape's - is in `img/` with its marker where it stood, its alt text Word's; Word's WMF copy of it is passed over,
   and a picture in a format no browser or model shows (WMF, EMF, PICT) is named where it stands. Written by our
   reader in its process, under its caps (1 000 pictures, 32 MB each, 128 MB in all).
+- **A PDF's table: two rows of the page in one row of the model's grid are two rows again** (KNOWN-ISSUES 127):
+  GPT-3's "LAMBADA LAMBADA | acc ppl | 68.0 8.63" and "Correct Answer → Incorrect Answer →" beside both
+  answers. A grid row is split where one cell's lines are items of one kind (numbers, or one last or first
+  word) and the other cells' lines start beside them; never the header row (`pdftables.split_rows`). On the
+  corpus with no time limit: truth rows whose first three cells start a table row 876 -> 892 of 1 051, rows whole
+  and as table rows unchanged, no other document changed; the rule tried before lost 2 whole rows.
 - **The readers' process has a memory limit on Windows** (KNOWN-ISSUES 181): a Job Object's process memory limit
   of 2 GB, which the process sets on itself (ctypes), as RLIMIT_AS holds it on Linux: an allocation past it is a
   MemoryError. Its start costs 11 ms more (143 -> 154 ms median of 20 under the environment's Python), ctypes'

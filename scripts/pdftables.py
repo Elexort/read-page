@@ -51,6 +51,8 @@ CAPTION = re.compile(r"(?mi)^\s*(table|tab\.|таблица|табл\.)\s*[\dIVX
 SPAN_GAP = 0.35        # of a word's height: two cells of a row whose words stand this close are one
 BOX_CUTS = True        # a table whose box runs through a word of the page is left as text
 CUT_LINES = True       # a line the column lines cut at a mere space, in a cell of two lines, is text
+SPLIT_ROWS = True      # two rows of the page in one row of the grid are two rows (split_rows)
+NUMBER = re.compile(r"^[-+−–±$€£(]?\d[\d.,]*%?\)?[*†‡§]*$")
 
 
 def cpus():
@@ -246,6 +248,59 @@ def cut_lines(put, dirs=None):
     return out
 
 
+def _cell_lines(ws):
+    """A cell's lines of the page, in order: [(top, bottom, text)]."""
+    by = defaultdict(list)
+    for w in ws:
+        by[(w[5], w[6])].append(w)
+    return sorted((min(w[1] for w in ln), max(w[3] for w in ln),
+                   " ".join(x[4] for x in sorted(ln, key=lambda w: w[0]))) for ln in by.values())
+
+
+def _parallel(lines):
+    """Are a cell's lines items of one kind - all numbers, or all with one last word ("Correct Answer
+    ->" over "Incorrect Answer ->"), or one first word of phrases - rather than one text wrapped ("WiC"
+    over "Accuracy", "Average number of" over "co-occurrences")?"""
+    if all(NUMBER.match(t) for t in lines):
+        return True
+    words = [t.split() for t in lines]
+    if any(not w for w in words):
+        return False
+    return len({w[-1] for w in words}) == 1 or (len({w[0] for w in words}) == 1 and all(len(w) > 1 for w in words))
+
+
+def split_rows(put, ys):
+    """The grid's row lines with one more where a row of the grid holds rows of the page (KNOWN-ISSUES
+    127: GPT-3's "LAMBADA LAMBADA | acc ppl | 68.0 8.63", its examples' "Correct Answer -> Incorrect
+    Answer ->" beside both answers). A row is split when one of its cells holds two lines or more that
+    are items of one kind (_parallel) and every other cell has a line starting beside each of them -
+    a cell's own text may wrap below its line; the new line runs under the last line that ends before
+    the next row starts. Never the first row, whose header may wrap. Measured 2026-11-21 on the corpus
+    with no time limit: truth rows whose first three cells start a table row 876 -> 892 of 1 051 (16 of
+    GPT-3's Table H.1), rows whole 788 and as table rows 654 of 889 as before, no other document
+    changed; a rule that split any row whose every cell had as many lines on shared heights lost 2
+    whole rows (headers) and made 12 rows of none, one that took short lines as items broke a form's
+    prose into rows."""
+    extra = []
+    for r in range(1, len(ys) - 1):
+        cells = [_cell_lines(ws) for (rr, _c), ws in put.items() if rr == r and ws]
+        if len(cells) < 2:
+            continue
+        anchors = [v for v in cells if len(v) >= 2 and _parallel([t[2] for t in v])]
+        if not anchors:
+            continue
+        a = max(anchors, key=len)
+        if not all(all(any(abs(t[0] - top) <= 2.0 for t in v) for top, _b, _t in a) for v in cells):
+            continue
+        for i in range(1, len(a)):
+            top = a[i][0]
+            if top <= a[i - 1][1]:
+                continue
+            above = max([a[i - 1][1]] + [t[1] for v in cells for t in v if t[1] <= top + 0.5])
+            extra.append((above + top) / 2.0)
+    return sorted(set(ys) | set(extra)) if extra else ys
+
+
 def alone(lines, n):
     """Is line n of a block the only one at its height - no other line's middle inside its band?"""
     y0, y1 = min(w[1] for w in lines[n]), max(w[3] for w in lines[n])
@@ -328,6 +383,11 @@ def page_tables(doc, i):
         if not ws:
             continue
         put = fill(ws, xs, ys)
+        if SPLIT_ROWS:
+            rows_at = split_rows(put, ys)
+            if rows_at is not ys:
+                ys = rows_at
+                put = fill(ws, xs, ys)
         gone = cut_lines(put, dirs) if CUT_LINES else set()
         if gone:
             # prose the column lines cut stays text, above the table or below it as it stands

@@ -164,6 +164,28 @@ def notes_pdf(path):
     doc.close()
 
 
+# Rows of the page two of which the model's grid holds as one (KNOWN-ISSUES 127): its second and third
+# rows share a grid row, and its last a label over two lines beside one value
+PAIRED = [("Task", "Metric", "Score"), ("LAMBADA", "acc", "68.0"), ("LAMBADA", "ppl", "8.63"), ("ARC", "acc", "78.5")]
+PAIRED_GRID = {"xs": [70, 190, 300, 420], "ys": [140, 158, 194, 212, 246]}
+
+
+def paired_pdf(path):
+    import pymupdf
+    doc = pymupdf.open()
+    pg = doc.new_page()
+    pg.insert_text((72, 100), "PAIRED-INTRO the paragraph before the table.", fontsize=10)
+    for k, row in enumerate(PAIRED):
+        for x, cell in zip((72, 200, 320), row):
+            pg.insert_text((x, 151 + 18 * k), cell, fontsize=10)
+    pg.insert_text((72, 223), "Average number of", fontsize=10)
+    pg.insert_text((72, 237), "co-occurrences", fontsize=10)
+    pg.insert_text((320, 223), "17.5", fontsize=10)
+    pg.insert_text((72, 290), "PAIRED-OUTRO the paragraph after the table.", fontsize=10)
+    doc.save(path)
+    doc.close()
+
+
 # pymupdf4llm as the tests need it, first on the model's process' path (READ_PAGE_TEST_MODEL_PATH,
 # which pdftables.py alone reads: the process runs with -E): the tables above with the model's own
 # (cut) cells; a page that fails, a process that ends at a page, a page or a Markdown call that
@@ -511,6 +533,29 @@ try:
               n_n == 1 and all(out_n.splitlines().count(note) == 1 for note in NOTES)
               and out_n.index(NOTES[0]) > out_n.index("| Model") and "| GPipe | 556M | 84.3 |" in out_n
               and wordbag(out_n) == wordbag(plain_notes), repr(out_n[:500]))
+        # KNOWN-ISSUES 127: two rows of the page in one row of the model's grid keep their pairing
+        prd = os.path.join(tmp, "paired.pdf")
+        paired_pdf(prd)
+        os.environ.update(RP_STUB_TABLE="1", RP_STUB_GRID=json.dumps(PAIRED_GRID))
+        sys.modules["pymupdf4llm"] = stub
+        try:
+            dp_ = pymupdf.open(prd)
+            plain_p = dp_[0].get_text()
+            out_p, n_p, _notes = pt.page_tables(dp_, 0)
+        finally:
+            for k in ("RP_STUB_TABLE", "RP_STUB_GRID"):
+                os.environ.pop(k, None)
+            if real4llm is not None:
+                sys.modules["pymupdf4llm"] = real4llm
+            else:
+                sys.modules.pop("pymupdf4llm", None)
+        out_p = out_p or ""
+        check("127: two rows of the page in one row of the model's grid are two rows (GPT-3's \"LAMBADA LAMBADA | "
+              "acc ppl\")", n_p == 1 and "| LAMBADA | acc | 68.0 |" in out_p and "| LAMBADA | ppl | 8.63 |" in out_p
+              and wordbag(out_p) == wordbag(plain_p), repr(out_p[:400]))
+        check("... and a label of two lines beside one value stays one row (its lines are no items of one kind)",
+              any("Average number of" in ln and "co-occurrences" in ln and "17.5" in ln
+                  for ln in out_p.splitlines() if ln.startswith("|")), repr(out_p[-200:]))
         # a word is on its side by its line's direction; its box only when no direction is known
         flat_d, side_d = {(0, 0): (1.0, 0.0)}, {(0, 0): (0.0, -1.0)}
         short = (10, 0, 20, 30, "the", 0, 0, 0)
