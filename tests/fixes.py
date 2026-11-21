@@ -610,20 +610,20 @@ def main():
     p = subprocess.run([sys.executable, "-X", "utf8", MCP], input=json.dumps(
         {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
          "params": {"name": "read", "arguments": {"dir": d2, "bogus": 1}}}) + "\n",
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     out = json.loads(p.stdout.splitlines()[0])
     said = (((out.get("result") or {}).get("content") or [{}])[0].get("text") or "")
     check("MCP leaves an unknown argument out and names it; the call is answered",
           not (out.get("result") or {}).get("isError") and "ignored: bogus (no such parameter)" in said,
           said.split("\n")[0][:90])
     p = subprocess.run([sys.executable, "-X", "utf8", MCP], input=json.dumps(
-        [{"jsonrpc": "2.0", "id": 1, "method": "ping"}]) + "\n", capture_output=True, text=True, timeout=60)
+        [{"jsonrpc": "2.0", "id": 1, "method": "ping"}]) + "\n", capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     out = json.loads(p.stdout.splitlines()[0])
     check("MCP answers a batch instead of dying", (out.get("error") or {}).get("code") == -32600, "")
     p = subprocess.run([sys.executable, "-X", "utf8", MCP], input=json.dumps(
         {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
          "params": {"name": "read", "arguments": {"dir": d2, "file": "note.md", "from": 99999}}}) + "\n",
-        capture_output=True, text=True, timeout=60)
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     out = json.loads(p.stdout.splitlines()[0])
     sc = (out.get("result") or {}).get("structuredContent") or {}
     said = "".join(b.get("text", "") for b in (out.get("result") or {}).get("content") or [])

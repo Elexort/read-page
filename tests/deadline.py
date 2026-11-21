@@ -100,20 +100,20 @@ def fake_defuddle(root):
     """A defuddle install whose parser never answers: the worker loads it and hangs in warm-up."""
     dist = os.path.join(root, "node_modules", "defuddle", "dist")
     os.makedirs(os.path.join(dist, "utils"))
-    with open(os.path.join(dist, "node.js"), "w") as f:
+    with open(os.path.join(dist, "node.js"), "w", encoding="utf-8") as f:
         # a timer keeps node running: with only a pending promise it exits on Linux (nothing left in
         # its event loop), and "the worker ended" is a quick failure, not the stuck parser meant here
         f.write("exports.Defuddle = () => new Promise(() => { setInterval(() => {}, 1 << 30); });\n")
-    with open(os.path.join(dist, "utils", "linkedom-compat.js"), "w") as f:
+    with open(os.path.join(dist, "utils", "linkedom-compat.js"), "w", encoding="utf-8") as f:
         f.write("exports.parseLinkedomHTML = () => ({});\n")
-    with open(os.path.join(dist, "cli.js"), "w") as f:
+    with open(os.path.join(dist, "cli.js"), "w", encoding="utf-8") as f:
         f.write("setTimeout(() => {}, 600000);\n")          # the CLI hangs too
     if os.name == "nt":
-        with open(os.path.join(root, "defuddle.cmd"), "w") as f:
+        with open(os.path.join(root, "defuddle.cmd"), "w", encoding="utf-8") as f:
             f.write('@node "%~dp0\\node_modules\\defuddle\\dist\\cli.js" %*\r\n')
     else:
         p = os.path.join(root, "defuddle")
-        with open(p, "w") as f:
+        with open(p, "w", encoding="utf-8") as f:
             f.write('#!/bin/sh\nexec node "$(dirname "$0")/node_modules/defuddle/dist/cli.js" "$@"\n')
         os.chmod(p, 0o755)
 
@@ -279,7 +279,7 @@ try:
             "readpage.curl_cffi_requests() if has else None\n"
             "print(has, 'markdownify' in sys.modules, 'readability' in sys.modules, 'bs4' in sys.modules)\n"
             % SCRIPTS)
-    p = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, text=True, timeout=60)
+    p = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     lines = p.stdout.split("\n")
     check("start-up: urllib's certificate store is not loaded at import", lines[:1] == ["0"], p.stdout[:80])
     check("start-up: curl_cffi loads without markdownify, bs4 and readability",
@@ -300,10 +300,10 @@ try:
         shell = ("chromium_headless_shell-1243", "chrome-headless-shell-linux64", "chrome-headless-shell")
     for parts in (exe, shell):
         os.makedirs(os.path.join(pw, *parts[:-1]), exist_ok=True)
-        open(os.path.join(pw, *parts), "w").close()
+        open(os.path.join(pw, *parts), "w", encoding="utf-8").close()
     code = ("import sys, json; sys.path.insert(0, %r); import readpage\n"
             "print(json.dumps([[b['name'], b.get('path')] for b in readpage.browsers()]))\n" % SCRIPTS)
-    p = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, text=True, timeout=60,
+    p = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
                        env=dict(os.environ, PLAYWRIGHT_BROWSERS_PATH=pw))
     try:
         found = json.loads(p.stdout)

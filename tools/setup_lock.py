@@ -53,7 +53,7 @@ def main(argv):
         p = subprocess.run([uv, "pip", "compile", src, "--universal", "--python-version",
                             ".".join(envsetup.PYTHON_VERSION.split(".")[:2]), "--only-binary", ":all:",
                             "--no-header", "--no-annotate", "--generate-hashes", "-o", out],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace")
     finally:
         os.unlink(src)
     if p.returncode != 0:
