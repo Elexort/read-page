@@ -32,6 +32,12 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   accented letters stay (`docreaders.fix_zip_names`).
 - The marker patterns of the answer (`pictures.MARK`) and of the MCP server (`ANY_MARKER`) were quadratic on a
   run of `[img #N · ` that no `]` closes (KNOWN-ISSUES 179): 16 000 in a line took 43.7 s, now 1.4 ms.
+- **ODS and ODP are our readers'** (KNOWN-ISSUES 180), in their process of its own with its clock, kill and caps,
+  as ODT is: they were paragraphs in order (`odf_text`, the read's own process). A sheet is `## its name` and its
+  table, rows and cells repeated as the sheet says within the grid's caps; a slide is `## Slide N`, its frames'
+  text, lists, tables and pictures, then `notes:`. On LibreOffice-shaped files: 678 table rows of a workbook (0
+  before), its repeated rows, a deck's 12 slides, 10 table rows, 3 pictures and notes. `odf_text` is gone; the
+  plain reader is what is left when the reader breaks. A table in a frame is read in an ODT too.
 - CI: the repository is public, so `macos.yml` runs on every push to dev, as `tests.yml` does.
 - **The installer's open rows** (KNOWN-ISSUES 142-145, 151):
   - Sources: every setting that sends an installer elsewhere than its default or skips a check - uv's index,

@@ -364,6 +364,71 @@ check("odt: a picture with its title, a text box's text after its paragraph, a f
       "![ODT PICTURE](Pictures/p.png)" in md and "CAPTION-TEXT" in md and "`x over 2 = FORMULA`" in md
       and "ObjectReplacements" not in md, "")
 
+# ------------------------------------------------ ODS and ODP, as LibreOffice writes them
+NS_PRES = NS + (' xmlns:presentation="urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"')
+
+
+def odf(name, mimetype, body, extra=(), raw=None):
+    """An OpenDocument file whose office:body holds `body` (a spreadsheet's or a presentation's), or
+    whose content.xml is `raw`."""
+    with zipfile.ZipFile(path(name), "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), mimetype)
+        z.writestr("content.xml", raw if raw is not None else (
+            '<?xml version="1.0" encoding="UTF-8"?><office:document-content %s office:version="1.3">'
+            '<office:body>%s</office:body></office:document-content>' % (NS_PRES, body)))
+        for n, data in extra:
+            z.writestr(n, data)
+    return path(name)
+
+
+def cells(*texts, empty_after=1021):
+    return "".join('<table:table-cell office:value-type="string"><text:p>%s</text:p></table:table-cell>' % t
+                   for t in texts) + '<table:table-cell table:number-columns-repeated="%d"/>' % empty_after
+
+
+ODS_BODY = ('<office:spreadsheet><table:table table:name="Sales"><table:table-column table:number-columns-repeated="3"/>'
+            '<table:table-row>%s</table:table-row><table:table-row>%s</table:table-row>'
+            '<table:table-row table:number-rows-repeated="100">%s</table:table-row>'
+            '<table:table-row table:number-rows-repeated="1048000"><table:table-cell table:number-columns-repeated="1024"/>'
+            '</table:table-row></table:table>'
+            '<table:table table:name="Empty"><table:table-row table:number-rows-repeated="1048576">'
+            '<table:table-cell table:number-columns-repeated="1024"/></table:table-row></table:table>'
+            '<table:table table:name="Notes"><table:table-row><table:table-cell><text:p>ONE-COLUMN-NOTE</text:p>'
+            '<office:annotation><text:p>COMMENT-WORD</text:p></office:annotation></table:table-cell></table:table-row>'
+            '</table:table></office:spreadsheet>'
+            % (cells("Region", "Q1", "Q2"), cells("North", "12", "24"), cells("Zero", "0", "0")))
+p = odf("sheet.ods", "application/vnd.oasis.opendocument.spreadsheet", ODS_BODY)
+md, note = docreaders.read(p, "ods")
+check("ods: each sheet a heading and its table; rows repeated as the sheet says, empty ones and empty sheets left out",
+      "## Sales" in md and "| Region | Q1 | Q2 |" in md and "| North | 12 | 24 |" in md
+      and md.count("| Zero | 0 | 0 |") == 100 and "Empty" not in md, "%r %r" % (md[:120], note))
+check("ods: a sheet of one column is its paragraphs, a cell's comment left out",
+      "## Notes" in md and "ONE-COLUMN-NOTE" in md and "COMMENT-WORD" not in md, repr(md[-80:]))
+ODP_BODY = (
+    '<office:presentation><draw:page draw:name="page1">'
+    '<draw:frame presentation:class="title"><draw:text-box><text:p>SLIDE-ONE-TITLE</text:p></draw:text-box></draw:frame>'
+    '<draw:frame presentation:class="outline"><draw:text-box><text:list><text:list-item><text:p>first point</text:p>'
+    '</text:list-item><text:list-item><text:p>second point</text:p></text:list-item></text:list></draw:text-box>'
+    '</draw:frame><draw:frame><draw:image xlink:href="Pictures/chart.png"/><svg:title>THE CHART</svg:title></draw:frame>'
+    '<presentation:notes><draw:page-thumbnail draw:page-number="1"/><draw:frame presentation:class="notes">'
+    '<draw:text-box><text:p>SPEAKER-NOTE text.</text:p></draw:text-box></draw:frame></presentation:notes></draw:page>'
+    '<draw:page draw:name="page2"><draw:frame><table:table><table:table-row><table:table-cell><text:p>CELL-A</text:p>'
+    '</table:table-cell><table:table-cell><text:p>CELL-B</text:p></table:table-cell></table:table-row><table:table-row>'
+    '<table:table-cell><text:p>CELL-C</text:p></table:table-cell><table:table-cell><text:p>CELL-D</text:p>'
+    '</table:table-cell></table:table-row></table:table></draw:frame>'
+    '<draw:custom-shape><text:p>SHAPE-TEXT</text:p></draw:custom-shape>'
+    '<draw:g><draw:frame><draw:text-box><text:p>GROUPED-TEXT</text:p></draw:text-box></draw:frame></draw:g>'
+    '</draw:page></office:presentation>')
+p = odf("deck.odp", "application/vnd.oasis.opendocument.presentation", ODP_BODY)
+md, note = docreaders.read(p, "odp")
+at = [md.find(x) for x in ("## Slide 1", "SLIDE-ONE-TITLE", "- first point\n- second point",
+                           "![THE CHART](Pictures/chart.png)", "notes: SPEAKER-NOTE text.", "## Slide 2")]
+check("odp: a slide a heading, its title, its list, its picture, then its notes",
+      min(at) >= 0 and at == sorted(at), "%s %r %r" % (at, md[:200], note))
+check("odp: a table in a frame is a table; a shape's and a group's text are kept",
+      "| CELL-A | CELL-B |" in md and "| CELL-C | CELL-D |" in md and "SHAPE-TEXT" in md and "GROUPED-TEXT" in md,
+      repr(md[-160:]))
+
 # ------------------------------------------------ RTF
 R = (b"{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswiss\\fcharset0 Arial;}{\\f1\\fcharset204 Times;}"
      b"{\\f2\\fcharset134 SimSun;}{\\f3\\fcharset2 Symbol;}}"
@@ -433,11 +498,10 @@ check("hostile: a part that unpacks past the limit is read up to it, quickly",
       "over the size limit" in note and secs < 5, "%.2fs %r" % (secs, note[:80]))
 os.environ["READ_PAGE_CACHE"] = os.path.join(TMP, "cache")        # readpage's own folders: ours
 import readpage                              # noqa: E402
-odf_notes = []
-got, secs = timed(attempt, readpage.odf_text, p, odf_notes)
-check("the plain ODT reader (ODS, ODP) reads a part past the limit up to it, and says so (was: nothing)",
-      isinstance(got, str) and "BOMB-START" in got and secs < 5 and "size limit" in " ".join(odf_notes),
-      "%.2fs %r %r" % (secs, odf_notes, got if not isinstance(got, str) else got[:40]))
+got, secs = timed(attempt, docreaders.odf_plain, p)
+check("the plain OpenDocument reader (when a reader breaks) reads a part past the limit up to it, and says so",
+      isinstance(got, tuple) and "BOMB-START" in got[0] and secs < 5 and "size limit" in got[1],
+      "%.2fs %r" % (secs, got if not isinstance(got, tuple) else (got[0][:40], got[1])))
 p = epub("deep.epub", [("c1.xhtml", "<div><span>" * 50000 + "DEEP" + "</span></div>" * 50000)], nav=False)
 (md, note), secs = timed(docreaders.read, p, "epub")
 check("hostile: 50 000 nested elements in a page, read in seconds", "DEEP" in md and secs < 10, "%.2fs" % secs)
@@ -480,6 +544,15 @@ md, info = hostile("repeats.odt", "odt")
 check("an ODT table of rows and cells repeated 64 times each stays small (4.5 KB took 40 s, 164 MB out)",
       fine(info, 3, 120) and "Before the trap" in md and len(md) < 3000000 and "cut" in info.get("note", ""),
       show(info, md))
+# a sheet repeats what it holds without the ODT's 64: what it builds is the grid's caps alone
+row = ('<table:table-row table:number-rows-repeated="1000000">' + '<table:table-cell table:number-columns-repeated='
+       '"100000"><text:p>x</text:p></table:table-cell>' * 8 + '</table:table-row>')
+odf("repeats.ods", "application/vnd.oasis.opendocument.spreadsheet",
+    '<office:spreadsheet>' + ''.join('<table:table table:name="S%d">%s</table:table>' % (k, row * 50)
+                                     for k in range(20)) + '</office:spreadsheet>')
+md, info = hostile("repeats.ods", "ods")
+check("an ODS of 20 sheets of rows and cells repeated a million and 100 000 times stays small, and says it is cut",
+      fine(info, 3, 150) and len(md) < 6000000 and "cut" in info.get("note", ""), show(info, md))
 md, info = scaled(lambda n: rtf("cellx.rtf", TRAP_RTF + b"\\trowd\\cellx9000000" +
                                 b"".join(b"\\cellx%d" % (20 * (k + 1)) for k in range(n)) +
                                 b"\\intbl a\\cell\\row" * n + b"\\pard after\\par}"), "rtf", 750, 3000)
@@ -592,10 +665,14 @@ md, info = hostile("styles.odt", "odt", mb=200)
 check("a styles.xml that declares a DOCTYPE is left out, and the note says so (it went silently)",
       fine(info, 2) and "Before the trap" in md and "DOCTYPE" in info.get("note", ""), show(info, md))
 p = odt("plain.odt", "", raw='<?xml version="1.0"?>\n' + LAUGHS + BODY)
-odf_notes = []
-got = attempt(readpage.odf_text, p, odf_notes)
-check("the plain ODT reader (ODS, ODP) refuses the DOCTYPE too, and says so",
-      got == "" and "DOCTYPE" in " ".join(odf_notes), "%r %r" % (got, odf_notes))
+got = attempt(docreaders.odf_plain, p)
+check("the plain OpenDocument reader refuses the DOCTYPE too, and says so",
+      isinstance(got, tuple) and got[0] == "" and "DOCTYPE" in got[1], repr(got))
+for kind, mime in (("ods", "spreadsheet"), ("odp", "presentation")):
+    odf("doctype." + kind, "application/vnd.oasis.opendocument." + mime, "", raw='<?xml version="1.0"?>\n' + LAUGHS + BODY)
+    md, info = hostile("doctype." + kind, kind, mb=200)
+    check("an %s that declares a DOCTYPE is refused, in the readers' process" % kind.upper(),
+          fine(info, 2) and md == "" and "DOCTYPE" in info.get("note", ""), show(info, md))
 
 # one bad element loses that element, not the document; what is lost is named
 p = epub("table.epub", [("c1.xhtml", "<p>Chapter one.</p>"),
@@ -710,7 +787,8 @@ got, secs, peak = peak_alloc(readpage.docx_notes, buf.getvalue())
 check("133: a docx's footnotes that unpack to 60 MB are read up to a cap", peak < 50, "%.2fs, %.0f MB" % (secs, peak))
 
 # ------------------------------------------------ the CLI: these readers, with a machine's own pandoc there or not
-for name, fact in (("book.epub", "ENDNOTE-TEXT"), ("doc.odt", "ODT-NOTE"), ("doc.rtf", "RTF-NOTE")):
+for name, fact in (("book.epub", "ENDNOTE-TEXT"), ("doc.odt", "ODT-NOTE"), ("doc.rtf", "RTF-NOTE"),
+                   ("sheet.ods", "ONE-COLUMN-NOTE"), ("deck.odp", "SPEAKER-NOTE")):
     r = run_read(path(name), env={"READ_PAGE_SKIP": "browser", "READ_PAGE_TRACE": "1"})
     text = r.file("content.md")
     check("cli: %s is read by our reader, its notes too" % name,

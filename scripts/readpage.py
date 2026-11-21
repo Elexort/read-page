@@ -4558,30 +4558,16 @@ def ocr_pages(paths):
     return "\n\n".join(out), info
 
 
-def odf_text(path, notes=None):
-    """An OpenDocument file's headings and paragraphs in order, list items and table cells on lines
-    of their own (ODS and ODP are read so): docreaders' plain reader in this process, its
-    content.xml read up to MAX_PAGE_BYTES (a part past it is read up to it) and a DOCTYPE
-    refused. What it could not do goes into `notes`."""
-    try:
-        text, note = docreaders.odf_plain(path, MAX_PAGE_BYTES)
-    except Exception as e:                                    # noqa: BLE001
-        debuglog.exc("odf: plain", e)
-        text, note = "", "it could not be read (%s)" % type(e).__name__
-    if note and notes is not None:
-        notes.append(note)
-    return text
-
-
-# Our readers of EPUB, ODT and RTF (docreaders.py) run in a process of their own: a file of a few
-# KB made them take gigabytes or minutes (2026-11-21), and in this process nothing could stop them. They stop themselves at their time; the process is killed at it, and
-# RLIMIT_AS holds its memory where the OS has it. All the read's documents share the converter's
-# time - a ZIP's 30 gave each one its own 10 s - and with --download there is no limit.
+# Our readers of EPUB, OpenDocument (ODT, ODS, ODP) and RTF (docreaders.py) run in a process of their
+# own: a file of a few KB made them take gigabytes or minutes (2026-11-21), and in this process nothing
+# could stop them. They stop themselves at their time; the process is killed at it, and its memory is
+# held where the OS can hold it (docreaders._limit_memory). All the read's documents share the
+# converter's time - a ZIP's 30 gave each one its own 10 s - and with --download there is no limit.
 _DOCS = {"spent": 0.0}             # the read's converter clock for these documents
 
 
 def own_doc(path, kind):
-    """An EPUB, ODT or RTF through docreaders.py in its own process: (markdown, note)."""
+    """An EPUB, ODT, ODS, ODP or RTF through docreaders.py in its own process: (markdown, note)."""
     unlimited = budget.unlimited()
     left = CONVERTER_TIMEOUT - _DOCS["spent"]
     if not unlimited and left < 0.2:
@@ -5314,18 +5300,12 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 fast = office_fast(path, sub)
         if len(fast.strip()) > 5:
             return fast, ""
-    if kind == "rtf" or sub == "odt":
+    if kind == "rtf" or sub in ("odt", "ods", "odp"):
         # our reader's answer stands: a reader that breaks gives its plain text itself, in its own
-        # process (the old plain readers here read a part whole, or in quadratic time)
-        md, why = own_doc(path, "rtf" if kind == "rtf" else "odt")
+        # process (the old plain readers here read a part whole, or in quadratic time; a sheet or a
+        # slide deck was its paragraphs in this process, with no clock and no kill)
+        md, why = own_doc(path, "rtf" if kind == "rtf" else sub)
         return md, why or ("" if md.strip() else "no text in this %s" % (sub or kind).upper())
-    if sub in ("ods", "odp"):
-        # a sheet or a slide deck as its headings and paragraphs (odf_text)
-        notes = []
-        text = odf_text(path, notes)
-        if text.strip():
-            return text, "; ".join(notes) or "plain text, tables flattened"
-        return "", "; ".join(notes) or "no text in this %s" % sub.upper()
     if kind == "pdf":
         if c["libs"].get("pymupdf"):
             text = None

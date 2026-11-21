@@ -269,9 +269,13 @@ try:
         check("ODT (%s) is read with its heading" % path,
               r.manifest.get("status") == "ok" and "ODT-MARKER" in text and "ODT-HEADING" in text,
               "%s: %r" % (r.manifest.get("status"), text[:80]))
-    plain = mod.odf_text(odt_path)
-    check("an ODS or ODP's plain text: heading and paragraphs in order (odf_text)",
-          plain.startswith("# ODT-HEADING") and plain.rstrip().endswith("ODT-MARKER."), repr(plain[:60]))
+    ods_path = os.path.join(tmp, "labelled.ods")
+    odt(ods_path, "application/vnd.oasis.opendocument.spreadsheet")      # a text's body, a sheet's type
+    r = run_read(ods_path, env=dict(env, READ_PAGE_TRACE="1"))
+    text = r.file("content.md")
+    check("an ODS is our readers' too, in their process, and its body decides how (a text's here)",
+          mod.zip_subtype(ods_path) == "ods" and text.startswith("# ODT-HEADING")
+          and text.rstrip().endswith("ODT-MARKER.") and b"event=document.own" in r.err, repr(text[:60]))
 
     # ------------------------------------------------ a picture is saved under its own ending
     for path, want in (("/logo", ".svg"), ("/favicon", ".ico"), ("/scan.tiff", ".tiff")):

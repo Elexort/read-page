@@ -1,10 +1,12 @@
-"""EPUB, ODT and RTF as Markdown with the standard library alone (2026-11-20).
+"""EPUB, OpenDocument (ODT, ODS, ODP) and RTF as Markdown with the standard library alone (2026-11-20).
 
-pandoc - pypandoc_binary, 41 MB of --setup's download and 226 MB on disk - read these three
-formats and nothing else here; measured against it on 52 files, these readers lose nothing it kept
-and keep what it lost. They need nothing but the standard library: an EPUB's XHTML goes through
-html.parser, which expands no entity a DTD declares; an ODT's XML through ElementTree, a DOCTYPE
-refused first; an RTF through a tokenizer of our own.
+pandoc - pypandoc_binary, 41 MB of --setup's download and 226 MB on disk - read EPUB, ODT and RTF
+and nothing else here; measured against it on 52 files, these readers lose nothing it kept and
+keep what it lost. They need nothing but the standard library: an EPUB's XHTML goes through
+html.parser, which expands no entity a DTD declares; an OpenDocument file's XML through
+ElementTree, a DOCTYPE refused first; an RTF through a tokenizer of our own. A spreadsheet's sheets
+and a presentation's slides are read as a text's body is (2026-11-21: they were plain paragraphs
+in readpage's own process).
 
 readpage.py runs them in a process of their own (`python docreaders.py KIND PATH UNTIL KILL`, see
 main()), killed at the converter's time and held to MEMORY by RLIMIT_AS where the OS has it: a
@@ -102,13 +104,14 @@ class _Clock(object):
 
 
 def read(path, kind, until=None, finish=None):
-    """(markdown, note) of an EPUB, an ODT or an RTF file; ("", why) when it gives no text. A part
-    or an element that breaks loses that part, and the note names it; a reader that breaks as a
-    whole leaves the document's plain text (its words in order, no tables), and says so."""
+    """(markdown, note) of an EPUB, an OpenDocument file (ODT, ODS, ODP) or an RTF file; ("", why)
+    when it gives no text. A part or an element that breaks loses that part, and the note names it;
+    a reader that breaks as a whole leaves the document's plain text (its words in order, no
+    tables), and says so."""
     try:
         if kind == "epub":
             return epub_md(path, until, finish)
-        if kind == "odt":
+        if kind in ("odt", "ods", "odp"):
             return odt_md(path, until, finish)
         if kind == "rtf":
             with open(path, "rb") as fh:            # read(n) sets n bytes aside first: no more than the file has
@@ -1368,7 +1371,8 @@ _ODF = {"office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
         "draw": "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0",
         "fo": "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0",
         "xlink": "http://www.w3.org/1999/xlink",
-        "svg": "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"}
+        "svg": "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0",
+        "presentation": "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"}
 
 
 def _o(name):
@@ -1388,6 +1392,8 @@ O_TITLE, O_DESC = _o("svg:title"), _o("svg:desc")
 O_STYLE_NAME, O_HREF = _o("text:style-name"), _o("xlink:href")
 O_RUBY, O_RUBY_BASE, O_RUBY_TEXT = _o("text:ruby"), _o("text:ruby-base"), _o("text:ruby-text")
 O_NOTE_CITATION = _o("text:note-citation")
+O_TEXT_BODY, O_SHEET_BODY, O_SLIDE_BODY = _o("office:text"), _o("office:spreadsheet"), _o("office:presentation")
+O_PAGE, O_SLIDE_NOTES, O_TABLE_NAME = _o("draw:page"), _o("presentation:notes"), _o("table:name")
 _ODF_SKIP = frozenset(_o(x) for x in (
     "office:annotation", "office:annotation-end", "text:tracked-changes", "text:soft-page-break",
     "text:bookmark", "text:bookmark-start", "text:bookmark-end", "text:reference-mark",
@@ -1523,16 +1529,42 @@ class _Odt(object):
         self.done, self.of = 0, 0         # top-level elements read, of how many
 
     def doc(self, root):
+        """The body, whichever it is: a text's blocks; a spreadsheet's sheets, each a heading and its
+        table (rows and cells repeated as the sheet says, within the grid's caps: a sheet repeats a
+        row it holds as often as it holds it, where a text's table is held to 64); a presentation's
+        slides, each "## Slide N", its frames' text, tables and pictures in order, then its notes."""
         body = root.find(_o("office:body"))
-        text = body.find(_o("office:text")) if body is not None else None
-        if text is None:
+        box = next((k for k in body if k.tag in (O_TEXT_BODY, O_SHEET_BODY, O_SLIDE_BODY)), None) \
+            if body is not None else None
+        if box is None:
             return "", False
         out, late = [], False
-        kids = list(text)
+        kids = list(box)
         self.of = len(kids)
         try:
+            slide = 0
             for ch in kids:
-                out.extend(self.blocks_of([ch], 1))
+                if box.tag == O_TEXT_BODY:
+                    out.extend(self.blocks_of([ch], 1))
+                elif box.tag == O_SHEET_BODY and ch.tag == O_TABLE:
+                    try:
+                        blocks = self.table(ch, 1, repeat=None)
+                    except (Late, MemoryError):
+                        raise
+                    except Exception as e:     # noqa: BLE001  (this sheet, not the others)
+                        self.broke[type(e).__name__] = self.broke.get(type(e).__name__, 0) + 1
+                        blocks = []
+                    if blocks:
+                        out.append(_heading(2, _esc(_one_line(ch.get(O_TABLE_NAME) or "Sheet %d" % (self.done + 1)))))
+                        out.extend(blocks)
+                elif box.tag == O_SLIDE_BODY and ch.tag == O_PAGE:
+                    slide += 1
+                    out.append("## Slide %d" % slide)
+                    out.extend(self.blocks_of([k for k in ch if k.tag != O_SLIDE_NOTES], 1))
+                    for notes in (k for k in ch if k.tag == O_SLIDE_NOTES):
+                        said = " ".join(_one_line(b) for b in self.blocks_of(list(notes), 2) if b)
+                        if said:
+                            out.append("notes: " + said)
                 self.done += 1
         except Late:
             late = True
@@ -1704,6 +1736,8 @@ class _Odt(object):
                                posixpath.normpath(urllib.parse.unquote(re.sub(r"^\./", "", href))))
             elif k.tag == O_TEXTBOX:
                 pend.extend(self.blocks_of(list(k), depth + 1))
+            elif k.tag == O_TABLE:                  # a slide's table stands in a frame of its own
+                pend.extend(self.table(k, depth + 1))
         return pic.replace("\x00", "")
 
     def formula(self, href):
@@ -1776,12 +1810,14 @@ class _Odt(object):
                     out.extend(self.blocks_of([ch], depth + 1))
         return out
 
-    def table(self, el, depth):
-        """A table's grid: repeated rows and cells 64 times each at most, a row WIDTH columns, the
-        grid CELLS (DOC_CELLS with the document's other tables); past them the table is cut and the
-        note says so (313 rows of 32 cells, each repeated 64 times both ways, took 40 s and
-        gave 164 MB). A row with no text is left out, and a row's empty cells at its end."""
+    def table(self, el, depth, repeat=64):
+        """A table's grid: repeated rows and cells `repeat` times each at most (None: as often as the
+        grid's caps leave room for - a sheet's), a row WIDTH columns, the grid CELLS (DOC_CELLS with
+        the document's other tables); past them the table is cut and the note says so (313 rows of 32
+        cells, each repeated 64 times both ways, took 40 s and gave 164 MB). A row with no text is
+        left out, and a row's empty cells at its end."""
         rows, state = [], {"width": 0, "cut": False}
+        cap = repeat or (1 << 62)
 
         def walk(box, d):
             for r in box:
@@ -1796,7 +1832,7 @@ class _Odt(object):
                     for c in r:
                         if c.tag not in (O_CELL, O_COVERED):
                             continue
-                        rep = min(max(_int(c.get(_o("table:number-columns-repeated")), 1), 1), 64)
+                        rep = min(max(_int(c.get(_o("table:number-columns-repeated")), 1), 1), cap)
                         text = self.cell(c, depth + 1) if c.tag == O_CELL else ""
                         room = WIDTH - len(cells)
                         if room <= 0:
@@ -1808,7 +1844,7 @@ class _Odt(object):
                         cells.pop()
                     if not cells:
                         continue
-                    rep = min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), 64, ROWS - len(rows))
+                    rep = min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), cap, ROWS - len(rows))
                     width = max(state["width"], len(cells))
                     fit = _grid_room(self.clock, len(rows), width)
                     if fit < rep:
@@ -1844,14 +1880,14 @@ class _Odt(object):
 
 
 def odt_md(path, until=None, finish=None):
-    """An OpenDocument text as Markdown: content.xml's body, with styles.xml for what its styles
-    say."""
+    """An OpenDocument text, spreadsheet or presentation (ODT, ODS, ODP) as Markdown: content.xml's
+    body, whichever it holds (_Odt.doc), with styles.xml for what its styles say."""
     clock = _Clock(until, finish)
     with zipfile.ZipFile(path) as z:
         zf = _Zip(z)
         data = zf.read("content.xml")
         if not data:
-            return "", _join("no content.xml in this ODT" if data is None else "its content.xml is empty",
+            return "", _join("no content.xml in this file" if data is None else "its content.xml is empty",
                              zf.note())
         root, why = _xml(data, clock)
         if root is None:
@@ -2633,9 +2669,9 @@ def rtf_plain(data):
 
 
 def odf_plain(path, cap=PART_BYTES, until=None):
-    """An OpenDocument file's headings and paragraphs in order, as plain text (readpage reads ODS
-    and ODP so): content.xml read up to `cap`, a DOCTYPE refused, XML that breaks read up to the
-    break. (text, note)."""
+    """An OpenDocument file's headings and paragraphs in order, as plain text: what is left when the
+    reader breaks as a whole. content.xml read up to `cap`, a DOCTYPE refused, XML that breaks read
+    up to the break. (text, note)."""
     clock = _Clock(until)
     with zipfile.ZipFile(path) as z:
         zf = _Zip(z)
@@ -2690,7 +2726,7 @@ def plain(path, kind, until=None):
     """(text, note) of a document whose reader broke: its words without the structure."""
     if kind == "epub":
         return epub_plain(path, until)
-    if kind == "odt":
+    if kind in ("odt", "ods", "odp"):
         return odf_plain(path, PART_BYTES, until)
     with open(path, "rb") as fh:
         return rtf_plain(fh.read(min(os.fstat(fh.fileno()).st_size, RTF_BYTES))), ""
@@ -2720,7 +2756,8 @@ def _limit_memory(nbytes):
 
 
 def main(argv):
-    """python docreaders.py KIND PATH [UNTIL [KILL]]: one document, as JSON on stdout ({"md", "note"}).
+    """python docreaders.py KIND PATH [UNTIL [KILL]]: one document (KIND: epub, odt, ods, odp, rtf), as
+    JSON on stdout ({"md", "note"}).
     UNTIL is when the reading stops (a time.time(); 0: no limit), KILL when readpage.py kills this
     process: what was read is written by the middle of the two."""
     kind, path = argv[0], argv[1]
