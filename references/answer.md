@@ -196,8 +196,8 @@ Every picture the text shows is a numbered marker where the page has it:
 `[img #3 · 100x80 3K · Diagram of the flow] img/03-diagram-of-the-flow.png` - the number is the
 file's, the alt is inside the brackets, the path comes last. Whatever produced the text, the
 pictures are there: an extractor, a block put back from `page.md` (a picture the extractor took out
-of a paragraph comes back after it), a reader, a site's API; a DOCX or PPTX picture stands where the
-document has it, and pictures a document does not place are listed after the text, in document
+of a paragraph comes back after it), a reader, a site's API; a DOCX, PPTX, EPUB, ODT or RTF picture stands
+where the document has it, and pictures a document does not place are listed after the text, in document
 order. In one answer a repeat prints as `[img #3]` (a tiny picture with a short alt as the alt,
 `✓`); `content.md` keeps every marker full. A picture that was not downloaded says why and keeps
 its address: `[img #5 · chart · not downloaded: 404] https://…`. Tracking pixels and spacers are

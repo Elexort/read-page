@@ -176,6 +176,31 @@
         "binary": {
           "type": "boolean"
         },
+        "broken_archive": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "the document is an archive that does not open whole: cut (its table of contents and what came after the cut are missing), damaged (members that do not unpack), or not a ZIP at all (`what` it is: a Word 97-2003 document, a password-protected Office file, text...). A cut or damaged one is read from the members that are whole: how many were found, how many are whole, and the ones that are not with why",
+          "properties": {
+            "how": {
+              "enum": ["cut", "damaged", "not a ZIP"]
+            },
+            "what": {
+              "type": "string"
+            },
+            "members": {
+              "type": "integer"
+            },
+            "whole": {
+              "type": "integer"
+            },
+            "not_whole": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
         "note": {
           "type": "string"
         },

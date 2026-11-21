@@ -1,14 +1,17 @@
-"""EPUB, ODT and RTF as Markdown with the standard library alone (2026-11-20).
+"""EPUB, OpenDocument (ODT, ODS, ODP) and RTF as Markdown with the standard library alone (2026-11-20).
 
-pandoc - pypandoc_binary, 41 MB of --setup's download and 226 MB on disk - read these three
-formats and nothing else here; measured against it on 52 files, these readers lose nothing it kept
-and keep what it lost. They need nothing but the standard library: an EPUB's XHTML goes through
-html.parser, which expands no entity a DTD declares; an ODT's XML through ElementTree, a DOCTYPE
-refused first; an RTF through a tokenizer of our own.
+pandoc - pypandoc_binary, 41 MB of --setup's download and 226 MB on disk - read EPUB, ODT and RTF
+and nothing else here; measured against it on 52 files, these readers lose nothing it kept and
+keep what it lost. They need nothing but the standard library: an EPUB's XHTML goes through
+html.parser, which expands no entity a DTD declares; an OpenDocument file's XML through
+ElementTree, a DOCTYPE refused first; an RTF through a tokenizer of our own. A spreadsheet's sheets
+and a presentation's slides are read as a text's body is (2026-11-21: they were plain paragraphs
+in readpage's own process).
 
 readpage.py runs them in a process of their own (`python docreaders.py KIND PATH UNTIL KILL`, see
-main()), killed at the converter's time and held to MEMORY by RLIMIT_AS where the OS has it: a
-reader stops itself at `until`, and the kill is the backstop for what it does not foresee. What
+main()), killed at the converter's time and held to MEMORY where the OS can hold it (RLIMIT_AS on
+Linux, a Job Object on Windows: _limit_memory): a reader stops itself at `until`, and the kill is
+the backstop for what it does not foresee. What
 they build is bounded by the document, not by its elements: a table's grid by CELLS and all of a
 document's tables by DOC_CELLS, whatever its cells span or repeat (a 1 KB EPUB took 1.4 GB and a
 4.5 KB ODT 40 s, because a cap held per cell and multiplied across cells). No scan runs back over
@@ -58,6 +61,8 @@ SPACES = 1000000                   # spaces an ODT's text:s may add to one docum
 FINISH = 1.0                       # seconds past `until` for writing what was read
 MEMORY = 2 << 30                   # the readers' process: its address space where the OS limits it
 PROMISE = 300                      # "--download reads it whole" when the whole would take this at most
+PICTURES = 1000                    # pictures an RTF gives up to; their bytes are TOTAL_BYTES at most
+PICTURE_BYTES = PART_BYTES         # one picture of an RTF
 
 
 class Late(Exception):
@@ -101,19 +106,20 @@ class _Clock(object):
         return "; --download reads it whole" if 0 < done and spent / done <= PROMISE else ""
 
 
-def read(path, kind, until=None, finish=None):
-    """(markdown, note) of an EPUB, an ODT or an RTF file; ("", why) when it gives no text. A part
-    or an element that breaks loses that part, and the note names it; a reader that breaks as a
-    whole leaves the document's plain text (its words in order, no tables), and says so."""
+def read(path, kind, until=None, finish=None, pictures=None):
+    """(markdown, note) of an EPUB, an OpenDocument file (ODT, ODS, ODP) or an RTF file; ("", why)
+    when it gives no text. A part or an element that breaks loses that part, and the note names it;
+    a reader that breaks as a whole leaves the document's plain text (its words in order, no
+    tables), and says so. `pictures`: a folder an RTF's pictures are written to (rtf_md)."""
     try:
         if kind == "epub":
             return epub_md(path, until, finish)
-        if kind == "odt":
+        if kind in ("odt", "ods", "odp"):
             return odt_md(path, until, finish)
         if kind == "rtf":
             with open(path, "rb") as fh:            # read(n) sets n bytes aside first: no more than the file has
                 data = fh.read(min(os.fstat(fh.fileno()).st_size, RTF_BYTES) + 1)
-            md, note = rtf_md(data[:RTF_BYTES], until, finish)
+            md, note = rtf_md(data[:RTF_BYTES], until, finish, pictures)
             if len(data) > RTF_BYTES:
                 note = _join(note, "the file was read up to %d MB" % (RTF_BYTES >> 20))
             return md, note
@@ -374,11 +380,143 @@ def _grid_room(clock, rows, width):
 
 # ---------------------------------------------------------------- archives
 
+# A member's name is UTF-8 when its flag says so (bit 11); zipfile reads any other as CP437. Windows'
+# own zipper and many Chinese tools write the local code page and no flag: GBK names came out as
+# "╦╡├≈.txt", and an EPUB whose OPF names its chapters in UTF-8 lost them. A name whose CP437 reading
+# is no name anyone writes - box drawing, Greek, symbols - is UTF-8 when it decodes as UTF-8 (macOS
+# and Linux zippers with no flag), else the CJK code page that decodes every such name of the archive
+# into its script: the machine's own first, then kana for Shift-JIS, GB2312's characters for GBK,
+# Big5, Hangul for Korean. Plain ASCII and a CP437 name of accented letters stay as they are. Without
+# its code page on the machine, a Korean name of Hangul alone decodes as GBK too (its bytes are
+# GB2312's common characters): the code page of a Korean Windows is what tells them apart.
+CJK_CODECS = {936: "gb18030", 950: "big5", 932: "cp932", 949: "cp949"}
+
+
+def _latin(t):
+    """Is every letter of `t` past ASCII a Latin one (a CP437 name of accented letters: Größe, café)?"""
+    import unicodedata
+    return all(ord(c) < 0x80 or unicodedata.name(c, "").startswith("LATIN") for c in t)
+
+
+def _cjk_ok(t, codec):
+    """Is every character of `t` past ASCII one a name in `codec` is made of?"""
+    for c in t:
+        o = ord(c)
+        if (o < 0x80 or 0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF or 0xF900 <= o <= 0xFAFF
+                or 0x3000 <= o <= 0x303F or 0xFF00 <= o <= 0xFFEF or 0x2010 <= o <= 0x2027 or o in (0xB7, 0xD7)
+                or (codec == "cp932" and 0x3040 <= o <= 0x30FF)
+                or (codec == "cp949" and (0xAC00 <= o <= 0xD7A3 or 0x3130 <= o <= 0x318F))
+                or (codec == "big5" and 0x3100 <= o <= 0x312F)):
+            continue
+        return False
+    return True
+
+
+def _gb2312(t):
+    """Is every character of `t` past ASCII one of GB2312's (GBK's rows A1-F7): the ones names are made of,
+    where a Japanese or Big5 name read as GBK takes the rare ones of its extension."""
+    for c in t:
+        if ord(c) >= 0x80:
+            try:
+                b = c.encode("gbk")
+            except UnicodeEncodeError:
+                return False
+            if len(b) != 2 or not (0xA1 <= b[0] <= 0xF7 and 0xA1 <= b[1] <= 0xFE):
+                return False
+    return True
+
+
+def machine_cjk():
+    """The CJK code page of this machine, or "": Windows' ANSI code page (the one its zipper writes),
+    else the locale's language."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            return CJK_CODECS.get(ctypes.windll.kernel32.GetACP(), "")
+        except Exception:                                      # noqa: BLE001
+            return ""
+    lang = (os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE") or os.environ.get("LANG") or "").lower()
+    if lang.startswith(("zh_tw", "zh_hk", "zh_mo")):
+        return "big5"
+    return {"zh": "gb18030", "ja": "cp932", "ko": "cp949"}.get(lang[:2], "")
+
+
+def names_codec(raws, prior=None):
+    """The code page of an archive's names given the raw bytes of those with no UTF-8 flag: "utf-8", a
+    CJK code page, or "" - they are CP437, as zipfile reads them. `prior`: the machine's CJK code page
+    (machine_cjk() when None)."""
+    raws = [r for r in raws if any(b > 0x7F for b in bytearray(r))]
+    if not raws or all(_latin(r.decode("cp437")) for r in raws):
+        return ""
+    try:
+        for r in raws:
+            r.decode("utf-8")
+        return "utf-8"
+    except UnicodeDecodeError:
+        pass
+    clean = {}
+    for codec in ("gb18030", "big5", "cp932", "cp949"):
+        try:
+            texts = [r.decode(codec) for r in raws]
+        except UnicodeDecodeError:
+            continue
+        if all(_cjk_ok(t, codec) for t in texts):
+            clean[codec] = "".join(texts)
+    prior = machine_cjk() if prior is None else prior
+    if prior in clean:
+        return prior
+    if "cp932" in clean and any(0x3040 <= ord(c) <= 0x30FF for c in clean["cp932"]):
+        return "cp932"
+    if "gb18030" in clean and _gb2312(clean["gb18030"]):
+        return "gb18030"
+    if "big5" in clean:
+        return "big5"
+    if "cp949" in clean and any(0xAC00 <= ord(c) <= 0xD7A3 for c in clean["cp949"]):
+        return "cp949"
+    return next((c for c in ("cp932", "gb18030", "cp949") if c in clean), "")
+
+
+def fix_zip_names(z, prior=None):
+    """The names of zipfile `z`'s members with no UTF-8 flag read in the code page they were written
+    in (names_codec): each ZipInfo's `filename`, and the name `z` finds it by, become that reading;
+    its `orig_filename`, which zipfile checks against the member's own header, stays. Returns the
+    code page, "" when the names stay as zipfile read them."""
+    infos, raws = [], []
+    for i in z.infolist():
+        if not i.flag_bits & 0x800:
+            try:
+                raws.append(i.orig_filename.encode("cp437"))
+                infos.append((i, raws[-1]))
+            except UnicodeEncodeError:
+                continue
+    codec = names_codec(raws, prior)
+    if not codec:
+        return ""
+    taken = set(z.NameToInfo)
+    for i, raw in infos:
+        if not any(b > 0x7F for b in bytearray(raw)):
+            continue
+        try:
+            name = raw.decode(codec)
+        except UnicodeDecodeError:
+            continue
+        if name in taken:
+            continue
+        if z.NameToInfo.get(i.filename) is i:
+            del z.NameToInfo[i.filename]
+        i.filename = name
+        z.NameToInfo[name] = i
+        taken.add(name)
+    return codec
+
+
 class _Zip(object):
     """An archive's parts, each read up to its limit and all of them up to TOTAL_BYTES; what was
-    cut or could not be read is named in `cut` and `bad`."""
+    cut or could not be read is named in `cut` and `bad`. Its names are read in the code page they
+    were written in (fix_zip_names)."""
 
     def __init__(self, z):
+        fix_zip_names(z)
         self.z = z
         self.names = z.namelist()
         self.exact = set(self.names)
@@ -1236,7 +1374,8 @@ _ODF = {"office": "urn:oasis:names:tc:opendocument:xmlns:office:1.0",
         "draw": "urn:oasis:names:tc:opendocument:xmlns:drawing:1.0",
         "fo": "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0",
         "xlink": "http://www.w3.org/1999/xlink",
-        "svg": "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0"}
+        "svg": "urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0",
+        "presentation": "urn:oasis:names:tc:opendocument:xmlns:presentation:1.0"}
 
 
 def _o(name):
@@ -1256,6 +1395,8 @@ O_TITLE, O_DESC = _o("svg:title"), _o("svg:desc")
 O_STYLE_NAME, O_HREF = _o("text:style-name"), _o("xlink:href")
 O_RUBY, O_RUBY_BASE, O_RUBY_TEXT = _o("text:ruby"), _o("text:ruby-base"), _o("text:ruby-text")
 O_NOTE_CITATION = _o("text:note-citation")
+O_TEXT_BODY, O_SHEET_BODY, O_SLIDE_BODY = _o("office:text"), _o("office:spreadsheet"), _o("office:presentation")
+O_PAGE, O_SLIDE_NOTES, O_TABLE_NAME = _o("draw:page"), _o("presentation:notes"), _o("table:name")
 _ODF_SKIP = frozenset(_o(x) for x in (
     "office:annotation", "office:annotation-end", "text:tracked-changes", "text:soft-page-break",
     "text:bookmark", "text:bookmark-start", "text:bookmark-end", "text:reference-mark",
@@ -1284,6 +1425,247 @@ def _mathml(el):
     if tag == "mroot" and len(kids) == 2:
         return "root(%s, %s)" % (kids[1], kids[0])
     return " ".join([(el.text or "").strip()] + kids).strip()
+
+
+# ---------------------------------------------------------------- Office Math (OMML), a DOCX's formulas
+# python-docx's paragraphs hold no m:oMath, so a DOCX's formulas were lost (a DOCX that is one formula
+# read as nothing, KNOWN-ISSUES 165). A formula is read as one line, as an ODT's MathML is (_mathml):
+# a fraction a/b and (a+b)/(c-d), a power x^2 and e^(-x^2), an index x_i and C_(ij), a root √x,
+# √(x+1) and root(3, x), an n-ary operator with its limits ∑_(i=1)^n x_i, a matrix by its rows [a, b;
+# c, d] (in its delimiter's brackets when it stands alone in one), an accent on one letter as its
+# combining mark (x̂), else hat(...). A group of more than one character is in parentheses, so the
+# line says what the formula does. Works on ElementTree and lxml elements alike.
+M_NS = "{http://schemas.openxmlformats.org/officeDocument/2006/math}"
+_W_NS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+OMML_DEPTH = 100
+_ACCENTS = {"̂": "hat", "^": "hat", "ˆ": "hat", "̃": "tilde", "~": "tilde", "˜": "tilde",
+            "̄": "bar", "̅": "bar", "¯": "bar", "‾": "bar", "⃗": "vec", "→": "vec",
+            "̇": "dot", "˙": "dot", "̈": "ddot", "¨": "ddot", "⃛": "dddot",
+            "̌": "check", "ˇ": "check", "̆": "breve", "˘": "breve", "́": "acute",
+            "´": "acute", "̀": "grave", "`": "grave"}
+_COMBINING = {"hat": "̂", "tilde": "̃", "bar": "̅", "vec": "⃗", "dot": "̇",
+              "ddot": "̈", "dddot": "⃛", "check": "̌", "breve": "̆", "acute": "́",
+              "grave": "̀"}
+_BRACES = {"⏟": "underbrace", "⏞": "overbrace", "⏝": "underparen", "⏜": "overparen",
+           "⎵": "underbracket", "⎴": "overbracket"}
+_FUNCTIONS = frozenset("sin cos tan cot sec csc sinh cosh tanh coth arcsin arccos arctan log ln lg exp lim "
+                       "liminf limsup max min sup inf det dim ker arg deg gcd lcm hom mod Pr tr".split())
+_SCRIPTS = frozenset(("sSub", "sSup", "sSubSup", "limLow", "limUpp", "func", "nary"))
+_DOUBLE = dict(zip("CHNPQRZ", "ℂℍℕℙℚℝℤ"))      # ℂℍℕℙℚℝℤ
+_INVISIBLE = {0x200B: None, 0x2061: " ", 0x2062: None, 0x2063: None, 0x2064: None}
+_ONE = re.compile(r"^.[̀-ͯ⃐-⃿]*$|^\d{1,40}(?:[.,]\d{1,40})?$", re.S)
+_WORD = re.compile(r"^[^\W\d_]{2,64}$")
+_CALL = re.compile(r"^[^\W\d_]{1,64}(?=[(\[])")
+_PAIRS = {"(": ")", "[": "]", "{": "}", "⟨": "⟩"}
+
+
+def _mname(el):
+    t = el.tag
+    return t.rsplit("}", 1)[-1] if isinstance(t, str) else ""
+
+
+def _mkid(el, name):
+    for k in el:
+        if _mname(k) == name:
+            return k
+    return None
+
+
+def _mval(el, prop, default=None):
+    """The m:val of property `prop` in `el`'s properties (its m:xxxPr child)."""
+    pr = next((k for k in el if _mname(k).endswith("Pr")), None)
+    p = _mkid(pr, prop) if pr is not None else None
+    v = p.get(M_NS + "val") if p is not None else None
+    return default if v is None else v
+
+
+def _mon(v):
+    return v is not None and v.lower() not in ("0", "off", "false")
+
+
+def _bracketed(s):
+    """Is all of s one bracket pair, with the brackets inside it balanced (one pass)? A group past
+    4 096 characters is taken for one that is not, and gets parentheses of its own: each level of a
+    formula asks this of its parts, and the work is then the formula's size, not times its depth."""
+    if len(s) > 4096:
+        return False
+    if len(s) >= 2 and s[0] == s[-1] == "|":
+        return "|" not in s[1:-1]
+    if len(s) < 2 or s[0] not in _PAIRS or s[-1] != _PAIRS[s[0]]:
+        return False
+    depth, close = 0, _PAIRS[s[0]]
+    for i, c in enumerate(s):
+        if c == s[0]:
+            depth += 1
+        elif c == close:
+            depth -= 1
+            if depth == 0 and i < len(s) - 1:
+                return False
+    return True
+
+
+def _call(s):
+    m = _CALL.match(s)
+    return bool(m) and _bracketed(s[m.end():])
+
+
+def _mg(s):
+    """A script or a limit as one group: one character, a number, or bracketed whole as it is."""
+    s = s.strip()
+    return s if not s or _ONE.match(s) or _bracketed(s) else "(%s)" % s
+
+
+def _mgf(s):
+    """A fraction's part: as _mg(), and a call f(x) as it is."""
+    s = s.strip()
+    return s if _call(s) else _mg(s)
+
+
+def _mgb(s):
+    """A base: as _mg(), and a word (sin, lim) or a call f(x) as it is."""
+    s = s.strip()
+    return s if not s or _ONE.match(s) or _bracketed(s) or _WORD.match(s) or _call(s) else "(%s)" % s
+
+
+def _mrun(el):
+    """A math run's text; a double-struck letter as its own character (ℝ)."""
+    t = "".join(k.text or "" for k in el if _mname(k) == "t").translate(_INVISIBLE)
+    pr = _mkid(el, "rPr")
+    scr = _mkid(pr, "scr") if pr is not None else None
+    if scr is not None and scr.get(M_NS + "val") == "double-struck":
+        t = "".join(_DOUBLE.get(c, chr(0x1D538 + ord(c) - 65) if "A" <= c <= "Z" else c) for c in t)
+    return t
+
+
+def _mword(el, s):
+    """Is this run a function's name, which the next letter must not touch (sin x, not sinx)?"""
+    if s in _FUNCTIONS:
+        return True
+    pr = _mkid(el, "rPr")
+    sty = _mkid(pr, "sty") if pr is not None else None
+    return bool(_WORD.match(s)) and sty is not None and sty.get(M_NS + "val") == "p"
+
+
+def _mseq(el, d):
+    """Children in order; a space where a script, an operator or a function's name meets a letter or
+    a digit (sin x, A_(ik) B_(kj)), and where a fraction meets one or a bracket."""
+    out, prev = [], ""
+    for k in el:
+        if not isinstance(k.tag, str):
+            continue
+        s = omml_text(k, d)
+        if not s:
+            continue
+        if out and prev and not out[-1][-1:].isspace() and (s[:1].isalnum() or (prev == "f" and s[:1] in "([")):
+            out.append(" ")
+        out.append(s)
+        n = _mname(k)
+        prev = "f" if n == "f" else "x" if n in _SCRIPTS or (n == "r" and _mword(k, s.strip())) else ""
+    return "".join(out)
+
+
+def _malone(e, name):
+    kids = [k for k in e if isinstance(k.tag, str) and not _mname(k).endswith("Pr")]
+    return len(kids) == 1 and _mname(kids[0]) == name
+
+
+def _mmatrix(el, d, beg, end):
+    rows = [", ".join(omml_text(c, d + 1).strip() for c in r if _mname(c) == "e") for r in el if _mname(r) == "mr"]
+    return "%s%s%s" % (beg, "; ".join(rows), end)
+
+
+def omml_text(el, depth=0):
+    """An m:oMath - or any element of one - as one line of text (see above). Past OMML_DEPTH levels
+    of nesting, its text as it stands."""
+    if depth > OMML_DEPTH:
+        return " ".join("".join(el.itertext()).split())
+    n = _mname(el)
+    d = depth + 1
+
+    def part(name):
+        k = _mkid(el, name)
+        return omml_text(k, d) if k is not None else ""
+
+    if n == "r":
+        return _mrun(el) if el.tag == M_NS + "r" else "".join(k.text or "" for k in el if k.tag == _W_NS + "t")
+    if n.endswith("Pr"):
+        return ""
+    if n == "f":
+        num, den = part("num"), part("den")
+        if _mval(el, "type", "bar") == "noBar":
+            return "%s; %s" % (num.strip(), den.strip())
+        return "%s/%s" % (_mgf(num), _mgf(den))
+    if n == "sSup":
+        return "%s^%s" % (_mgb(part("e")), _mg(part("sup")))
+    if n == "sSub":
+        return "%s_%s" % (_mgb(part("e")), _mg(part("sub")))
+    if n == "sSubSup":
+        return "%s_%s^%s" % (_mgb(part("e")), _mg(part("sub")), _mg(part("sup")))
+    if n == "sPre":
+        sub, sup = part("sub").strip(), part("sup").strip()
+        return "%s%s %s" % ("_" + _mg(sub) if sub else "", "^" + _mg(sup) if sup else "", _mgb(part("e")))
+    if n == "rad":
+        base, deg = part("e"), part("deg").strip()
+        if _mon(_mval(el, "degHide")) or not deg:
+            return "√" + _mg(base)
+        return "root(%s, %s)" % (deg, base.strip())
+    if n == "nary":
+        op = _mval(el, "chr", "∫")                     # no m:chr: an integral
+        sub = "" if _mon(_mval(el, "subHide")) else part("sub").strip()
+        sup = "" if _mon(_mval(el, "supHide")) else part("sup").strip()
+        body = part("e").strip()
+        head = op + ("_" + _mg(sub) if sub else "") + ("^" + _mg(sup) if sup else "")
+        if body and re.search(r"[+\-−=<>≤≥≠±,;]", body) and not _bracketed(body):
+            body = "(%s)" % body
+        return (head + " " + body).strip()
+    if n == "d":
+        beg = _mval(el, "begChr", "(").replace("∣", "|")
+        end = _mval(el, "endChr", ")").replace("∣", "|")
+        sep = _mval(el, "sepChr", "|")
+        kids = [k for k in el if _mname(k) == "e"]
+        if len(kids) == 1 and _malone(kids[0], "m"):
+            return _mmatrix(_mkid(kids[0], "m"), d, beg, end or ("}" if beg == "{" else ""))
+        if len(kids) == 1 and _malone(kids[0], "f") and _mval(_mkid(kids[0], "f"), "type") == "noBar" and beg == "(":
+            f = _mkid(kids[0], "f")
+            return "binom(%s, %s)" % (omml_text(_mkid(f, "num"), d + 1).strip(),
+                                      omml_text(_mkid(f, "den"), d + 1).strip())
+        return "%s%s%s" % (beg, sep.join(omml_text(k, d).strip() for k in kids), end)
+    if n == "m":
+        return _mmatrix(el, d, "[", "]")
+    if n == "eqArr":                                        # its rows; "&" marks where they align
+        return "; ".join(t for t in (omml_text(k, d).replace("&", "").strip() for k in el if _mname(k) == "e") if t)
+    if n == "acc":
+        base, c = part("e").strip(), _mval(el, "chr", "̂")
+        name = _ACCENTS.get(c, "")
+        if not name:
+            return base + c
+        return base + _COMBINING[name] if len(base) == 1 else "%s(%s)" % (name, base)
+    if n == "bar":
+        base, top = part("e").strip(), _mval(el, "pos", "top") != "bot"
+        return base + "̅" if top and len(base) == 1 else "%s(%s)" % ("overline" if top else "underline", base)
+    if n == "groupChr":
+        c = _mval(el, "chr", "⏟")
+        return "%s(%s)" % (_BRACES[c], part("e").strip()) if c in _BRACES else part("e") + c
+    if n in ("limLow", "limUpp"):
+        lim, e = part("lim").strip(), _mkid(el, "e")
+        inner = [k for k in e if isinstance(k.tag, str) and not _mname(k).endswith("Pr")] if e is not None else []
+        if len(inner) == 1 and _mname(inner[0]) in ("limLow", "limUpp") and _mname(inner[0]) != n:
+            # an operator with a limit under it and one over it: ⋃_(i=1)^n, whichever stands outside
+            o = inner[0]
+            other = omml_text(_mkid(o, "lim"), d + 1).strip() if _mkid(o, "lim") is not None else ""
+            under, over = (lim, other) if n == "limLow" else (other, lim)
+            base = omml_text(_mkid(o, "e"), d + 1) if _mkid(o, "e") is not None else ""
+            return "%s_%s^%s" % (_mgb(base), _mg(under), _mg(over))
+        base = part("e").strip()
+        if lim in _BRACES:                                  # a brace written as a limit (pandoc's)
+            return "%s(%s)" % (_BRACES[lim], base)
+        return "%s%s%s" % (_mgb(base), "_" if n == "limLow" else "^", _mg(lim))
+    if n == "func":
+        fname, arg = part("fName").strip(), part("e").strip()
+        return fname + (arg if arg[:1] in "([" else " " + arg) if arg else fname
+    if n == "phant":
+        return part("e") if _mon(_mval(el, "show", "on")) else ""
+    return _mseq(el, d)
 
 
 def _flat_text(el):
@@ -1391,16 +1773,42 @@ class _Odt(object):
         self.done, self.of = 0, 0         # top-level elements read, of how many
 
     def doc(self, root):
+        """The body, whichever it is: a text's blocks; a spreadsheet's sheets, each a heading and its
+        table (rows and cells repeated as the sheet says, within the grid's caps: a sheet repeats a
+        row it holds as often as it holds it, where a text's table is held to 64); a presentation's
+        slides, each "## Slide N", its frames' text, tables and pictures in order, then its notes."""
         body = root.find(_o("office:body"))
-        text = body.find(_o("office:text")) if body is not None else None
-        if text is None:
+        box = next((k for k in body if k.tag in (O_TEXT_BODY, O_SHEET_BODY, O_SLIDE_BODY)), None) \
+            if body is not None else None
+        if box is None:
             return "", False
         out, late = [], False
-        kids = list(text)
+        kids = list(box)
         self.of = len(kids)
         try:
+            slide = 0
             for ch in kids:
-                out.extend(self.blocks_of([ch], 1))
+                if box.tag == O_TEXT_BODY:
+                    out.extend(self.blocks_of([ch], 1))
+                elif box.tag == O_SHEET_BODY and ch.tag == O_TABLE:
+                    try:
+                        blocks = self.table(ch, 1, repeat=None)
+                    except (Late, MemoryError):
+                        raise
+                    except Exception as e:     # noqa: BLE001  (this sheet, not the others)
+                        self.broke[type(e).__name__] = self.broke.get(type(e).__name__, 0) + 1
+                        blocks = []
+                    if blocks:
+                        out.append(_heading(2, _esc(_one_line(ch.get(O_TABLE_NAME) or "Sheet %d" % (self.done + 1)))))
+                        out.extend(blocks)
+                elif box.tag == O_SLIDE_BODY and ch.tag == O_PAGE:
+                    slide += 1
+                    out.append("## Slide %d" % slide)
+                    out.extend(self.blocks_of([k for k in ch if k.tag != O_SLIDE_NOTES], 1))
+                    for notes in (k for k in ch if k.tag == O_SLIDE_NOTES):
+                        said = " ".join(_one_line(b) for b in self.blocks_of(list(notes), 2) if b)
+                        if said:
+                            out.append("notes: " + said)
                 self.done += 1
         except Late:
             late = True
@@ -1572,6 +1980,8 @@ class _Odt(object):
                                posixpath.normpath(urllib.parse.unquote(re.sub(r"^\./", "", href))))
             elif k.tag == O_TEXTBOX:
                 pend.extend(self.blocks_of(list(k), depth + 1))
+            elif k.tag == O_TABLE:                  # a slide's table stands in a frame of its own
+                pend.extend(self.table(k, depth + 1))
         return pic.replace("\x00", "")
 
     def formula(self, href):
@@ -1644,12 +2054,14 @@ class _Odt(object):
                     out.extend(self.blocks_of([ch], depth + 1))
         return out
 
-    def table(self, el, depth):
-        """A table's grid: repeated rows and cells 64 times each at most, a row WIDTH columns, the
-        grid CELLS (DOC_CELLS with the document's other tables); past them the table is cut and the
-        note says so (313 rows of 32 cells, each repeated 64 times both ways, took 40 s and
-        gave 164 MB). A row with no text is left out, and a row's empty cells at its end."""
+    def table(self, el, depth, repeat=64):
+        """A table's grid: repeated rows and cells `repeat` times each at most (None: as often as the
+        grid's caps leave room for - a sheet's), a row WIDTH columns, the grid CELLS (DOC_CELLS with
+        the document's other tables); past them the table is cut and the note says so (313 rows of 32
+        cells, each repeated 64 times both ways, took 40 s and gave 164 MB). A row with no text is
+        left out, and a row's empty cells at its end."""
         rows, state = [], {"width": 0, "cut": False}
+        cap = repeat or (1 << 62)
 
         def walk(box, d):
             for r in box:
@@ -1664,7 +2076,7 @@ class _Odt(object):
                     for c in r:
                         if c.tag not in (O_CELL, O_COVERED):
                             continue
-                        rep = min(max(_int(c.get(_o("table:number-columns-repeated")), 1), 1), 64)
+                        rep = min(max(_int(c.get(_o("table:number-columns-repeated")), 1), 1), cap)
                         text = self.cell(c, depth + 1) if c.tag == O_CELL else ""
                         room = WIDTH - len(cells)
                         if room <= 0:
@@ -1676,7 +2088,7 @@ class _Odt(object):
                         cells.pop()
                     if not cells:
                         continue
-                    rep = min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), 64, ROWS - len(rows))
+                    rep = min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), cap, ROWS - len(rows))
                     width = max(state["width"], len(cells))
                     fit = _grid_room(self.clock, len(rows), width)
                     if fit < rep:
@@ -1712,14 +2124,14 @@ class _Odt(object):
 
 
 def odt_md(path, until=None, finish=None):
-    """An OpenDocument text as Markdown: content.xml's body, with styles.xml for what its styles
-    say."""
+    """An OpenDocument text, spreadsheet or presentation (ODT, ODS, ODP) as Markdown: content.xml's
+    body, whichever it holds (_Odt.doc), with styles.xml for what its styles say."""
     clock = _Clock(until, finish)
     with zipfile.ZipFile(path) as z:
         zf = _Zip(z)
         data = zf.read("content.xml")
         if not data:
-            return "", _join("no content.xml in this ODT" if data is None else "its content.xml is empty",
+            return "", _join("no content.xml in this file" if data is None else "its content.xml is empty",
                              zf.note())
         root, why = _xml(data, clock)
         if root is None:
@@ -1823,9 +2235,22 @@ def _group_end(s, pos):
             pos += int(m.group(1))
 
 
+# a picture's format, by the control word that names it: PNG and JPEG are written out; the others no
+# browser or model shows (Windows and OS/2 metafiles, a Mac PICT, Windows' device bitmaps)
+_PICT_FORMATS = {"pngblip": ".png", "jpegblip": ".jpg", "emfblip": "EMF", "wmetafile": "WMF", "macpict": "PICT",
+                 "pmmetafile": "OS/2 metafile", "dibitmap": "DIB", "wbitmap": "Windows bitmap"}
+_PICT_MAGIC = {".png": b"\x89PNG\r\n\x1a\n", ".jpg": b"\xff\xd8\xff"}
+_HEX_NOT = re.compile(r"[^0-9A-Fa-f]+")
+_PIB = re.compile(r"[ \t\r\n]*\{\\sn[ \t\r\n]+pib[ \t\r\n]*\}")
+_WZ_DESCRIPTION = re.compile(r"\{\\sn[ \t\r\n]+wzDescription[ \t\r\n]*\}[ \t\r\n]*\{\\sv[ \t\r\n]+([^{}\\]{0,1000})\}")
+
+
 class _Rtf(object):
-    def __init__(self, s, clock):
+    def __init__(self, s, clock, pictures=None):
         self.s, self.clock = s, clock
+        # where the pictures go (None: they are passed over), how many and how much were written,
+        # and the ones of formats no one shows, by format
+        self.picdir, self.pics, self.pic_bytes, self.unshown = pictures, 0, 0, {}
         self.body = _Sink("body")
         self.st = [self.body, 1, None, False, False, False, False, 0, None, 0, 0, False, self.body, None]
         self.stack = []
@@ -1907,6 +2332,18 @@ class _Rtf(object):
         if not m:
             return pos
         name, star = m.group(1), self.s.startswith("\\*", pos)
+        if self.picdir is not None and name in ("pict", "shppict", "sp"):
+            # a picture where it stands: an inline one (\pict, Word's \*\shppict, whose \nonshppict
+            # is the same picture again as WMF and stays passed over), a floating shape's (\sp pib)
+            end = _group_end(self.s, m.end())
+            try:
+                self.picture(name, m.end(), max(m.end(), end - 1))
+            except (Late, MemoryError):
+                raise
+            except Exception:                                  # noqa: BLE001  (this picture, not the text)
+                self.clock.cut("picture(s) that could not be read")
+            self.st = self.stack.pop()[0]
+            return end
         if name in _RTF_IGNORE or (star and name not in _RTF_KEEP):
             end = _group_end(self.s, m.end())
             if name in ("fonttbl", "stylesheet", "listtable", "listoverridetable"):
@@ -1928,6 +2365,85 @@ class _Rtf(object):
     def set_closer(self, fn):
         if self.stack:
             self.stack[-1] = (self.stack[-1][0], fn)
+
+    def picture(self, kind, a, b):
+        """The picture of a group s[a:b] (\\pict, \\*\\shppict holding one, \\sp whose \\sn is pib):
+        a PNG or a JPEG is written to the picture folder as rtf-pict-NNNN, and ![](its name) stands in
+        the text where the picture does (readpage makes it a marker); a picture of a format no browser
+        or model shows (WMF, EMF, PICT) is named there in words. Its data is hex digits after the
+        group's control words, or \\binN bytes; its nested groups (\\*\\blipuid, \\*\\picprop) are
+        passed over. PICTURES pictures at most, PICTURE_BYTES each, TOTAL_BYTES in all."""
+        s = self.s
+        if kind in ("sp", "shppict"):
+            if kind == "sp" and not _PIB.match(s, a, b):
+                return                                          # a shape's other properties
+            i = s.find("{\\pict", a, b)
+            if i < 0:
+                return
+            a, b = i + 6, max(i + 6, _group_end(s, i + 1) - 1)
+        sink = self.st[_SINK] if self.st[_SINK] is not None else self.st[_PSINK]
+        # its alt text, which Word keeps in the picture's properties before its data
+        alt = _WZ_DESCRIPTION.search(s, a, min(b, a + 65536))
+        alt = _one_line(alt.group(1)) if alt else ""
+        fmt, pos, data_at, raw = "", a, None, None
+        while pos < b:
+            m = _RTF_TOKEN.match(s, pos)
+            if m is None:
+                pos += 1
+                continue
+            if m.group(5) == "{":
+                pos = _group_end(s, m.end())
+                continue
+            w = m.group(1)
+            if w == "bin":
+                n = max(0, _int(m.group(2)))
+                if n > PICTURE_BYTES:
+                    raw = b""
+                else:
+                    raw = s[m.end():min(b, m.end() + n)].encode("latin-1", "replace")
+                break
+            if w is not None:
+                if w in _PICT_FORMATS:
+                    fmt = w
+                pos = m.end()
+                continue
+            if m.group(6) is not None and m.group(6).strip():
+                data_at = m.start()
+                break
+            pos = m.end()
+        ext = _PICT_FORMATS.get(fmt, "")
+        if ext and not ext.startswith("."):
+            self.unshown[ext] = self.unshown.get(ext, 0) + 1
+            self._ref(sink, "[a picture in %s, not shown]" % ext)
+            return
+        if not ext:
+            return
+        if raw is None and data_at is not None:
+            if (b - data_at) > 2.2 * PICTURE_BYTES:
+                raw = b""                                       # its data alone is over the limit
+            else:
+                hexs = _HEX_NOT.sub("", s[data_at:b])
+                raw = bytes.fromhex(hexs[:len(hexs) // 2 * 2])
+        if not raw:
+            self.clock.cut("picture(s) over %d MB left out" % (PICTURE_BYTES >> 20))
+            return
+        if not raw.startswith(_PICT_MAGIC[ext]):
+            self.clock.cut("picture(s) whose data is not what their format says left out")
+            return
+        if self.pics >= PICTURES or self.pic_bytes + len(raw) > TOTAL_BYTES:
+            self.clock.cut("pictures past %d (or %d MB) left out" % (PICTURES, TOTAL_BYTES >> 20))
+            return
+        self.pics += 1
+        self.pic_bytes += len(raw)
+        name = "rtf-pict-%04d%s" % (self.pics, ext)
+        with open(os.path.join(self.picdir, name), "wb") as fh:
+            fh.write(raw)
+        self._ref(sink, _pic(alt, name))
+
+    def _ref(self, sink, text):
+        """Text of ours in a paragraph's runs, as it is (a note's call is put so)."""
+        if sink is not None and sink.kind in ("body", "note"):
+            sink.runs.append([[text], ("ref",)])
 
     # -- the tables of the header
     def fonttbl(self, a, b):
@@ -2438,11 +2954,15 @@ def _flat_md(blocks, clock):
     return "\n\n".join(o for o in ("\n".join(x) if isinstance(x, list) else x for x in out) if o)
 
 
-def rtf_md(data, until=None, finish=None):
-    """An RTF document as Markdown. A fault in the middle keeps what came before it."""
+def rtf_md(data, until=None, finish=None, pictures=None):
+    """An RTF document as Markdown. A fault in the middle keeps what came before it. `pictures`: a
+    folder its PNG and JPEG pictures are written to, each ![](its name) where it stands (_Rtf.picture);
+    None passes them over."""
     clock = _Clock(until, finish)
     s = data.decode("latin-1") if isinstance(data, (bytes, bytearray)) else data
-    r = _Rtf(s, clock)
+    if pictures is not None:
+        os.makedirs(pictures, exist_ok=True)
+    r = _Rtf(s, clock, pictures)
     late, broke = False, ""
     try:
         r.run()
@@ -2458,8 +2978,10 @@ def rtf_md(data, until=None, finish=None):
         # mojibake, 2026-11-20): what is there is not the document's text
         return "", "not text: this RTF holds binary data where its text should be"
     md = r.finish()
-    note = _join(broke, clock.said(), "the time ran out at %d%% of the file%s" % (
-        100 * r.pos // max(1, len(s)), clock.more(float(r.pos) / len(s) if s else 0)) if late else "")
+    unshown = ", ".join("%d in %s" % (n, f) for f, n in sorted(r.unshown.items()))
+    note = _join(broke, clock.said(), "pictures no browser or model shows, named where they stand: %s" % unshown
+                 if unshown else "", "the time ran out at %d%% of the file%s" % (
+                     100 * r.pos // max(1, len(s)), clock.more(float(r.pos) / len(s) if s else 0)) if late else "")
     return md, note
 
 
@@ -2501,9 +3023,9 @@ def rtf_plain(data):
 
 
 def odf_plain(path, cap=PART_BYTES, until=None):
-    """An OpenDocument file's headings and paragraphs in order, as plain text (readpage reads ODS
-    and ODP so): content.xml read up to `cap`, a DOCTYPE refused, XML that breaks read up to the
-    break. (text, note)."""
+    """An OpenDocument file's headings and paragraphs in order, as plain text: what is left when the
+    reader breaks as a whole. content.xml read up to `cap`, a DOCTYPE refused, XML that breaks read
+    up to the break. (text, note)."""
     clock = _Clock(until)
     with zipfile.ZipFile(path) as z:
         zf = _Zip(z)
@@ -2558,7 +3080,7 @@ def plain(path, kind, until=None):
     """(text, note) of a document whose reader broke: its words without the structure."""
     if kind == "epub":
         return epub_plain(path, until)
-    if kind == "odt":
+    if kind in ("odt", "ods", "odp"):
         return odf_plain(path, PART_BYTES, until)
     with open(path, "rb") as fh:
         return rtf_plain(fh.read(min(os.fstat(fh.fileno()).st_size, RTF_BYTES))), ""
@@ -2566,17 +3088,73 @@ def plain(path, kind, until=None):
 
 # ---------------------------------------------------------------- a process of its own
 
+_JOB = []                          # the Job Object this process holds itself to: its handle, for its life
+
+
+def _job_limit(nbytes):
+    """Windows: this process in a Job Object of its own whose process memory limit is `nbytes` -
+    the memory it commits, which an allocation past the limit is refused (MemoryError). Set by the
+    process on itself with ctypes; a job inside the one a parent put it in is allowed since
+    Windows 8. True when it is set."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        return False
+
+    class Basic(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class Extended(ctypes.Structure):           # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        _fields_ = [("Basic", Basic), ("Io", ctypes.c_ulonglong * 6), ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k32.SetInformationJobObject.restype = wintypes.BOOL
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.AssignProcessToJobObject.restype = wintypes.BOOL
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            return False
+        info = Extended()
+        info.Basic.LimitFlags = 0x100                          # JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        info.ProcessMemoryLimit = nbytes
+        if not (k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))      # extended limits
+                and k32.AssignProcessToJobObject(job, k32.GetCurrentProcess())):
+            k32.CloseHandle(job)
+            return False
+        _JOB.append(job)
+        return True
+    except (OSError, AttributeError, ValueError, TypeError):
+        return False
+
+
 def _limit_memory(nbytes):
-    """RLIMIT_AS where the OS has it: past it an allocation fails (MemoryError) and the reading
-    ends, as no timeout can make it (a 1 KB EPUB took 1.4 GB in 5.9 s). True when it is set. Not
-    on macOS: its kernel does not hold to the limit, and a process there reserves far more address
-    space than it uses."""
+    """The readers' process held to `nbytes` where the OS can hold it: past it an allocation fails
+    (MemoryError) and the reading ends, as no timeout can make it (a 1 KB EPUB took 1.4 GB in 5.9
+    s). Linux: RLIMIT_AS, the address space. Windows: a Job Object's process memory limit, the
+    memory committed (_job_limit). True when it is set. Not on macOS: its kernel does not hold to
+    RLIMIT_AS (the call succeeds, and allocations go on past it), a process there reserves far more
+    address space than it uses, and a process has no Job Object or cgroup it can put itself in -
+    the kill at the read's time is all there is."""
     if sys.platform == "darwin":
         return False
+    if os.name == "nt":
+        return _job_limit(nbytes)
     try:
         import resource
     except ImportError:
-        return False                                           # Windows
+        return False
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_AS)
         want = nbytes if hard == resource.RLIM_INFINITY else min(nbytes, hard)
@@ -2588,18 +3166,21 @@ def _limit_memory(nbytes):
 
 
 def main(argv):
-    """python docreaders.py KIND PATH [UNTIL [KILL]]: one document, as JSON on stdout ({"md", "note"}).
+    """python docreaders.py KIND PATH [UNTIL [KILL [PICTURES]]]: one document (KIND: epub, odt, ods, odp,
+    rtf), as JSON on stdout ({"md", "note"}).
     UNTIL is when the reading stops (a time.time(); 0: no limit), KILL when readpage.py kills this
-    process: what was read is written by the middle of the two."""
+    process: what was read is written by the middle of the two. PICTURES: the folder an RTF's
+    pictures are written to."""
     kind, path = argv[0], argv[1]
     until = float(argv[2]) if len(argv) > 2 and float(argv[2]) > 0 else None
     kill = float(argv[3]) if len(argv) > 3 and float(argv[3]) > 0 else None
+    pictures = argv[4] if len(argv) > 4 and argv[4] else None
     finish = until + (kill - until) / 2 if until is not None and kill is not None and kill > until else None
     _limit_memory(MEMORY)
     slow = os.environ.get("READ_PAGE_TEST_DOC_SLEEP")          # the test suites' stand-in for a slow document
     if slow:
         time.sleep(float(slow))
-    md, note = read(path, kind, until, finish)
+    md, note = read(path, kind, until, finish, pictures)
     sys.stdout.buffer.write(json.dumps({"md": md, "note": note}, ensure_ascii=False).encode("utf-8", "replace"))
     sys.stdout.buffer.flush()
     return 0

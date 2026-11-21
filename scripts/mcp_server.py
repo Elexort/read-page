@@ -63,8 +63,9 @@ DECOR_SIDE, DECOR_BYTES, DECOR_REPEAT = 48, 1024, 3
 NAMED_SIDE = 100
 NAMED = re.compile(r"(?i)logo|icon|avatar|badge|sprite|favicon|emoji|gravatar|spinner")
 
-# a picture's marker: `[img #3 · 100x80 3K · alt] img/03-alt.png`
-ANY_MARKER = re.compile(r"\[img #(\d+) · [^\]\n]*\] (img/\S+)")
+# a picture's marker: `[img #3 · 100x80 3K · alt] img/03-alt.png`; its middle holds no "[img #" (a run of
+# them that no "]" closed was scanned to the end of the line from each, as pictures.MARK was)
+ANY_MARKER = re.compile(r"\[img #(\d+) · %s\] (img/\S+)" % readpage.pictures.MARK_BODY)
 MIME = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
         ".webp": "image/webp", ".bmp": "image/bmp", ".svg": "image/svg+xml",
         ".avif": "image/avif", ".ico": "image/x-icon", ".tif": "image/tiff",
