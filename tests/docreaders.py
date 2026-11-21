@@ -881,7 +881,12 @@ md, info = hostile("more.zip", "zip", wall=60, mb=150)
 got = json.loads(md) if md.startswith("{") else {}
 check("167: ... 12 000 members: the first 10 000 are looked at, and the reason says the rest were not",
       fine(info, 30, 150) and got.get("members") == 10000 and "rest were not" in info.get("note", ""), show(info, md))
-ZEROS = (b"\x00" * (1 << 20), 256)                # 256 MB of zeros, 256 KB deflated
+cut_archive("folders.zip", [("d%06d/" % k, b"") for k in range(100000)] + [("last.txt", b"LAST")])
+md, info = hostile("folders.zip", "zip", wall=60, mb=150)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: ... folder entries count to the 10 000 too: 100 000 of them are not walked to their end",
+      fine(info, 30, 150) and got.get("whole") == 0 and "rest were not" in info.get("note", ""), show(info, md))
+ZEROS =(b"\x00" * (1 << 20), 256)                # 256 MB of zeros, 256 KB deflated
 cut_archive("bomb.zip", [("bomb.bin", ZEROS), ("after.txt", b"AFTER-THE-BOMB")])
 md, info = hostile("bomb.zip", "zip", wall=60, mb=200)
 got = json.loads(md) if md.startswith("{") else {}

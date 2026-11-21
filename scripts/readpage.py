@@ -3855,7 +3855,7 @@ def zip_salvage(path, dest):
     "at": the byte where the reading stopped, "size": the file's, "more": a reason the rest was not
     looked at, or ""}. Linear: each member is read once, its data at most up to the caps."""
     size = os.path.getsize(path)
-    found, whole, broken, total, seen = 0, [], [], 0, set()
+    found, looked, whole, broken, total, seen = 0, 0, [], [], 0, set()
     how, at, more = "cut", size, ""
     out = _ZipOut(dest)
     prior = docreaders.machine_cjk()          # a name with no UTF-8 flag: its code page (fix_zip_names)
@@ -3864,7 +3864,8 @@ def zip_salvage(path, dest):
         while True:
             fh.seek(pos)
             head = fh.read(30)
-            if found >= ZIP_WHOLE_MEMBERS and head[:4] == b"PK\x03\x04":
+            if looked >= ZIP_WHOLE_MEMBERS and head[:4] == b"PK\x03\x04":
+                # folder entries count too: an archive of nothing but them is not walked to its end either
                 more = "%d members looked at; the rest were not" % ZIP_WHOLE_MEMBERS
                 break
             if head[:4] in (b"PK\x01\x02", b"PK\x05\x06", b"PK\x06\x06"):
@@ -3883,6 +3884,7 @@ def zip_salvage(path, dest):
             usize, csize, zip64 = _zip64_sizes(extra, usize, csize)
             start = pos + 30 + nlen + xlen
             folder = name.endswith("/")
+            looked += 1
             found += 0 if folder else 1
             descriptor = bool(flags & 8)           # its CRC and sizes follow its data
             end = None if descriptor else start + csize        # where the next member starts
@@ -4014,6 +4016,8 @@ def zip_reason(info):
         where = "damaged"
     n, found = len(info["whole"]), info["members"]
     if not found:
+        if info.get("more"):                     # folder entries alone, up to the members looked at
+            return "not a whole archive: %s; no file among the members looked at - %s" % (where, info["more"])
         return "not a whole archive: %s, before its first member" % where
     bad = info["broken"][:3]
     return "not a whole archive: %s; %d of the %d members found are whole%s%s" % (

@@ -18,7 +18,7 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   the rest: a whole copy of a local file, `--refresh` for a server's (the same bytes while its copy is cut).
   A file whose name or type says ZIP and whose bytes do not is named: a Word, Excel or PowerPoint 97-2003 file,
   a password-protected Office file, gzip, 7-Zip, a picture, text (its text is the answer). Capped as the
-  readers are (32 MB a member, 128 MB in all, 10 000 members, one member in memory at a time): 10 000 members
+  readers are (32 MB a member, 128 MB in all, 10 000 members - folder entries count - one member in memory at a time): 10 000 members
   in 0.3 s, a member that unpacks to 256 MB in 0.2 s and 98 MB. `zip_text` says under a member's name that it
   does not unpack (one such member ended the listing's reading).
 - The "documents" gap (install pymupdf) is a PDF's alone (KNOWN-ISSUES 177): it was named for an EPUB or ODT
