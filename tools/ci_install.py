@@ -39,7 +39,7 @@ PRIVET = "".join(chr(c) for c in (0x41F, 0x440, 0x438, 0x432, 0x435, 0x442))  # 
 STATUS_LINE = re.compile("^read-page %s (\\w+) %s (.*)$" % (DOT, DOT))
 RESULT_LINE = re.compile(r"(\d+) ok, (\d+) failed")
 OFFLINE = ["reading", "sources", "blocks", "images", "speed", "mcp_parallel", "timeouts", "deadline", "formats",
-           "statuses", "security", "contract", "props", "fixes", "channel", "office_fixtures", "mcp_smoke",
+           "statuses", "security", "contract", "props", "fixes", "channel", "office_fixtures", "docreaders", "mcp_smoke",
            "setup_audit", "environment"]
 # the one suite that needs the installed browser, not a third party: the setup's own Chromium, on every system
 BROWSER_SUITE = "browser_live"
