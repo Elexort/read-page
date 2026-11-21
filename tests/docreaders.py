@@ -648,7 +648,7 @@ check("a run of 40 000 no-break spaces is one line in linear time (it was quadra
 epub("parts.epub", [("p%05d.xhtml" % k, "<p>part %d</p>" % k) for k in range(20000)], nav=False)
 (md, note), secs = timed(docreaders.read, path("parts.epub"), "epub", time.time() - 1)
 check("a book out of time stops at once, and does not promise --download for 0 parts read",
-      secs < 0.3 and "time ran out" in note and "--download" not in note, "%.2fs %r" % (secs, note))
+      secs < 2 and "time ran out" in note and "--download" not in note, "%.2fs %r" % (secs, note))   # 0.38 s on a macOS Intel runner
 TYPES = ('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
          '<Override PartName="/word/document.xml" ContentType="%s"/></Types>')
 

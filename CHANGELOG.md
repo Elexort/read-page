@@ -25,7 +25,8 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   - uv's cache: an update cleans the packages whose pin moved before it installs, a yt-dlp update cleans yt-dlp,
     a cache with more than 150 MB in no environment (or an older environment whose lock was not kept) is pruned
     whole; its size and what of it is in no environment are in the closing line and the report. Plain
-    `uv cache prune` removes nothing here (measured).
+    `uv cache prune` removes nothing here (measured). On macOS uv runs with `UV_LINK_MODE=hardlink` (its default,
+    a clone, left the cache costing 0.5 GB on a runner).
   - Files outside the folder: `NODE_COMPILE_CACHE`, the Python bytecode of a read in the environment and the
     environment's yt-dlp cache are in the folder (`cache/`); a read's start is as fast (0.441 -> 0.434 s).
 - **Node from Playwright's wheel** (KNOWN-ISSUES 171): defuddle and yt-dlp's JavaScript run on the Node that the

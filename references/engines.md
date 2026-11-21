@@ -443,8 +443,8 @@ Inside the folder besides the engines: `cache/node-compile` (npm's compiled modu
 `cache/pycache` (the skill's Python bytecode while a read runs in the environment; `sys.pycache_prefix`),
 `cache/yt-dlp` (the environment's yt-dlp is given `--cache-dir`) and `cache/uv`. uv's cache holds every wheel
 the environment was built from, hard-linked into it, so it costs the disk what its files have no other name
-for (the closing line and the report give both numbers; on macOS uv clones rather than links, and that second
-number is an upper bound). Plain `uv cache prune` removes nothing of what an update leaves (measured with
+for (the closing line and the report give both numbers; on macOS uv is run with `UV_LINK_MODE=hardlink`, its default there
+being a clone, which a runner's free space showed costing what the cache holds). Plain `uv cache prune` removes nothing of what an update leaves (measured with
 uv 0.13.9: the wheels of a deleted environment stay reachable, "No unused entries found"), so an update
 runs `uv cache clean` for the packages whose pin moved - before it installs the new ones, which a clean
 afterwards would take out too - and a yt-dlp update does it for yt-dlp and yt-dlp-ejs; where an older

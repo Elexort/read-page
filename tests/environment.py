@@ -1759,10 +1759,28 @@ try:
 finally:
     envsetup.cache_bytes = real_cb
 attempt("... and where more than 150 MB of it is in no environment (an index was changed, a version that did not clean), "
-        "except on macOS (uv clones there: every file looks so), and the size reported is the one after",
-        lambda: ((["UV", "cache", "prune", "--ci"] in sh_calls) == (sys.platform != "darwin")
-                 and w145.cache_size == ((200 << 20, 10 << 20) if sys.platform != "darwin" else (500 << 20, 300 << 20)),
+        "and the size reported is the one after",
+        lambda: (["UV", "cache", "prune", "--ci"] in sh_calls and w145.cache_size == (200 << 20, 10 << 20),
                  "%s %s" % (sh_calls, w145.cache_size)))
+saved_link = os.environ.pop("UV_LINK_MODE", None)
+real_platform = sys.platform
+try:
+    sys.platform = "darwin"
+    e_mac = envsetup.net_env()
+    os.environ["UV_LINK_MODE"] = "copy"
+    e_mac_user = envsetup.net_env()
+    os.environ.pop("UV_LINK_MODE")
+    sys.platform = "linux"
+    e_linux = envsetup.net_env()
+finally:
+    sys.platform = real_platform
+    if saved_link is not None:
+        os.environ["UV_LINK_MODE"] = saved_link
+    else:
+        os.environ.pop("UV_LINK_MODE", None)
+attempt("on macOS uv links instead of cloning, so the cache costs what it does elsewhere; a link mode the user set stays",
+        lambda: (e_mac.get("UV_LINK_MODE") == "hardlink" and e_mac_user.get("UV_LINK_MODE") == "copy"
+                 and "UV_LINK_MODE" not in e_linux, str((e_mac.get("UV_LINK_MODE"), e_mac_user.get("UV_LINK_MODE")))))
 cache_dir = tempfile.mkdtemp(prefix="rp-env-cachesz-")
 junk.append(cache_dir)
 for n_, size_ in (("only.whl", 3000), ("shared.whl", 5000)):

@@ -500,6 +500,10 @@ def net_env():
     # one of those, and the log says which (source_overrides). Unless the user set it.
     if not env.get("UV_NO_CONFIG"):
         env["UV_NO_CONFIG"] = "1"
+    # uv clones (copy-on-write) rather than links on macOS, and the GitHub runner's free space showed the cache cost
+    # what it holds there (1.5 GB for a setup of 1.0): hard links, which uv uses everywhere else, share the file
+    if sys.platform == "darwin" and not env.get("UV_LINK_MODE"):
+        env["UV_LINK_MODE"] = "hardlink"
     # the lock's hashes are what the packages are checked against (README): a variable that turns that check off
     # is not passed on, and the log says so
     for k in NOT_PASSED_ON:
@@ -1554,12 +1558,11 @@ class Work:
         environment keeps its files by their links, and an update fetches what it needs once more) where an older
         environment's lock was not kept, and where more than STALE_CACHE_BYTES of it is in no environment (a fresh
         install leaves 14-21 MB; what is left after an index was changed, or by a version that did not clean, is
-        hundreds). Not on macOS, where uv clones and every file looks like one in no environment. Its size goes in
-        the report either way."""
+        hundreds). Its size goes in the report either way."""
         uv = getattr(self, "uv_exe", "")
         path = os.path.join(self.d, "cache", "uv")
         total, alone = cache_bytes(path)
-        stale = alone is not None and alone > STALE_CACHE_BYTES and sys.platform != "darwin"
+        stale = alone is not None and alone > STALE_CACHE_BYTES
         if uv and (getattr(self, "cache_unknown", False) or stale):
             rc, out = self.sh([uv, "cache", "prune", "--ci"], timeout=300)
             self.log("uv cache prune --ci (%s): %s" % ("an older environment's lock was not kept" if not stale else
@@ -1879,8 +1882,9 @@ def moved_pins(old_lock, new_lock):
 def cache_bytes(path, seconds=20.0):
     """(bytes under path, bytes of those files no other name holds): uv hard-links what an environment uses out
     of its cache, so the cache costs the disk only what is in no environment. The second is None where the look
-    took longer than `seconds` (a file's link count costs a call each on Windows). On macOS uv clones rather than
-    links, a copy-on-write file looks like one with no other name, and that second number is then an upper bound."""
+    took longer than `seconds` (a file's link count costs a call each on Windows). Where uv clones instead of linking
+    (a file system with copy-on-write, a different link mode set by the user) a clone looks like a file with no other
+    name, and that second number is an upper bound."""
     total, alone, todo, t0, late = 0, 0, [path], time.time(), False
     while todo:
         try:
