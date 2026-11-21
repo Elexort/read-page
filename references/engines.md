@@ -399,7 +399,7 @@ interpreter in a job of its own, nested in the harness's, and hides it. A backgr
 to five minutes, and holds it for its run.
 Its first line says what it will download (about 360 MB on Windows, 390 on Linux, 350 on macOS - measured by
 real installs on GitHub's runners, 2026-11-21, with Node from Playwright's wheel: Windows x64 359 MB, Linux x64 393
-and arm64 370, macOS arm64 348; nodejs.org's Node made it 33, 59, 56 and 55 MB more and 94, 185, 181 and 180 MB more on disk) and keep
+and arm64 370, macOS arm64 348; nodejs.org's archive is 36.0, 55.6, 55.4 and 50.6 MB against npm's tarball of 2.9, and its Node and npm take 102, 192, 189 and 188 MB on disk against npm's 11.7 - nothing at all once defuddle is installed) and keep
 (about 0.9 GB on Windows, 1.0 GB on Linux, 0.85 on macOS, uv's cache hard-linked into it not counted twice), or that
 the folder is up to date and only a check follows. The steps run
 one after another; only the check's engines answer side by side. Side by side was built and
