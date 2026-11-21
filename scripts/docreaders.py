@@ -9,8 +9,9 @@ and a presentation's slides are read as a text's body is (2026-11-21: they were 
 in readpage's own process).
 
 readpage.py runs them in a process of their own (`python docreaders.py KIND PATH UNTIL KILL`, see
-main()), killed at the converter's time and held to MEMORY by RLIMIT_AS where the OS has it: a
-reader stops itself at `until`, and the kill is the backstop for what it does not foresee. What
+main()), killed at the converter's time and held to MEMORY where the OS can hold it (RLIMIT_AS on
+Linux, a Job Object on Windows: _limit_memory): a reader stops itself at `until`, and the kill is
+the backstop for what it does not foresee. What
 they build is bounded by the document, not by its elements: a table's grid by CELLS and all of a
 document's tables by DOC_CELLS, whatever its cells span or repeat (a 1 KB EPUB took 1.4 GB and a
 4.5 KB ODT 40 s, because a cap held per cell and multiplied across cells). No scan runs back over
@@ -2734,17 +2735,73 @@ def plain(path, kind, until=None):
 
 # ---------------------------------------------------------------- a process of its own
 
+_JOB = []                          # the Job Object this process holds itself to: its handle, for its life
+
+
+def _job_limit(nbytes):
+    """Windows: this process in a Job Object of its own whose process memory limit is `nbytes` -
+    the memory it commits, which an allocation past the limit is refused (MemoryError). Set by the
+    process on itself with ctypes; a job inside the one a parent put it in is allowed since
+    Windows 8. True when it is set."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+    except ImportError:
+        return False
+
+    class Basic(ctypes.Structure):
+        _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD)]
+
+    class Extended(ctypes.Structure):           # JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+        _fields_ = [("Basic", Basic), ("Io", ctypes.c_ulonglong * 6), ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t), ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t)]
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k32.SetInformationJobObject.restype = wintypes.BOOL
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.AssignProcessToJobObject.restype = wintypes.BOOL
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.GetCurrentProcess.restype = wintypes.HANDLE
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        job = k32.CreateJobObjectW(None, None)
+        if not job:
+            return False
+        info = Extended()
+        info.Basic.LimitFlags = 0x100                          # JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        info.ProcessMemoryLimit = nbytes
+        if not (k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info))      # extended limits
+                and k32.AssignProcessToJobObject(job, k32.GetCurrentProcess())):
+            k32.CloseHandle(job)
+            return False
+        _JOB.append(job)
+        return True
+    except (OSError, AttributeError, ValueError, TypeError):
+        return False
+
+
 def _limit_memory(nbytes):
-    """RLIMIT_AS where the OS has it: past it an allocation fails (MemoryError) and the reading
-    ends, as no timeout can make it (a 1 KB EPUB took 1.4 GB in 5.9 s). True when it is set. Not
-    on macOS: its kernel does not hold to the limit, and a process there reserves far more address
-    space than it uses."""
+    """The readers' process held to `nbytes` where the OS can hold it: past it an allocation fails
+    (MemoryError) and the reading ends, as no timeout can make it (a 1 KB EPUB took 1.4 GB in 5.9
+    s). Linux: RLIMIT_AS, the address space. Windows: a Job Object's process memory limit, the
+    memory committed (_job_limit). True when it is set. Not on macOS: its kernel does not hold to
+    RLIMIT_AS (the call succeeds, and allocations go on past it), a process there reserves far more
+    address space than it uses, and a process has no Job Object or cgroup it can put itself in -
+    the kill at the read's time is all there is."""
     if sys.platform == "darwin":
         return False
+    if os.name == "nt":
+        return _job_limit(nbytes)
     try:
         import resource
     except ImportError:
-        return False                                           # Windows
+        return False
     try:
         soft, hard = resource.getrlimit(resource.RLIMIT_AS)
         want = nbytes if hard == resource.RLIM_INFINITY else min(nbytes, hard)

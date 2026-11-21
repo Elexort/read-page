@@ -38,6 +38,11 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   text, lists, tables and pictures, then `notes:`. On LibreOffice-shaped files: 678 table rows of a workbook (0
   before), its repeated rows, a deck's 12 slides, 10 table rows, 3 pictures and notes. `odf_text` is gone; the
   plain reader is what is left when the reader breaks. A table in a frame is read in an ODT too.
+- **The readers' process has a memory limit on Windows** (KNOWN-ISSUES 181): a Job Object's process memory limit
+  of 2 GB, which the process sets on itself (ctypes), as RLIMIT_AS holds it on Linux: an allocation past it is a
+  MemoryError. Its start costs 11 ms more (143 -> 154 ms median of 20 under the environment's Python), ctypes'
+  import most of it. macOS keeps none: its kernel does not hold to RLIMIT_AS, and no process can put itself in a
+  job or a cgroup there.
 - CI: the repository is public, so `macos.yml` runs on every push to dev, as `tests.yml` does.
 - **The installer's open rows** (KNOWN-ISSUES 142-145, 151):
   - Sources: every setting that sends an installer elsewhere than its default or skips a check - uv's index,

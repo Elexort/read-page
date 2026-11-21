@@ -820,15 +820,18 @@ check("a ZIP's documents share the converter's 10 s: the first is stopped at the
       r.seconds < 18 and "did not finish" in text and "two.rtf" in text and "not read" in text,
       "%.1fs %r" % (r.seconds, text[-300:]))
 os.environ.pop("READ_PAGE_TEST_DOC_SLEEP")
-if os.name == "nt" or sys.platform == "darwin":
-    check.skip("the readers' process cannot take more memory than its limit (RLIMIT_AS)",
-               "no RLIMIT_AS on Windows; macOS does not hold to it")
+HOW = "a Job Object" if os.name == "nt" else "RLIMIT_AS"
+if sys.platform == "darwin":
+    check.skip("the readers' process cannot take more memory than its limit", "macOS holds to no such limit")
 else:
-    code = ("import sys; sys.path.insert(0, %r); import docreaders; docreaders._limit_memory(200 << 20); "
-            "x = bytearray(400 << 20)" % SCRIPTS)
-    p = subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True, timeout=60)
-    check("the readers' process cannot take more memory than its limit (RLIMIT_AS)",
-          p.returncode != 0 and b"MemoryError" in p.stderr, p.stderr[-200:])
+    # Windows had no limit (RLIMIT_AS is Linux's): a Job Object's process memory limit is
+    code = ("import sys; sys.path.insert(0, %r); import docreaders; set_ = docreaders._limit_memory(200 << 20); "
+            "small = bytearray(100 << 20); print('SET' if set_ else 'NOT SET', flush=True); x = bytearray(400 << 20)"
+            % SCRIPTS)
+    p = subprocess.run([sys.executable, "-I", "-S", "-B", "-c", code], capture_output=True, timeout=60)
+    check("the readers' process cannot take more memory than its limit (%s), and takes what is under it" % HOW,
+          p.returncode != 0 and b"MemoryError" in p.stderr and b"SET" in p.stdout and b"NOT" not in p.stdout,
+          "%r %r" % (p.stdout[-40:], p.stderr[-160:]))
 
 
 # ------------------------------------------------ KNOWN-ISSUES 167: a cut archive read from its members' headers
