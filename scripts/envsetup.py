@@ -12,6 +12,8 @@ engine; deleting the folder uninstalls it.
 
 Stdlib only, Python 3.8+: this file runs before the environment exists.
 """
+import base64
+import glob
 import hashlib
 import json
 import os
@@ -37,6 +39,14 @@ UV_VERSION = "0.13.9"
 PYTHON_VERSION = "3.13.18"          # python-build-standalone, through uv
 NODE_VERSION = "24.22.3"            # LTS; the official build from nodejs.org, SHA256 checked
 NODE_WHEEL = "24.19.0"              # nodejs-wheel-binaries on PyPI, when nodejs.org cannot be reached
+# The Node that runs defuddle and yt-dlp's JavaScript is the one Playwright's wheel carries (driver/node: Playwright
+# is installed anyway, and 24.21 for the pinned Playwright) - nothing of nodejs.org is downloaded. That Node has no
+# npm: npm is its registry tarball (the version Node 24.22.3 ships), held to this integrity - the value the
+# registry publishes for it (`dist.integrity`), checked by the tests against the registry. nodejs.org's Node and
+# PyPI's nodejs-wheel-binaries stay as the fallback: musl has no Playwright wheel, and a wheel may lack its Node.
+NPM_VERSION = "11.19.1"
+NPM_INTEGRITY = "sha512-ztsxKxt/kkIaAs+2i0GU6I+DRmUdrNasxTZKJe9TCdSjKxlhah/4r/hl5ygMD6XAg1qZ9c2TNomR4qgOydp10g=="
+NODE_FLOOR = (22, 9)                # npm 11 asks `^20.17.0 || >=22.9.0` of its Node
 DEFUDDLE_VERSION = "0.19.4"
 # defuddle names its own packages by range (linkedom ^0.18.12, turndown ^7.2.0, temml, commander:
 # 26 with theirs), and npm takes the newest of the day of the install. So the day is pinned too:
@@ -67,6 +77,8 @@ YTDLP_FLOATS = ("yt-dlp", "yt-dlp-ejs", "brotli", "mutagen", "pycryptodomex", "w
 # and mixed text (clean CER 0.19 against 0.48 %, poor scans 39.6 % both), three times faster
 # (0.21 against 0.61 s a picture) and a quarter of the size (8 against 31 MB)
 TESSDATA_URL = "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/%s.traineddata"
+# READ_PAGE_TESSDATA_URL: a mirror for it where raw.githubusercontent.com is slow or not reached - a folder that holds
+# `<lang>.traineddata` (https://mirror.example/tessdata_fast/), or a template with {lang} in it
 TESSDATA = {"eng": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
             "rus": "e16e5e036cce1d9ec2b00063cf8b54472625b9e14d893a169e2b0dedeb4df225"}
 # What the two downloads that are not PyPI's packages are checked against: their
@@ -137,6 +149,8 @@ BROWSER = "chromium-headless-shell"
 LOCK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setup-lock.txt")
 ENV_LOCK = "setup-lock.txt"          # inside an environment's folder: the lock it was built from
 FOLLOW_SECONDS = 100                # --setup shows the work this long, then leaves it in the background
+NOT_PASSED_ON = ("UV_NO_VERIFY_HASHES",)     # settings of the user's that would switch off the lock's hash check
+STALE_CACHE_BYTES = 150 * 1024 * 1024         # uv's cache beyond this in no environment is stale (a fresh install: 14-21 MB)
 # what an installer says (uv, npm, Playwright, pip) when it cannot verify who answers
 CERT_FAILURE = re.compile(r"(?i)certificate verify failed|invalid peer certificate|unknownissuer|unknown issuer|"
                           r"unable to verify the first certificate|self[- ]signed certificate|"
@@ -472,6 +486,28 @@ def net_env():
         env.pop(k, None)
     if not env.get("UV_DEFAULT_INDEX") and not env.get("UV_INDEX_URL") and env.get("PIP_INDEX_URL"):
         env["UV_DEFAULT_INDEX"] = env["PIP_INDEX_URL"]           # a company's mirror, named for pip
+    if not env.get("UV_DEFAULT_INDEX") and not env.get("UV_INDEX_URL"):
+        # pip's own configuration (pip.ini, pip.conf: the user's and the system's) is where a user in mainland China
+        # or behind a company keeps the mirror, and uv does not read it: its index-url is taken, and named in the log
+        got = pip_config_index(env)
+        if got:
+            env["UV_DEFAULT_INDEX"] = got[1]
+    # uv reads uv.toml (and a pyproject.toml with [tool.uv]) from the working folder's parents, the user's and the
+    # system's configuration folders: measured with uv 0.13.9, a uv.toml in a parent of the folder sent every
+    # install to the index it named, so what --setup installs would depend on where the folder is and on files
+    # nobody told about it. UV_NO_CONFIG=1 ignores all of them and still honours the environment's variables
+    # (UV_DEFAULT_INDEX, UV_EXTRA_INDEX_URL, ...) and an explicit UV_CONFIG_FILE: a company's mirror is named in
+    # one of those, and the log says which (source_overrides). Unless the user set it.
+    if not env.get("UV_NO_CONFIG"):
+        env["UV_NO_CONFIG"] = "1"
+    # uv clones (copy-on-write) rather than links on macOS, and the GitHub runner's free space showed the cache cost
+    # what it holds there (1.5 GB for a setup of 1.0): hard links, which uv uses everywhere else, share the file
+    if sys.platform == "darwin" and not env.get("UV_LINK_MODE"):
+        env["UV_LINK_MODE"] = "hardlink"
+    # the lock's hashes are what the packages are checked against (README): a variable that turns that check off
+    # is not passed on, and the log says so
+    for k in NOT_PASSED_ON:
+        env.pop(k, None)
     # urllib (the network check) trusts the OS's certificate store; uv trusts its bundled Mozilla roots and
     # Node its own, so behind a proxy that inspects TLS - its root in the OS's store - the check and the
     # first download passed and the next failed on a certificate. uv 0.13.9's own help: UV_SYSTEM_CERTS
@@ -482,6 +518,263 @@ def net_env():
         if not env.get(k):
             env[k] = "1"
     return env
+
+
+# ---------------------------------------------------------------- what redirects the installers
+# Whoever can set these already runs code as the user, so none of them is an escalation. But an address left
+# from a trial, an `http://` mirror or a TLS check switched off for a debugging session lowers what the install
+# is worth without a word, and the log used to say "pypi.org" and "nodejs.org, SHA256 pinned" whatever was set.
+_URL_USER = re.compile(r"(?i)\b([a-z][a-z0-9+.-]*://)[^/@\s]*@")
+
+
+def redact(text):
+    """A value with the user name and password of every address in it left out."""
+    return _URL_USER.sub(r"\1", str(text))
+
+
+def _truthy(v):
+    return str(v or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# (variable, what it does here): a setting of the user's that sends an installer somewhere else
+_SOURCE_VARS = (
+    ("UV_DEFAULT_INDEX", "the Python packages come from it, not from pypi.org"),
+    ("UV_INDEX_URL", "the Python packages come from it, not from pypi.org"),
+    ("UV_INDEX", "uv looks in this index too"),
+    ("UV_EXTRA_INDEX_URL", "uv looks in it besides the default index"),
+    ("UV_FIND_LINKS", "uv takes wheels from it"),
+    ("UV_PYTHON_INSTALL_MIRROR", "our Python comes from it, not from github.com"),
+    ("UV_PYTHON_DOWNLOADS_JSON_URL", "uv takes its list of Pythons, and their hashes, from it"),
+    ("UV_INSECURE_HOST", "uv does not verify TLS for it"),
+    ("UV_CONSTRAINT", "uv resolves under these constraints"),
+    ("UV_OVERRIDE", "uv resolves under these overrides"),
+    ("UV_EXCLUDE_NEWER", "uv leaves out files newer than it"),
+    ("PIP_EXTRA_INDEX_URL", "pip, used only if pypi.org gives no uv, looks in it too"),
+    ("PIP_FIND_LINKS", "pip, used only if pypi.org gives no uv, takes wheels from it"),
+    ("PLAYWRIGHT_DOWNLOAD_HOST", "the browser comes from it, not from Playwright's CDN"),
+    ("PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST", "the browser comes from it, not from Playwright's CDN"),
+    ("NODE_EXTRA_CA_CERTS", "Node and Playwright trust the certificates in this file too"),
+    ("SSL_CERT_FILE", "Python trusts the certificates in this file"),
+    ("NODE_OPTIONS", "given to every Node process of the install"),
+)
+# what a settings file may hold that moves a source or a check; `[[index]]` is uv.toml's table of indexes
+_UV_KEYS = ("index-url", "extra-index-url", "find-links", "allow-insecure-host", "python-install-mirror",
+            "python-downloads-json-url", "exclude-newer", "no-binary", "no-build", "native-tls", "index-strategy",
+            "constraint-dependencies", "override-dependencies", "no-verify-hashes")
+_NPM_KEYS = ("registry", "strict-ssl", "cafile", "ca", "proxy", "https-proxy")
+_PIP_KEYS = ("index-url", "extra-index-url", "find-links", "trusted-host", "cert")
+
+
+def _file_text(path):
+    """The first 64 KB of a settings file, or None where there is none."""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read(65536)
+    except OSError:
+        return None
+
+
+def _pairs(text, wanted):
+    """The (key, value) pairs of an ini file or an .npmrc (`key = value`) for the keys it is asked for;
+    a scope's `@x:registry` counts as `registry`. Credentials (`_authToken`, `_password`) are not asked for."""
+    got = []
+    for ln in (text or "").splitlines():
+        if ln.lstrip().startswith(("#", ";")):
+            continue
+        m = re.match(r"\s*([A-Za-z0-9_@:./-]+)\s*[=:]\s*(.*?)\s*$", ln)
+        if m:
+            key = m.group(1).lower()
+            base = "registry" if key.endswith(":registry") else key
+            if base in wanted:
+                got.append((m.group(1), m.group(2).strip("'\"")))
+    return got
+
+
+def uv_config_files(env, user_home, folder, system=True):
+    """The configuration files uv would read for an install run in `folder` that set a source or a check:
+    [(path, [keys])] - a uv.toml, or a pyproject.toml with a [tool.uv] table, in the folder or any parent; the
+    user's (`$XDG_CONFIG_HOME` or `~/.config`, `%APPDATA%`) and the system's (`/etc/uv`, `%PROGRAMDATA%`)."""
+    paths = []
+    here = os.path.abspath(folder)
+    while True:
+        paths += [os.path.join(here, "uv.toml"), os.path.join(here, "pyproject.toml")]
+        up = os.path.dirname(here)
+        if up == here:
+            break
+        here = up
+    if os.name == "nt":
+        for var in ("APPDATA",) + (("PROGRAMDATA",) if system else ()):
+            if env.get(var):
+                paths.append(os.path.join(env[var], "uv", "uv.toml"))
+    else:
+        cfg = env.get("XDG_CONFIG_HOME") or os.path.join(user_home, ".config")
+        paths.append(os.path.join(cfg, "uv", "uv.toml"))
+        for d in ((env.get("XDG_CONFIG_DIRS") or "/etc/xdg").split(os.pathsep) + ["/etc"]) if system else ():
+            if d:
+                paths.append(os.path.join(d, "uv", "uv.toml"))
+    found, seen = [], set()
+    for p in paths:
+        text = _file_text(p)
+        key = os.path.normcase(os.path.abspath(p))
+        if text is None or key in seen:
+            continue
+        seen.add(key)
+        if p.endswith("pyproject.toml") and "[tool.uv" not in text:
+            continue
+        keys = [k for k in _UV_KEYS if re.search(r"(?m)^\s*(\[tool\.uv\.)?%s\s*=" % re.escape(k), text)]
+        if re.search(r"(?m)^\s*\[\[(tool\.uv\.)?index\]\]", text):
+            keys.append("[[index]]")
+        if keys:
+            found.append((p, keys))
+    return found
+
+
+def pip_config_files(env, user_home=None, system=True):
+    """The pip configuration files that exist for this user, in pip's order of precedence: PIP_CONFIG_FILE alone, else
+    the user's files, then the system's."""
+    user_home = user_home or os.path.expanduser("~")
+    if env.get("PIP_CONFIG_FILE"):
+        return [env["PIP_CONFIG_FILE"]] if _file_text(env["PIP_CONFIG_FILE"]) is not None else []
+    if os.name == "nt":
+        paths = [os.path.join(b, "pip", "pip.ini") for b in (env.get("APPDATA"), user_home) if b]
+        if system and env.get("PROGRAMDATA"):
+            paths.append(os.path.join(env["PROGRAMDATA"], "pip", "pip.ini"))
+    else:
+        paths = [os.path.join(env.get("XDG_CONFIG_HOME") or os.path.join(user_home, ".config"), "pip", "pip.conf"),
+                 os.path.join(user_home, ".pip", "pip.conf"),
+                 os.path.join(user_home, "Library", "Application Support", "pip", "pip.conf")]
+        if system:
+            paths += ["/Library/Application Support/pip/pip.conf", "/etc/pip.conf"]
+    return [x for x in paths if _file_text(x) is not None]
+
+
+def pip_config_index(env, user_home=None, system=True):
+    """(file, index-url) of the first pip configuration that names an index, or None."""
+    for path in pip_config_files(env, user_home, system):
+        for key, value in _pairs(_file_text(path), ("index-url",)):
+            if key.lower() == "index-url" and value:
+                return path, value
+    return None
+
+
+def source_overrides(env, user_home=None, folder=None, system=True):
+    """What sends an installer somewhere other than its default, or lets it skip a check, as one line each for
+    the log and the report: `NAME=value - what it does`. `env` is the user's own environment, as it was before
+    net_env added ours. Credentials in an address are left out. Empty when nothing is set."""
+    user_home = user_home or os.path.expanduser("~")
+    out = []
+
+    def add(name, value, note):
+        shown = redact(value)
+        out.append("%s%s - %s" % (name, ("=" + (shown if len(shown) <= 100 else shown[:97] + "...")) if shown else "", note))
+
+    for k, note in _SOURCE_VARS:
+        if env.get(k):
+            add(k, env[k], note)
+    if env.get("PIP_INDEX_URL"):
+        if env.get("UV_DEFAULT_INDEX") or env.get("UV_INDEX_URL"):
+            add("PIP_INDEX_URL", env["PIP_INDEX_URL"], "not used: uv's own index setting is there; pip, used only if "
+                "pypi.org gives no uv, reads it")
+        else:
+            add("PIP_INDEX_URL", env["PIP_INDEX_URL"], "taken as UV_DEFAULT_INDEX: the Python packages come from it, "
+                "not from pypi.org")
+    if _truthy(env.get("UV_NO_VERIFY_HASHES")):
+        add("UV_NO_VERIFY_HASHES", env["UV_NO_VERIFY_HASHES"], "not passed on: the packages are checked against the "
+            "hashes of the skill's lock")
+    tess = (env.get("READ_PAGE_TESSDATA_URL") or "").strip()
+    if tess:
+        if tess.lower().startswith("https://"):
+            add("READ_PAGE_TESSDATA_URL", tess, "the OCR language data comes from it, not from raw.githubusercontent.com "
+                "(eng and rus are pinned by SHA256 and checked either way; any other pack by its size and by tesseract "
+                "starting with it)")
+        else:
+            add("READ_PAGE_TESSDATA_URL", tess, "not used: a mirror must be https://; the data comes from "
+                "raw.githubusercontent.com")
+    mirror = (env.get("NODEJS_ORG_MIRROR") or "").strip()
+    if mirror:
+        if mirror.lower().startswith("https://"):
+            add("NODEJS_ORG_MIRROR", mirror, "Node comes from it, not from nodejs.org (the archive's SHA256 is "
+                "pinned in the skill and checked either way)")
+        else:
+            add("NODEJS_ORG_MIRROR", mirror, "not used: a mirror must be https://; Node comes from nodejs.org")
+    if str(env.get("NODE_TLS_REJECT_UNAUTHORIZED") or "").strip() == "0":
+        add("NODE_TLS_REJECT_UNAUTHORIZED", "0", "Node does not verify TLS: npm's downloads (defuddle and its "
+            "packages) are not checked by a certificate")
+    for k in sorted(env):
+        low = k.lower()
+        if low.startswith("npm_config_") and low[11:] in ("registry", "strict_ssl", "cafile", "ca", "userconfig",
+                                                          "globalconfig"):
+            if low[11:] == "strict_ssl" and _truthy(env[k]):
+                continue
+            add(k, env[k], "npm reads it: " + {
+                "registry": "defuddle and its packages come from this registry, not from registry.npmjs.org",
+                "strict_ssl": "npm does not verify TLS", "cafile": "npm trusts the certificates in this file too",
+                "ca": "npm trusts this certificate too", "userconfig": "npm reads this settings file",
+                "globalconfig": "npm reads this settings file"}[low[11:]])
+    # settings files
+    if env.get("UV_CONFIG_FILE"):
+        add("UV_CONFIG_FILE", env["UV_CONFIG_FILE"], "uv reads this file (it is honoured though UV_NO_CONFIG is set "
+            "for the install)")
+    reads = str(env.get("UV_NO_CONFIG") or "").strip().lower() in ("0", "false", "no", "off")
+    for path, keys in uv_config_files(env, user_home, folder or os.getcwd(), system):
+        out.append("%s sets %s - %s" % (path, ", ".join(keys), (
+            "uv reads it (UV_NO_CONFIG=0)" if reads else
+            "not read: --setup runs uv with UV_NO_CONFIG=1, so where a folder is does not change what is installed; "
+            "name an index in UV_DEFAULT_INDEX (or the file in UV_CONFIG_FILE) to use it")))
+    npmrc = env.get("npm_config_userconfig") or env.get("NPM_CONFIG_USERCONFIG") or os.path.join(user_home, ".npmrc")
+    for key, value in _pairs(_file_text(npmrc), _NPM_KEYS):
+        if key.lower() == "strict-ssl" and _truthy(value):
+            continue
+        add("%s: %s" % (npmrc, key), value, "npm reads it for the install of defuddle")
+    taken = pip_config_index(env, user_home, system) if not (env.get("UV_DEFAULT_INDEX") or env.get("UV_INDEX_URL")
+                                                              or env.get("PIP_INDEX_URL")) else None
+    for p in pip_config_files(env, user_home, system):
+        for key, value in _pairs(_file_text(p), _PIP_KEYS):
+            if taken and key.lower() == "index-url" and (p, value) == taken:
+                add("%s: %s" % (p, key), value, "taken as UV_DEFAULT_INDEX (pip's configuration is read for its index; "
+                    "uv's own is not): the Python packages come from it, not from pypi.org")
+            else:
+                add("%s: %s" % (p, key), value, "pip reads it (used only if pypi.org gives no uv)")
+    return out
+
+
+def tessdata_url(lang, env=None):
+    """Where a language pack comes from: READ_PAGE_TESSDATA_URL when it is an https address (a folder, or a template
+    with {lang}), else GitHub's raw host. The pins of eng and rus are checked whatever serves them; any other pack by
+    its size and by tesseract starting with it."""
+    base = ((env if env is not None else os.environ).get("READ_PAGE_TESSDATA_URL") or "").strip()
+    if base.lower().startswith("https://"):
+        return base.replace("{lang}", lang) if "{lang}" in base else base.rstrip("/") + "/" + lang + ".traineddata"
+    return TESSDATA_URL % lang
+
+
+def check_integrity(path, integrity):
+    """npm's form of a hash - `sha512-<base64 of the digest>` - held against a file: ValueError when it differs."""
+    algo, _, want = integrity.partition("-")
+    h = hashlib.new(algo)
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    if base64.b64encode(h.digest()).decode("ascii") != want:
+        raise ValueError("%s: its %s does not match the one pinned" % (os.path.basename(path), algo))
+
+
+def playwright_node(env):
+    """The Node Playwright's wheel carries, in the environment folder `env`: Lib/site-packages/playwright/driver/node.exe
+    on Windows, lib/python3.x/site-packages/playwright/driver/node elsewhere; '' where there is none."""
+    roots = [os.path.join(env, "Lib", "site-packages")] if os.name == "nt" else \
+        sorted(glob.glob(os.path.join(env, "lib*", "python3*", "site-packages")))
+    for r in roots:
+        path = os.path.join(r, "playwright", "driver", "node.exe" if os.name == "nt" else "node")
+        if os.path.isfile(path):
+            return path
+    return ""
+
+
+def node_version(out):
+    """(24, 21, 0) from `node --version`'s "v24.21.0"; (0,) where it does not read so."""
+    m = re.search(r"v?(\d+)\.(\d+)\.(\d+)", out or "")
+    return tuple(int(x) for x in m.groups()) if m else (0,)
 
 
 def fetch(url, dest, sha=None, timeout=60):
@@ -520,7 +813,8 @@ def cert_advice():
     if sys.platform == "darwin":
         return ("this Python has no root certificates: run 'Install Certificates.command' in its folder under "
                 "/Applications/Python 3.x/ (python.org's Python ships none until then), or run --setup "
-                "with /usr/bin/python3")
+                "with /usr/bin/python3; behind a proxy that inspects TLS name a file with its root in "
+                "SSL_CERT_FILE (neither Python reads the keychain)")
     return ("this Python does not trust the certificate pypi.org presents: install the system's root certificates "
             "(sudo apt install ca-certificates), or - behind a proxy that inspects TLS - name a file with its "
             "root in SSL_CERT_FILE")
@@ -671,7 +965,10 @@ class Work:
                         PLAYWRIGHT_BROWSERS_PATH=os.path.join(d, "browsers"),
                         npm_config_cache=os.path.join(d, "cache", "npm"),
                         npm_config_update_notifier="false", npm_config_fund="false",
-                        npm_config_audit="false")
+                        npm_config_audit="false",
+                        # npm (Node 22.1+) keeps its compiled modules in the temp folder otherwise
+                        # (`node-compile-cache`, 2.7 MB): inside the one folder, so deleting it removes them
+                        NODE_COMPILE_CACHE=os.path.join(d, "cache", "node-compile"))
         self.state(done=False)
 
     # progress
@@ -714,8 +1011,10 @@ class Work:
                 self.running.remove(name)
         with self.lock:
             self.parts[name] = {"ok": bool(ok), "note": note, "seconds": round(took, 1)}
-            self.say("  %2d/%d %-9s %s%s" % (self.STEPS.index(name) + 1, len(self.STEPS), name, note,
-                                            (" (%.0f s)" % took) if took >= 2 else ""))
+            # a step that did not work says so on its own line (the line used to be the note alone)
+            self.say("  %2d/%d %-9s %s%s%s" % (self.STEPS.index(name) + 1, len(self.STEPS), name,
+                                              "" if ok or str(note).startswith("skipped") else "FAILED: ", note,
+                                              (" (%.0f s)" % took) if took >= 2 else ""))
         self.state(done=False)
         return bool(ok)
 
@@ -752,17 +1051,51 @@ class Work:
         free = shutil.disk_usage(self.d).free
         if free < 2 * 1024 ** 3:
             self.lack("disk", "%s free where it goes (%s); it needs about 1.5 GB" % (human(free), self.d))
+        index = self.env.get("UV_DEFAULT_INDEX") or self.env.get("UV_INDEX_URL")
         try:
             fetch_json("https://pypi.org/pypi/uv/%s/json" % UV_VERSION, timeout=15)
-            return True, "pypi.org answers; %s free" % human(free)
+            return True, "pypi.org answers; %s free%s" % (
+                human(free), ("; the Python packages come from the index set here (%s)" % redact(index)) if index else "")
         except Exception as e:                                 # noqa: BLE001
             if cert_error(e):
                 # the network is there; this Python cannot check who answers (not "no internet")
                 self.cert_why = cert_advice()
                 return False, "pypi.org answers, but its certificate cannot be verified: " + self.cert_why
-            if self.env.get("UV_DEFAULT_INDEX") or self.env.get("UV_INDEX_URL"):
+            if index:
                 return True, "pypi.org does not answer (%s); using the index set here" % str(e)[:80]
-            return False, "no answer from pypi.org: %s" % str(e)[:120]
+            return False, "no answer from pypi.org: %s%s" % (str(e)[:120], self._config_hint())
+
+    def _config_hint(self):
+        """A machine that reaches PyPI only through the mirror its uv.toml names: --setup does not read that file
+        (UV_NO_CONFIG=1), so the mirror must be named another way - say so, where it matters."""
+        if _truthy(self.env.get("UV_NO_CONFIG")) is False:
+            return ""
+        try:
+            files = [(p, k) for p, k in uv_config_files(os.environ, os.path.expanduser("~"), self.d)
+                     if "index-url" in k or "[[index]]" in k or "extra-index-url" in k or "find-links" in k]
+        except OSError:
+            return ""
+        if not files:
+            return ""
+        return ("; %s names an index, and --setup does not read uv.toml files (UV_NO_CONFIG=1): set UV_DEFAULT_INDEX to "
+                "that index, or UV_CONFIG_FILE to the file, and run it again" % files[0][0])
+
+    def note_sources(self):
+        """The first lines of the log: every setting of the user's that sends an installer elsewhere than its
+        default, or skips a check (source_overrides) - what the lines below are fetched from is what these say, not
+        always pypi.org and nodejs.org. Kept in setup.json for the setup report."""
+        try:
+            lines = source_overrides(dict(os.environ), os.path.expanduser("~"), self.d)
+        except Exception as e:                                 # noqa: BLE001
+            self.log("sources: %s" % e)
+            lines = []
+        if lines:
+            self.say("  sources set here, not the defaults:")
+            for ln in lines:
+                self.say("    " + ln)
+            self.info["sources"] = lines
+        else:
+            self.info.pop("sources", None)
 
     def uv(self):
         exe = os.path.join(self.d, "uv", "uv-" + UV_VERSION, "uv.exe" if os.name == "nt" else "uv")
@@ -855,6 +1188,7 @@ class Work:
             lock = fh.read()
         pyver = self._py_version(self.base_python)
         rel = env_id(pyver)
+        self.drop_stale_pins(lock, rel)
         env = at(self.d, rel)
         py = os.path.join(env, "Scripts", "python.exe") if os.name == "nt" else os.path.join(env, "bin", "python")
         if not _python_ok(py):
@@ -898,8 +1232,19 @@ class Work:
         return ok, note
 
     def node(self):
+        # the Node of Playwright's wheel: it is in the environment already (the driver runs on it), so the 36-56 MB
+        # of nodejs.org's archive and its 90-180 MB on disk are not needed
+        rel_env = getattr(self, "env_rel", "")
+        wheel = playwright_node(at(self.d, rel_env)) if rel_env else ""
+        if wheel:
+            rc, out = self.sh([wheel, "--version"], timeout=60)
+            if rc == 0 and node_version(out) >= NODE_FLOOR:
+                self.node_bin = wheel
+                self.info["node_bin"] = os.path.relpath(wheel, self.d).replace(os.sep, "/")
+                return True, "node %s (Playwright's own, from its wheel: nothing downloaded)" % out.strip().splitlines()[-1]
+            self.log("the Node in Playwright's wheel does not do (%s %s): nodejs.org's is used" % (rc, out[-80:]))
         cur = at(self.d, self.prev.get("node_bin"))
-        if cur and os.path.isfile(cur):
+        if cur and os.path.isfile(cur) and "playwright" not in cur:
             rc, out = self.sh([cur, "--version"], timeout=60)
             if rc == 0 and out.strip().lstrip("v") in (NODE_VERSION, NODE_WHEEL):
                 self.node_bin = cur
@@ -907,7 +1252,7 @@ class Work:
                 return True, "node %s" % out.strip()
         try:
             self.node_bin = self._node_official()
-            src = "nodejs.org, SHA256 pinned"
+            src = "%s, SHA256 pinned" % self.node_source
         except Exception as e:                                 # noqa: BLE001
             self.log("nodejs.org: %s" % e)
             try:
@@ -921,6 +1266,44 @@ class Work:
         rc, out = self.sh([self.node_bin, "--version"], timeout=60)
         return rc == 0, "node %s (%s)" % (out.strip(), src)
 
+    def _npm_cli(self, node):
+        """npm's command line script for the Node at `node`: the one that came with it (nodejs.org's archive and PyPI's
+        wheel carry npm), else npm's own tarball from the registry - held to NPM_INTEGRITY, so a mirror or a proxy
+        cannot serve other bytes - unpacked in the folder. A Node of Playwright's wheel has no npm."""
+        root = os.path.dirname(os.path.dirname(node)) if os.name != "nt" and node.endswith("bin" + os.sep + "node") \
+            else os.path.dirname(node)
+        for c in (os.path.join(root, "node_modules", "npm", "bin", "npm-cli.js"),
+                  os.path.join(root, "lib", "node_modules", "npm", "bin", "npm-cli.js")):
+            if os.path.isfile(c):
+                return c
+        dest = os.path.join(self.d, "node", "npm-" + NPM_VERSION)
+        cli = os.path.join(dest, "package", "bin", "npm-cli.js")
+        if os.path.isfile(cli) and _read_json(os.path.join(dest, "package", "package.json")).get("version") == NPM_VERSION:
+            self.info["npm_cli"] = os.path.relpath(cli, self.d).replace(os.sep, "/")
+            return cli
+        registry = (self.env.get("npm_config_registry") or self.env.get("NPM_CONFIG_REGISTRY") or "").strip()
+        if not registry.lower().startswith("https://"):          # (the hash is pinned, but an http registry is not used)
+            registry = "https://registry.npmjs.org"
+        dl = os.path.join(self.d, "cache", "dl")
+        os.makedirs(dl, exist_ok=True)
+        arc = os.path.join(dl, "npm-%s.tgz" % NPM_VERSION)
+        try:
+            fetch("%s/npm/-/npm-%s.tgz" % (registry.rstrip("/"), NPM_VERSION), arc, None, timeout=300)
+            check_integrity(arc, NPM_INTEGRITY)
+        except Exception:
+            try:
+                os.unlink(arc)
+            except OSError:
+                pass
+            raise
+        shutil.rmtree(dest, ignore_errors=True)
+        unpack(arc, dest)
+        os.unlink(arc)
+        if not os.path.isfile(cli):
+            raise ValueError("no npm-cli.js in npm's tarball")
+        self.info["npm_cli"] = os.path.relpath(cli, self.d).replace(os.sep, "/")
+        return cli
+
     def _node_official(self):
         if musl():
             raise ValueError("nodejs.org has no build for musl")
@@ -932,7 +1315,14 @@ class Work:
             raise ValueError("no Node build for %s" % m)
         name = "node-v%s-%s-%s" % (NODE_VERSION, osn, arch)
         fname = name + (".zip" if os.name == "nt" else ".tar.gz")
-        base = (self.env.get("NODEJS_ORG_MIRROR") or "https://nodejs.org/dist").rstrip("/")
+        mirror = (self.env.get("NODEJS_ORG_MIRROR") or "").strip()
+        if mirror and not mirror.lower().startswith("https://"):
+            # a plain-http mirror is not used (the archive's hash is pinned, so it could not change the bytes, but
+            # the request and the version asked for would go in the clear); the log names it (note_sources)
+            self.log("NODEJS_ORG_MIRROR is not https:// (%s): not used" % redact(mirror))
+            mirror = ""
+        self.node_source = "the mirror %s" % redact(mirror).split("/")[2] if mirror else "nodejs.org"
+        base = (mirror or "https://nodejs.org/dist").rstrip("/")
         url = "%s/v%s/" % (base, NODE_VERSION)
         sha = NODE_SHA256.get(fname)           # pinned here: a mirror serves the archive, never its checksum
         if not sha:
@@ -970,15 +1360,14 @@ class Work:
         pkg = os.path.join(prefix, "node_modules" if os.name == "nt" else "lib/node_modules", "defuddle", "package.json")
         have = _read_json(pkg).get("version")
         self.info["npm"] = "npm"
+        self.info.pop("npm_cli", None)                         # only an npm of ours that was used stays named
         if have == DEFUDDLE_VERSION:
             return True, "defuddle %s" % have
-        root = os.path.dirname(os.path.dirname(node)) if os.name != "nt" and node.endswith("bin" + os.sep + "node") \
-            else os.path.dirname(node)
-        cli = next((c for c in (os.path.join(root, "node_modules", "npm", "bin", "npm-cli.js"),
-                                os.path.join(root, "lib", "node_modules", "npm", "bin", "npm-cli.js"))
-                    if os.path.isfile(c)), "")
-        if not cli:
-            return False, "no npm beside node"
+        try:
+            cli = self._npm_cli(node)
+        except Exception as e:                                 # noqa: BLE001
+            self.lack("defuddle", "no npm: %s" % str(e)[:160], "readpage.py --setup again")
+            return False, "no npm: %s" % str(e)[:120]
         env = dict(self.env, PATH=os.path.dirname(node) + os.pathsep + self.env.get("PATH", ""))
         rc, out = self.sh(defuddle_command(node, cli, prefix), env=env)
         have = _read_json(pkg).get("version")
@@ -996,7 +1385,12 @@ class Work:
         self.info["browsers"] = "browsers"
         rc, out = self.sh([py, "-E", "-m", "playwright", "install", BROWSER], timeout=1200)
         if rc != 0:
-            self.lack("browser", "Playwright's browser did not download: " + out[-120:])
+            # where Playwright has no build for this distribution (it says "does not support") the machine's own
+            # Chromium is the way; where the download failed, once more or through a mirror first
+            fix = _system_fix("browser")
+            if "does not support" not in out:
+                fix = "readpage.py --setup again (PLAYWRIGHT_DOWNLOAD_HOST names a mirror), or the machine's own: " + fix
+            self.lack("browser", "Playwright's browser did not download: " + out[-120:], fix)
             return False, "not downloaded: " + out[-120:]
         found = sorted(n for n in os.listdir(os.path.join(self.d, "browsers")) if n.startswith("chromium_headless_shell-"))
         return True, "%s %s" % (BROWSER, found[-1].split("-")[-1] if found else "?")
@@ -1005,7 +1399,8 @@ class Work:
         td = os.path.join(self.d, "tessdata")
         os.makedirs(td, exist_ok=True)
         self.info["tessdata"] = "tessdata"
-        langs = dict(TESSDATA)
+        mine = ownenv.ocr_default_packs(os.environ)               # English, and the packs of the user's languages
+        langs = dict((x, TESSDATA.get(x)) for x in mine)
         got, bad = [], []
         for x in os.environ.get("READ_PAGE_OCR_LANGS", "").split("+"):     # a language the user named
             x = x.strip()
@@ -1020,7 +1415,7 @@ class Work:
                 got.append(lang)
                 continue
             try:
-                fetch(TESSDATA_URL % lang, dest, sha, timeout=300)
+                fetch(tessdata_url(lang, self.env), dest, sha, timeout=300)
                 got.append(lang)
             except Exception as e:                             # noqa: BLE001
                 bad.append(lang)
@@ -1037,7 +1432,11 @@ class Work:
             self.log("tessdata %s: tesseract does not start with it (%s); removed" % (lang, why))
         if bad:
             self.lack("ocr-langs", "language data not downloaded: %s" % ", ".join(bad))
-        return bool(got), "%s (tessdata_fast 4.1.0)" % "+".join(got) + ("; failed: %s" % ", ".join(bad) if bad else "")
+        self.info["ocr_langs"] = [x for x in got if x != "osd"]
+        why = "" if len(mine) < 2 else " - English and the packs of the user's languages (%s)" % ", ".join(
+            ownenv.system_languages())
+        return bool(got), "%s (tessdata_fast 4.1.0%s; READ_PAGE_OCR_LANGS names others)" % ("+".join(got), why) + (
+            "; failed: %s" % ", ".join(bad) if bad else "")
 
     def _packs_start(self, td, langs):
         """{lang: why} for the packs tesseract does not start with: one run of the environment's Python
@@ -1069,14 +1468,25 @@ class Work:
         env.pop("READ_PAGE_ENV_CHILD", None)
         pending = os.path.join(self.d, "setup-new.json")      # setup.json comes after the check
         _write_json(pending, self.info)
-        rc, _out = self.sh([py, "-E", "-B", "-X", "utf8", os.path.abspath(__file__), "--check", self.d,
-                            os.path.join(self.d, "setup-check.json"), pending], timeout=300, env=env)
+        result = os.path.join(self.d, "setup-check.json")
+        try:                                   # the last run's answers are not this run's: a check that is cut off or
+            os.unlink(result)                  # crashes would leave them, to be read as its own
+        except OSError:
+            pass
+        rc, out = self.sh([py, "-E", "-B", "-X", "utf8", os.path.abspath(__file__), "--check", self.d,
+                           result, pending], timeout=300, env=env)
         try:
             os.unlink(pending)
         except OSError:
             pass
-        res = _read_json(os.path.join(self.d, "setup-check.json"))
+        res = _read_json(result)
         self.info["checked"] = res
+        if not res:
+            # it wrote nothing: it did not get to its end (cut off at 300 s, a crash, an interpreter that did not start)
+            why = out[-160:] or "no output"
+            self.lack("check", "the check did not finish (exit code %s: %s)" % (rc, why),
+                      "readpage.py --setup again; the output is in %s" % os.path.join(self.d, "setup-detail.log"))
+            return False, "the check did not finish (exit code %s): %s" % (rc, why)
         bad = sorted(k for k, v in res.items() if isinstance(v, dict) and not v.get("ok"))
         for k in bad:
             if k == "engines" and engines_covered(res[k].get("why"), self.problems):
@@ -1088,16 +1498,21 @@ class Work:
                                      + ("; not: %s" % ", ".join(bad) if bad else ""))
 
     def tidy(self):
-        """Keep the environment in use and the one before it (a read may still run there); the
-        rest goes, and so do Pythons and Nodes no environment of these uses."""
+        """Keep the environment in use and the one before it (a read may still run there); the rest goes, unless a
+        process runs from it (an MCP server started under an older one runs for weeks across pin moves); so do
+        Pythons and Nodes no environment of these uses, and uv's cache is looked after."""
         keep_envs = {self.info.get("env"), self.prev.get("env")}
         envs = os.path.join(self.d, "envs")
         homes = set()
         for n in (os.listdir(envs) if os.path.isdir(envs) else []):
             p = os.path.join(envs, n)
-            if "envs/" + n not in keep_envs and not _running(os.path.join(p, "Scripts", "python.exe")):
-                shutil.rmtree(p, ignore_errors=True)      # (an MCP server still in it keeps it, on Windows)
-                continue
+            if "envs/" + n not in keep_envs:
+                used = env_in_use(p)
+                if used is False:
+                    shutil.rmtree(p, ignore_errors=True)      # (on Windows an MCP server still in it keeps it)
+                    continue
+                self.log("environment %s kept: %s" % (n, "a process runs from it" if used else
+                                                      "whether one runs from it cannot be told here"))
             try:
                 with open(os.path.join(p, "pyvenv.cfg"), encoding="utf-8") as fh:
                     for line in fh:
@@ -1113,11 +1528,63 @@ class Work:
                     h.startswith(os.path.normcase(os.path.realpath(p))) for h in homes):
                 shutil.rmtree(p, ignore_errors=True)
         nodes = os.path.join(self.d, "node")
-        cur = self.info.get("node_bin") or ""
+        cur = (self.info.get("node_bin") or "") + "/" + (self.info.get("npm_cli") or "")
         for n in (os.listdir(nodes) if os.path.isdir(nodes) else []):
             if n not in cur.split("/"):
                 shutil.rmtree(os.path.join(nodes, n), ignore_errors=True)
         shutil.rmtree(os.path.join(self.d, "cache", "dl"), ignore_errors=True)
+        self.tidy_uv_cache()
+
+    def drop_stale_pins(self, new_lock, rel):
+        """Before an update installs its pins: the packages whose version the new lock changes or drops have
+        their old files in uv's cache, and nothing would ever remove them (`uv cache prune` finds nothing: those
+        wheels stay reachable, measured with uv 0.13.9 - "No unused entries found" after an old environment's wheels
+        were all that was left). The environment that used them keeps its files by their hard links. Done before
+        the install, because a clean after it would take the new versions out too, and the next update would fetch
+        every package whose pin did not move again."""
+        prev = self.prev.get("env")
+        if not prev or prev == rel or not getattr(self, "uv_exe", ""):
+            return
+        old_lock = env_lock(self.d, self.prev)
+        if not old_lock:
+            self.cache_unknown = True        # built before its lock was kept: which wheels are stale is not known
+            return
+        try:
+            with open(old_lock, encoding="utf-8") as fh:
+                names = moved_pins(fh.read(), new_lock)
+        except OSError:
+            self.cache_unknown = True
+            return
+        if names:
+            self.sh([self.uv_exe, "cache", "clean"] + names, timeout=300)
+
+    def tidy_uv_cache(self):
+        """uv's cache holds each wheel the environment was built from, hard-linked into it (so it costs the
+        folder next to nothing - where the file system has links), and every wheel an older pin left behind.
+        `drop_stale_pins` removes those as they come. The cache is pruned whole (`--ci`: every wheel goes, the
+        environment keeps its files by their links, and an update fetches what it needs once more) where an older
+        environment's lock was not kept, and where more than STALE_CACHE_BYTES of it is in no environment (a fresh
+        install leaves 14-21 MB; what is left after an index was changed, or by a version that did not clean, is
+        hundreds). Its size goes in the report either way."""
+        uv = getattr(self, "uv_exe", "")
+        path = os.path.join(self.d, "cache", "uv")
+        total, alone = cache_bytes(path)
+        stale = alone is not None and alone > STALE_CACHE_BYTES
+        if uv and (getattr(self, "cache_unknown", False) or stale):
+            rc, out = self.sh([uv, "cache", "prune", "--ci"], timeout=300)
+            self.log("uv cache prune --ci (%s): %s" % ("an older environment's lock was not kept" if not stale else
+                                                      "%s of the cache is in no environment" % human(alone or 0), out[-120:]))
+            total, alone = cache_bytes(path)
+        self.cache_size = (total, alone)
+
+    @staticmethod
+    def cache_note(total, alone):
+        """uv's cache for the closing line: its size, and what of it the environment does not already hold."""
+        if not total:
+            return ""
+        if alone is None:
+            return " (uv's cache is %s, mostly hard-linked into the environment)" % human(total)
+        return " (uv's cache is %s, %s of it in no environment: the rest is hard-linked into it)" % (human(total), human(alone))
 
     def wait_updater(self, seconds=300):
         """A background yt-dlp update holds ytdlp.lock while it works in this very environment: wait for
@@ -1140,6 +1607,7 @@ class Work:
         48 s of the 65 are downloads, and the branches only shared it; only the check's engines
         answer side by side."""
         self.wait_updater()
+        self.note_sources()
         ok_net = self.step("network", self.network)
         if not ok_net:
             for name in self.STEPS[1:]:
@@ -1175,8 +1643,12 @@ class Work:
             old = [os.path.join(self.d, "envs", n) for n in (os.listdir(os.path.join(self.d, "envs"))
                    if os.path.isdir(os.path.join(self.d, "envs")) else []) if "envs/" + n != self.info.get("env")]
             size = du(self.d, skip=[os.path.join(self.d, "cache")] + old)
-            self.say("done in %d min %02d s; %s in %s. To remove it all, delete that folder."
-                     % (took // 60, took % 60, human(size), self.d))
+            total, alone = getattr(self, "cache_size", (0, None))
+            self.say("done in %d min %02d s; %s in %s%s. To remove it all, delete that folder."
+                     % (took // 60, took % 60, human(size + (alone or 0)), self.d, self.cache_note(total, alone)))
+            self.info["disk"] = {"folder": size + (alone or 0), "cache": total, "cache_alone": alone}
+            if ready:
+                _write_json(os.path.join(self.d, "setup.json"), self.info)
             for p in self.problems:
                 self.say("not done: %s - %s%s" % (p["part"], p["why"], (" - " + p["fix"]) if p.get("fix") else ""))
         if getattr(self, "ytlock", None):
@@ -1258,6 +1730,10 @@ def ytdlp_update(d, uv, py, env, sh, now=None, lock=None):
             os.unlink(os.path.join(d, "ytdlp.failed"))
         except OSError:
             pass
+        if version != before:
+            # every release stays in uv's cache for good otherwise (one about every three days); the environment
+            # keeps its own file by its hard link, and the next update fetches a release that is new anyway
+            sh([uv, "cache", "clean", "yt-dlp", "yt-dlp-ejs"], timeout=120, env=env)
     else:
         try:
             with open(os.path.join(d, "ytdlp.failed"), "w", encoding="utf-8") as fh:
@@ -1331,6 +1807,114 @@ def _running(exe):
         return True
     except OSError:
         return False
+
+
+def _proc_cmdlines(root="/proc"):
+    """The arguments of every process /proc lists (Linux): [[str]], or None where there is no /proc."""
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return None
+    mine, out = str(os.getpid()), []
+    for n in names:
+        if not n.isdigit() or n == mine:
+            continue
+        try:
+            with open(os.path.join(root, n, "cmdline"), "rb") as fh:
+                raw = fh.read(1 << 16)
+        except OSError:
+            continue                                    # it ended, or it is another user's and says nothing
+        out.append([a.decode("utf-8", "replace") for a in raw.split(b"\0") if a])
+    return out
+
+
+def _ps_commands():
+    """The command line of every process of the machine from `ps` (macOS and the BSDs have no /proc): [str], or
+    None where ps does not answer."""
+    try:
+        p = subprocess.run(["ps", "-axww", "-o", "command="], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p.stdout.decode("utf-8", "replace").splitlines() if p.returncode == 0 else None
+
+
+def uses_folder(folder, commands):
+    """Whether any of these commands - a list of arguments, or a line as `ps` prints it - names a path inside
+    `folder`: its interpreter, or the script an interpreter of it runs. A sibling whose name only starts the same
+    way is no match (`py3.13-abc` and `py3.13-abcdef`)."""
+    roots = {os.path.abspath(folder), os.path.realpath(folder)}
+    marks = [r.rstrip(os.sep) + os.sep for r in roots]
+    for c in commands:
+        for arg in (c if isinstance(c, (list, tuple)) else [c]):
+            if any(m in arg for m in marks) or arg.rstrip(os.sep) in roots:
+                return True
+    return False
+
+
+def env_in_use(folder):
+    """Whether a program of this environment runs now, so that its folder must stay: True, False, or None where
+    that cannot be told. An MCP server started under an environment runs for weeks, across pin moves, and its
+    interpreter is a file of the folder - the second move after it used to delete it (tidy keeps two), and the
+    server's next read started an interpreter that was gone. Windows: a program that runs cannot be opened for
+    writing. Linux: the arguments of every process in /proc - an `exec` (what a read does on POSIX) leaves the
+    environment's interpreter as argument 0; macOS: `ps`."""
+    if os.name == "nt":
+        return _running(os.path.join(folder, "Scripts", "python.exe"))
+    cmds = _proc_cmdlines() if sys.platform.startswith("linux") else None
+    if cmds is None:
+        cmds = _ps_commands()
+    if cmds is None:
+        return None
+    return uses_folder(folder, cmds)
+
+
+# ---------------------------------------------------------------- uv's cache
+def lock_pins(text):
+    """{package: version} of a lock, a name as pip compares them (lower case, a run of - _ . is one -)."""
+    pins = {}
+    for ln in (text or "").splitlines():
+        m = re.match(r"([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?==([^\s;\\]+)", ln)
+        if m:
+            pins[re.sub(r"[-_.]+", "-", m.group(1)).lower()] = m.group(2)
+    return pins
+
+
+def moved_pins(old_lock, new_lock):
+    """The packages of the old lock that the new one gives another version or drops: what an update leaves in uv's cache."""
+    old, new = lock_pins(old_lock), lock_pins(new_lock)
+    return sorted(k for k, v in old.items() if new.get(k) != v)
+
+
+def cache_bytes(path, seconds=20.0):
+    """(bytes under path, bytes of those files no other name holds): uv hard-links what an environment uses out
+    of its cache, so the cache costs the disk only what is in no environment. The second is None where the look
+    took longer than `seconds` (a file's link count costs a call each on Windows). Where uv clones instead of linking
+    (a file system with copy-on-write, a different link mode set by the user) a clone looks like a file with no other
+    name, and that second number is an upper bound."""
+    total, alone, todo, t0, late = 0, 0, [path], time.time(), False
+    while todo:
+        try:
+            it = os.scandir(todo.pop())
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                try:
+                    if e.is_dir(follow_symlinks=False):
+                        todo.append(e.path)
+                    elif e.is_file(follow_symlinks=False):
+                        st = e.stat(follow_symlinks=False)
+                        total += st.st_size
+                        if late or time.time() - t0 > seconds:
+                            late = True
+                            continue
+                        links = st.st_nlink or os.lstat(e.path).st_nlink     # DirEntry has no link count on Windows
+                        if links <= 1:
+                            alone += st.st_size
+                except OSError:
+                    continue
+    return total, (None if late else alone)
 
 
 # the part a package belongs to in the report: the program or tier it gives (the others are named as they are)

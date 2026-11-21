@@ -101,11 +101,11 @@ does not). Pictures are downloaded either way; only their positions in the text 
 
 Detecting a missing text layer takes 14 ms and rendering a page 33 ms; both always happen, and the
 PNGs land in `files.pages` for a model that can look. With OCR - `tesserocr` in-process, which
-`readpage.py --setup` installs with English and Russian from tessdata_fast, or the `tesseract`
+`readpage.py --setup` installs with English and the packs of the user's own languages from tessdata_fast, or the `tesseract`
 command - the same pages are OCR'd side by side and the result becomes the text (`engine:
 document:ocr`, `signals.ocr_pages`), so a text-only pipeline gets words instead of a picture.
 Measured on a synthetic scan: "SCANNED REPORT / Total 42 units" read back correctly. Languages
-follow `READ_PAGE_OCR_LANGS` (`eng` by default, `eng+rus` for both; with `eng+deu` the next
+follow `READ_PAGE_OCR_LANGS` (`eng` by default, and in the environment English plus the packs `--setup` fetched for the user's languages - `eng+chi_sim` on a Chinese Windows; with `eng+deu` the next
 `--setup` fetches German; `--ocr N` adds `rus` by itself on a page written in it),
 `READ_PAGE_TESSDATA` points at a data folder outside the install (the environment sets its own). Without OCR nothing changes: the answer names the fix, and
 a vision model can still read `files.pages` more accurately than OCR.

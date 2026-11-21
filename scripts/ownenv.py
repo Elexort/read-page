@@ -10,6 +10,7 @@ run imports it before the environment, if any, takes over.
 """
 import json
 import os
+import re
 import sys
 import threading
 
@@ -17,15 +18,15 @@ STATE_SCHEMA = 1
 
 
 def _size_note():
-    """What --setup downloads and keeps (without markitdown and pandoc): the pinned wheels by
-    PyPI's sizes and the Python, Node and browser archives by their Content-Length; on disk as
-    measured on Windows and on Linux (WSL), less pandoc's installed size there (226 and 162 MB).
-    macOS is counted, not measured."""
+    """What --setup downloads and keeps (no markitdown, no pandoc, and Node is Playwright's own: nothing of
+    nodejs.org): measured by real installs on GitHub's runners (2026-11-21, the bytes the network adapter received and
+    the folder's size without uv's cache, which is hard-linked into it): Windows x64 359 MB and 0.9 GB, Linux x64
+    393 MB and 0.96 GB (arm64 370 MB, 0.92 GB), macOS arm64 348 MB and 0.82 GB."""
     if os.name == "nt":
-        return "downloads about 390 MB, takes about 0.95 GB on disk, no admin rights"
+        return "downloads about 360 MB, takes about 0.9 GB on disk, no admin rights"
     if sys.platform == "darwin":
-        return "downloads about 355 MB, takes about 1.0 GB on disk, no admin rights"
-    return "downloads about 445 MB, takes about 1.1 GB on disk, no admin rights"
+        return "downloads about 350 MB, takes about 0.85 GB on disk, no admin rights"
+    return "downloads about 390 MB, takes about 1.0 GB on disk, no admin rights"
 
 
 SIZE_NOTE = _size_note()
@@ -52,6 +53,115 @@ def home():
         if not os.path.isabs(base):
             base = os.path.expanduser("~/.local/share")
     return os.path.join(base, "read-page")
+
+
+# tessdata_fast's pack for a language (ISO 639-1 -> tesseract's three letters): what --setup fetches besides English
+# for the language of the machine it runs on. Chinese goes by script: chi_sim (zh-CN, zh-SG, Hans), chi_tra (zh-TW,
+# zh-HK, zh-MO, Hant). English needs none.
+_OCR_PACK = {"ja": "jpn", "ko": "kor", "ru": "rus", "de": "deu", "fr": "fra", "es": "spa", "it": "ita", "pt": "por",
+             "pl": "pol", "uk": "ukr", "tr": "tur", "ar": "ara", "he": "heb", "iw": "heb", "hi": "hin", "th": "tha",
+             "vi": "vie", "nl": "nld", "sv": "swe", "da": "dan", "fi": "fin", "el": "ell", "cs": "ces", "hu": "hun",
+             "ro": "ron", "bg": "bul", "id": "ind", "ms": "msa", "fa": "fas", "bn": "ben", "ta": "tam", "ca": "cat",
+             "hr": "hrv", "sk": "slk", "sl": "slv", "lt": "lit", "lv": "lav", "et": "est", "sr": "srp", "nb": "nor",
+             "no": "nor", "nn": "nor", "be": "bel", "kk": "kaz", "ka": "kat", "is": "isl"}
+
+
+def ocr_pack_for(name):
+    """The tessdata_fast pack for a locale name (`zh_CN`, `zh-TW`, `ja_JP.UTF-8`, `sr_Latn`, `ru`): '' for English
+    and for a language without a pack."""
+    base = str(name or "").replace("-", "_").split(".")[0].split("@")[0]
+    lang, _, rest = base.partition("_")
+    lang = lang.lower()
+    if lang == "zh":
+        return "chi_tra" if re.search(r"(?i)hant|(^|_)(tw|hk|mo)$", rest) else "chi_sim"
+    if lang == "sr" and re.search(r"(?i)latn", rest):
+        return "srp_latn"
+    return _OCR_PACK.get(lang, "")
+
+
+def system_language(env=None):
+    """The language this machine is set to, as a locale name (`zh-CN`, `ru_RU.UTF-8`), '' when it cannot be told:
+    Windows' user locale first (an `LANG` there is a Unix shell's, not the user's), else the environment's
+    (`LC_ALL`, `LC_MESSAGES`, `LANG`, `LANGUAGE`), on a Mac then its own setting."""
+    env = os.environ if env is None else env
+    if os.name == "nt" and env is os.environ:
+        try:
+            import ctypes
+            buf = ctypes.create_unicode_buffer(85)
+            if ctypes.windll.kernel32.GetUserDefaultLocaleName(buf, 85) and buf.value:
+                return buf.value
+        except (AttributeError, OSError, ValueError):
+            pass
+    for k in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        v = (env.get(k) or "").strip()
+        if v and v not in ("C", "POSIX") and not v.startswith("C."):
+            return v
+    v = (env.get("LANGUAGE") or "").split(":")[0].strip()
+    if v:
+        return v
+    if sys.platform == "darwin" and env is os.environ:
+        import subprocess
+        try:
+            p = subprocess.run(["defaults", "read", "-g", "AppleLocale"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+            return p.stdout.decode("utf-8", "replace").strip() if p.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    return ""
+
+
+def _os_languages():
+    """The languages the user put in this machine's list, in its order: Windows' (Settings, Language: `['en-US',
+    'ru']`), a Mac's AppleLanguages; [] elsewhere and where the list cannot be read."""
+    if os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\International\User Profile") as k:
+                v = winreg.QueryValueEx(k, "Languages")[0]
+            return [str(x) for x in (v if isinstance(v, list) else [v]) if x]
+        except (ImportError, OSError, ValueError):
+            return []
+    if sys.platform == "darwin":
+        import subprocess
+        try:
+            p = subprocess.run(["defaults", "read", "-g", "AppleLanguages"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        text = p.stdout.decode("utf-8", "replace") if p.returncode == 0 else ""
+        return re.findall(r'(?m)^\s*"?([A-Za-z]{2,3}(?:[-_][A-Za-z0-9]+)*)"?,?\s*$', text)
+    return []
+
+
+def system_languages(env=None):
+    """The user's languages without repeats: the one the machine is set to first (system_language), then the others
+    the user set up - LANGUAGE's list (`ru:en`), Windows' language list, a Mac's AppleLanguages."""
+    env = os.environ if env is None else env
+    names = [system_language(env)] + (env.get("LANGUAGE") or "").split(":")
+    if env is os.environ:
+        names += _os_languages()
+    out, seen = [], set()
+    for x in names:
+        x = str(x or "").strip()
+        if x and x not in ("C", "POSIX") and not x.startswith("C.") and x.lower() not in seen:
+            seen.add(x.lower())
+            out.append(x)
+    return out
+
+
+OCR_MORE_PACKS = 3          # the packs beyond English that --setup fetches for the user's languages (a few MB each)
+
+
+def ocr_default_packs(env=None):
+    """The OCR packs --setup fetches whatever the user names: English, and the packs of the user's own languages -
+    the one the machine is set to and the others in the user's list (an English Windows with Russian in it gets
+    rus), at most OCR_MORE_PACKS of them. READ_PAGE_OCR_LANGS names more."""
+    packs = ["eng"]
+    for name in system_languages(env):
+        pack = ocr_pack_for(name)
+        if pack and pack not in packs and len(packs) <= OCR_MORE_PACKS:
+            packs.append(pack)
+    return packs
 
 
 def ascii_path(p):
@@ -497,6 +607,12 @@ def _tools(d, info):
     td = at(d, info.get("tessdata") or "tessdata")
     if not os.environ.get("READ_PAGE_TESSDATA") and os.path.isdir(td):
         os.environ["READ_PAGE_TESSDATA"] = td
+    if not os.environ.get("READ_PAGE_OCR_LANGS"):
+        # the packs --setup fetched for the user's languages (or the languages it was asked for) are read with, beside
+        # English; Russian keeps its own rule (a Cyrillic page), as before
+        more = [x for x in (info.get("ocr_langs") or []) if x not in ("eng", "rus", "osd")]
+        if more:
+            os.environ["READ_PAGE_OCR_LANGS"] = "+".join(["eng"] + more)
     os.environ["READ_PAGE_ENV"] = d
 
 

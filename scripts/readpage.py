@@ -60,10 +60,17 @@ import urllib.request                                               # noqa: E402
 def _pycache_home():
     """Where Python keeps this skill's compiled modules: out of the skill's folder, which some
     harnesses show the agent file by file, and in a folder only this user can write - a .pyc planted by someone else would run as our
-    code. None when there is no such folder: then nothing is cached."""
-    base = tempfile.gettempdir()                 # a user's own folder on Windows and macOS
-    if os.name == "posix":
-        base = os.path.join(base, "read-page-%d" % os.getuid())     # cache_root()'s folder
+    code. In the environment (readpage.py --setup) it is the environment's own folder, with everything else the
+    skill keeps there, so that deleting that one folder removes it; without one, the user's temp folder.
+    None when there is no such folder: then nothing is cached."""
+    mod = sys.modules.get("ownenv")              # imported (and use() run) before this by the CLI and the MCP server
+    env = mod.status() if mod is not None else {}
+    if env.get("used") and env.get("home"):
+        base = os.path.join(env["home"], "cache")
+    else:
+        base = tempfile.gettempdir()             # a user's own folder on Windows and macOS
+        if os.name == "posix":
+            base = os.path.join(base, "read-page-%d" % os.getuid())     # cache_root()'s folder
     path = os.path.join(base, "pycache")
     try:
         os.makedirs(base, mode=0o700, exist_ok=True)
@@ -985,8 +992,10 @@ def setup_rows(c):
         packs = fix("ocr-langs", "download a language's .traineddata (rus, deu, jpn...) into tessdata - "
                                  "github.com/tesseract-ocr/tessdata_fast - and name it in READ_PAGE_OCR_LANGS")
         if packs == SETUP:
-            packs += " (eng, rus and any language READ_PAGE_OCR_LANGS names)"
-        rows.insert(at, ("ocr-langs", any(x != "eng" for x in langs), packs,
+            packs += (" (English and the packs of the user's languages; READ_PAGE_OCR_LANGS=eng+deu names others)")
+        # after --setup the choice is made (English and the user's languages): the row is not a nag then
+        rows.insert(at, ("ocr-langs", True if any(x != "eng" for x in langs) else (
+            None if (ownenv.status().get("used") and ownenv.load().get("ocr_langs")) else False), packs,
                          "a scan in another language; tesseract alone reads English"))
     return rows
 
@@ -1023,6 +1032,16 @@ def setup_report(c):
     else:
         lines.append("environment: none yet - %s installs the engines below into %s (%s)"
                      % (SETUP, where, ownenv.SIZE_NOTE))
+    disk = info.get("disk") if isinstance(info.get("disk"), dict) else {}
+    if info.get("python") and disk.get("folder"):
+        def size(n):
+            return "%.1f GB" % (n / 1073741824.0) if n >= 1073741824 else "%d MB" % round(n / 1048576.0)
+        cache = ("; uv's cache is %s%s" % (size(disk["cache"]), (", %s of it in no environment" % size(disk["cache_alone"]))
+                                           if isinstance(disk.get("cache_alone"), int) else "")) if disk.get("cache") else ""
+        lines.append("disk      : %s in the folder%s" % (size(disk["folder"]), cache))
+    if info.get("python") and info.get("sources"):
+        lines.append("sources   : set on this machine when --setup last ran - they send it elsewhere than its defaults, or skip a check:")
+        lines += ["  " + str(x) for x in info["sources"]]
     lines.append("")
     lines.append("works now : %s" % (", ".join(have) or "nothing beyond the standard library"))
     if brs:
@@ -5784,6 +5803,9 @@ def video_text(url, c, workdir):
         # itself: the environment's yt-dlp (always a recent one: an old one does not know the flag)
         # is told its Node; the solver came with yt-dlp[default]
         extra = ["--js-runtimes", "node:" + node] + extra
+    if ours and os.path.normcase(yt).startswith(os.path.normcase(ours)):
+        # its own cache (the player's solved challenges) in the one folder, not in ~/.cache/yt-dlp
+        extra = ["--cache-dir", os.path.join(ours, "cache", "yt-dlp")] + extra
     rc, so, se = run([yt, "--skip-download", "--write-subs", "--write-auto-subs",
                       "--sub-langs", langs, "--sub-format", "vtt", "--write-info-json"]
                      + extra + ["-o", os.path.join(workdir, "video.%(ext)s"), url],
