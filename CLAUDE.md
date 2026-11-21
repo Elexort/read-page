@@ -38,7 +38,7 @@ git-ignored, so a contributor may keep a file of their own under that name.
 - CI: `tests.yml` on every push (Ubuntu with Python 3.9 and 3.12, Windows, a browser job, lint);
   `macos.yml` on every push to dev (macOS 15, arm64), or by hand from the Actions tab.
   Every suite runs even when an earlier one failed, so read all of a red run.
-  `install.yml` (pushes to dev, ci-install and installer-wave, and by hand) is the real install: `--setup` into a
+  `install.yml` (pushes to dev and ci-install, and by hand) is the real install: `--setup` into a
   folder with a space and Cyrillic in its path, the suites under the environment's Python, then a user's
   clone-and-read (and README's ZIP), a bare Python, containers (Alpine, Ubuntu 20.04 and 24.04, Debian 11, Rocky 8,
   Fedora, Arch, openSUSE), a proxy that inspects TLS (`tools/ci_proxy.py`: mitmproxy, its root in the OS's store),

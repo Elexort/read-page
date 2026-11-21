@@ -6,11 +6,11 @@ name: install
 # README; `-large` and `-xlarge` are paid and not used). tools/ci_install.py holds what the jobs measure
 # and assert; what a platform lacks for want of wheels is listed in its matrix row (`expect`), so a gap
 # that is not listed turns the job red, and a listed one is a floor README and KNOWN-ISSUES name.
-# Runs on dev, ci-install and installer-wave pushes (the workflows live on those branches: `main` is the skill
+# Runs on dev and ci-install pushes (the workflows live on those branches: `main` is the skill
 # alone), and by hand.
 on:
   push:
-    branches: [dev, ci-install, installer-wave]
+    branches: [dev, ci-install]
   workflow_dispatch:
 
 # a newer push replaces the run of an older one on the same branch
