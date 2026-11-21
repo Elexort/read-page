@@ -915,6 +915,9 @@ def main():
         def read(self, name):
             return self.files[name].encode("utf-8")
 
+        def open(self, name):              # zip_part() reads a part through open(), capped
+            return io.BytesIO(self.read(name))
+
     shim = _ZipShim({
         "word/document.xml": '<w:body><a:blip r:embed="rId9"/><a:blip r:embed="rId2"/></w:body>',
         "word/_rels/document.xml.rels":

@@ -3691,6 +3691,45 @@ def zip_subtype(src):
     return "other"
 
 
+OFFICE_MAIN = {
+    "docx": (rb"application/vnd\.ms-word\.(?:document\.macroEnabled|template\.macroEnabledTemplate)\.main\+xml|"
+             rb"application/vnd\.openxmlformats-officedocument\.wordprocessingml\.template\.main\+xml",
+             b"application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"),
+    "pptx": (rb"application/vnd\.ms-powerpoint\.(?:slideshow|template)\.macroEnabled\.main\+xml|"
+             rb"application/vnd\.openxmlformats-officedocument\.presentationml\.(?:slideshow|template)\.main\+xml",
+             b"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml")}
+
+
+def office_plain(data, sub):
+    """A package as python-docx and python-pptx take it: the main part of a macro-enabled file, a
+    template or a slideshow (.docm .dotx .dotm .ppsx .ppsm .potx .potm) given the plain type, and
+    Strict OOXML's namespaces the transitional ones. They refused these, and pandoc read them
+    (2026-11-20, measured on variants of a plain package); unchanged bytes when nothing is to do."""
+    import io
+    import zipfile
+    z = zipfile.ZipFile(io.BytesIO(data))
+    if sum(i.file_size for i in z.infolist()) > MAX_PAGE_BYTES * 4:
+        return data                      # what the parts unpack to is read nowhere here
+    types = z.read("[Content_Types].xml")
+    rels = z.read("_rels/.rels") if "_rels/.rels" in z.namelist() else b""
+    pattern, plain = OFFICE_MAIN.get(sub, (None, None))
+    other = bool(pattern and re.search(pattern, types))
+    strict = b"purl.oclc.org/ooxml/" in rels
+    if not (other or strict):
+        return data
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as w:
+        for info in z.infolist():
+            part = z.read(info)
+            if info.filename == "[Content_Types].xml" and other:
+                part = re.sub(pattern, plain, part)
+            if strict and info.filename.endswith((".xml", ".rels")):
+                part = re.sub(rb"http://purl\.oclc\.org/ooxml/(\w+)/", rb"http://schemas.openxmlformats.org/\1/2006/",
+                              part)
+            w.writestr(info, part)
+    return out.getvalue()
+
+
 def office_fast(path, sub):
     """The fast path: a library that reads the format directly, no markitdown startup.
 
@@ -3701,6 +3740,10 @@ def office_fast(path, sub):
         data = open(path, "rb").read()
     except Exception:                                         # noqa: BLE001
         return ""
+    try:
+        data = office_plain(data, sub)
+    except Exception as e:                                    # noqa: BLE001
+        debuglog.exc("office: plain", e)
     try:
         if sub == "docx":
             import docx
@@ -4172,8 +4215,11 @@ def odf_text(path):
     import zipfile
     from xml.etree import ElementTree as ET
     try:
-        with zipfile.ZipFile(path) as z:
-            root = ET.fromstring(z.read("content.xml"))
+        with zipfile.ZipFile(path) as z, z.open("content.xml") as fh:
+            data = fh.read(MAX_PAGE_BYTES + 1)            # a zip bomb unpacks to gigabytes
+        if len(data) > MAX_PAGE_BYTES:
+            return ""
+        root = ET.fromstring(data)
     except Exception:                                         # noqa: BLE001
         return ""
     text_ns = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
@@ -4195,6 +4241,17 @@ def odf_text(path):
                 level = el.get("{%s}outline-level" % text_ns) or "1"
                 out.append(("#" * min(6, int(level) if level.isdigit() else 1) + " " + t) if tag == "h" else t)
     return "\n\n".join(out)
+
+
+def own_doc(path, kind, secs):
+    """An EPUB, ODT or RTF through docreaders - the standard library alone - when pandoc is not
+    there or gave nothing (2026-11-20: the prototype measured against pandoc; READ_PAGE_SKIP=pandoc
+    puts it first). The time is the converter's; --download gives it all it needs."""
+    import docreaders
+    until = None if budget.unlimited() else time.time() + secs
+    md, why = docreaders.read(path, kind, until)
+    trace("document.own", kind=kind, words=len(md.split()), note=why[:120])
+    return md, why
 
 
 def pandoc_md(exe, path, fmt, secs):
@@ -4832,6 +4889,12 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
             md = pandoc_md(c["cli"]["pandoc"], path, "rtf" if kind == "rtf" else "odt", secs)
             if md.strip():
                 return md, ""
+        if kind == "rtf" or sub == "odt":
+            # its answer stands unless it broke: the old readers below read a part whole (an ODT
+            # whose content.xml unpacks to 1 GB took 141 s and 2.1 GB there, 2026-11-20)
+            md, why = own_doc(path, "rtf" if kind == "rtf" else "odt", secs)
+            if md.strip() or not why.startswith("the reader failed"):
+                return md, why or ("" if md.strip() else "no text in this %s" % (sub or kind).upper())
         if kind == "rtf":
             with open(path, "rb") as fh:
                 text = rtf_text(fh.read())
@@ -4924,6 +4987,11 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
         md = pandoc_md(c["cli"]["pandoc"], path, sub if sub in ("epub", "docx", "pptx", "xlsx") else "", secs)
         if md.strip():
             return md, note
+    if sub == "epub":
+        md, why = own_doc(path, "epub", secs)
+        if md.strip() or not why.startswith("the reader failed"):
+            return md, why or note or ("" if md.strip() else "no text in this EPUB")
+        note = note or why
     if c["cli"].get("markitdown"):                      # a machine's own markitdown: the last resort
         outp = os.path.join(workdir, "_doc.md")
         rc, so, se = run_tool([c["cli"]["markitdown"], path, "-o", outp], timeout=secs)
@@ -6726,9 +6794,28 @@ def zip_images(path, workdir, limit=PAGE_LIMIT):
         return []
     imgdir = os.path.join(workdir, "img")
     out, seen, used, total, unpacked = [], set(), set(), 0, set()
-    for name in z.namelist():
+    names = z.namelist()
+    # a docx names its pictures in document.xml, an EPUB in its spine: reading order, and for an
+    # EPUB the pictures its pages show wherever they are kept (a.png at the root, jacket/). The
+    # order is the read's step like any other: its own cap, or less when the deadline is nearer
+    order = []
+    if any(os.path.splitext(n)[1].lower() in IMG_EXT for n in names):
+        t_ord = now()
+        secs = budget.cap(PICTURE_ORDER_SECONDS, floor=0.5)
+        try:
+            order = docx_image_order(z, t_ord + secs) or epub_image_order(z, t_ord + secs)
+        except Exception as e:                       # noqa: BLE001
+            debuglog.exc("pictures: order", e)
+        cut = not order and now() - t_ord >= secs
+        budget.record("picture-order", t_ord, budget.ended(PICTURE_ORDER_SECONDS, secs) if cut else "ok",
+                      own=PICTURE_ORDER_SECONDS, given=secs, note="%d pictures" % len(order))
+    shown = set(order)
+    for name in names:
         ext = os.path.splitext(name)[1].lower()
-        if ext not in IMG_EXT or not re.search(r"(?i)(word/media/|/images?/|/media/)", name):
+        # an ODT keeps its pictures in Pictures/ (LibreOffice) or media/ (Word); Thumbnails/ is
+        # the file manager's preview
+        if ext not in IMG_EXT or not (name in shown or re.search(
+                r"(?i)(word/media/|/images?/|/media/|^Pictures/|^media/)", name)):
             continue
         try:
             info = z.getinfo(name)
@@ -6766,20 +6853,7 @@ def zip_images(path, workdir, limit=PAGE_LIMIT):
             fh.write(data)
         out.append({"file": rel, "bytes": len(data),
                     "dims": "%dx%d" % (w, h) if w and h else "?", "alt": "", "_zip": name})
-    # the order is the read's step like any other: its own cap, or less when the deadline is nearer
-    order = []
-    if out:
-        t_ord = now()
-        secs = budget.cap(PICTURE_ORDER_SECONDS, floor=0.5)
-        try:
-            order = docx_image_order(z, t_ord + secs) or epub_image_order(z, t_ord + secs)
-        except Exception as e:                       # noqa: BLE001
-            debuglog.exc("pictures: order", e)
-        cut = not order and now() - t_ord >= secs
-        budget.record("picture-order", t_ord, budget.ended(PICTURE_ORDER_SECONDS, secs) if cut else "ok",
-                      own=PICTURE_ORDER_SECONDS, given=secs, note="%d pictures" % len(order))
     if order:
-        # a docx names its pictures in document.xml, an EPUB in its spine: both give reading order
         rank = {n: i for i, n in enumerate(order)}
         out.sort(key=lambda e: rank.get(e.get("_zip"), len(rank) + 1))
         for i, e in enumerate(out):
@@ -6812,9 +6886,9 @@ def docx_image_order(z, until=None):
     """The order pictures appear in a docx: word/media names, from document.xml relations.
     [] when `until` passes first: the order is the document's, or none."""
     try:
-        doc = z.read("word/document.xml").decode("utf-8", "replace")
-        rels = z.read("word/_rels/document.xml.rels").decode("utf-8", "replace")
-    except KeyError:
+        doc = zip_part(z, "word/document.xml").decode("utf-8", "replace")
+        rels = zip_part(z, "word/_rels/document.xml.rels").decode("utf-8", "replace")
+    except Exception:                  # noqa: BLE001  (missing, or damaged: zlib.error)
         return []
     targets, order, named = {}, [], set()
     try:
@@ -6832,6 +6906,16 @@ def docx_image_order(z, until=None):
     return order
 
 
+ZIP_PART = 32 * 1024 * 1024        # what one part of a package is read up to for its pictures' order
+
+
+def zip_part(z, name, cap=ZIP_PART):
+    """A part of a zip package, read up to `cap` whatever its header says: a chapter that unpacks
+    to 1 GB was read whole here for its pictures' order, 2 GB of memory (2026-11-20)."""
+    with z.open(name) as fh:
+        return fh.read(cap)
+
+
 def epub_image_order(z, until=None):
     """The order pictures appear in an EPUB: the spine, then every <img> inside each document.
 
@@ -6840,8 +6924,8 @@ def epub_image_order(z, until=None):
     spine names again is not scanned again. [] when `until` passes first.
     """
     try:
-        container = z.read("META-INF/container.xml").decode("utf-8", "replace")
-    except KeyError:
+        container = zip_part(z, "META-INF/container.xml", 1 << 20).decode("utf-8", "replace")
+    except Exception:                  # noqa: BLE001
         return []
     m = _ROOTFILE.search(container)
     if not m:
@@ -6849,10 +6933,10 @@ def epub_image_order(z, until=None):
     opf_path = m.group(1).lstrip("/")
     opf_dir = posixpath.dirname(opf_path)
     try:
-        opf = z.read(opf_path).decode("utf-8", "replace")
-    except KeyError:
+        opf = zip_part(z, opf_path).decode("utf-8", "replace")
+    except Exception:                  # noqa: BLE001
         return []
-    href, order, named, scanned = {}, [], set(), set()
+    href, order, named, scanned, total = {}, [], set(), set(), 0
     try:
         for m in _on_clock(_ITEM.finditer(opf), until):
             iid, h = _attr(m.group(0), "id"), _attr(m.group(0), "href")
@@ -6860,7 +6944,7 @@ def epub_image_order(z, until=None):
                 href[iid] = h
         for m in _on_clock(_ITEMREF.finditer(opf), until, 1):
             doc = href.get(_attr(m.group(0), "idref"))
-            if not doc:
+            if not doc or total > 4 * ZIP_PART:
                 continue
             doc_path = posixpath.normpath(posixpath.join(
                 opf_dir, urllib.parse.unquote(doc.split("#")[0])))
@@ -6868,9 +6952,10 @@ def epub_image_order(z, until=None):
                 continue
             scanned.add(doc_path)
             try:
-                body = z.read(doc_path).decode("utf-8", "replace")
-            except KeyError:
+                body = zip_part(z, doc_path).decode("utf-8", "replace")
+            except Exception:          # noqa: BLE001  (a damaged part: its pictures are not ordered)
                 continue
+            total += len(body)
             for r in _on_clock(_IMG_SRC.finditer(body), until):
                 name = posixpath.normpath(posixpath.join(
                     posixpath.dirname(doc_path), urllib.parse.unquote(r.group(1).split("#")[0])))
