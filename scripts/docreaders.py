@@ -441,6 +441,25 @@ def machine_cjk():
     return {"zh": "gb18030", "ja": "cp932", "ko": "cp949"}.get(lang[:2], "")
 
 
+def _common_share(text, codec):
+    """(the share of `text`'s non-ASCII characters that are the common ones of `codec`'s script, how many there
+    are): intl.native_share, the measure a page's encoding is guessed by. intl is of this folder and of the
+    standard library alone; this process, started with -I, does not have the folder on its path by itself.
+    None where it cannot be imported."""
+    try:
+        import intl
+    except ImportError:
+        here = os.path.dirname(os.path.abspath(__file__))
+        if here in sys.path:
+            return None
+        sys.path.append(here)
+        try:
+            import intl
+        except ImportError:
+            return None
+    return intl.native_share(text, {"big5": "big5hkscs"}.get(codec, codec))
+
+
 def names_codec(raws, prior=None):
     """The code page of an archive's names given the raw bytes of those with no UTF-8 flag: "utf-8", a
     CJK code page, or "" - they are CP437, as zipfile reads them. `prior`: the machine's CJK code page
@@ -462,6 +481,16 @@ def names_codec(raws, prior=None):
             continue
         if all(_cjk_ok(t, codec) for t in texts):
             clean[codec] = "".join(texts)
+    if len(clean) > 1:
+        # one reading that is plainly the common characters of its script, the others rare ones, wins - over the
+        # machine's code page too (GBK names read as Big5 on a Taiwanese machine: "佽隴.txt"; Korean ones as GBK:
+        # "焊绊辑.txt"); a close call goes on to the machine's code page and the rules below
+        shares = dict((c, _common_share(t, c)) for c, t in clean.items())
+        if all(v is not None for v in shares.values()):
+            ranked = sorted(clean, key=lambda c: -shares[c][0])
+            best, second = shares[ranked[0]], shares[ranked[1]]
+            if best[1] >= 2 and best[0] - second[0] >= 0.4:
+                return ranked[0]
     prior = machine_cjk() if prior is None else prior
     if prior in clean:
         return prior

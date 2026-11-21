@@ -28,7 +28,7 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   flag was read as CP437, so Windows' own zipper's GBK names came out as "╦╡├≈.txt", an EPUB named in GBK lost
   its chapters, and a Shift-JIS 表 lost its backslash byte to a "/". A name whose CP437 reading is no name is
   read as UTF-8 when it is, else in the CJK code page that decodes the archive's names into its script (the
-  machine's own first; kana for Shift-JIS, GB2312's characters for GBK, Big5, Hangul); ASCII and CP437 names of
+  one reading that is plainly the common characters of its script, else the machine's own; kana for Shift-JIS, GB2312's characters for GBK, Big5, Hangul); ASCII and CP437 names of
   accented letters stay (`docreaders.fix_zip_names`).
 - The marker patterns of the answer (`pictures.MARK`) and of the MCP server (`ANY_MARKER`) were quadratic on a
   run of `[img #N · ` that no `]` closes (KNOWN-ISSUES 179): 16 000 in a line took 43.7 s, now 1.4 ms.

@@ -1034,7 +1034,18 @@ for label, members, prior, want in (
          [("テスト.txt".encode("cp932"), b"x"), ("表示.txt".encode("cp932"), b"y")], "", ["テスト.txt", "表示.txt"]),
         ("Big5", [("說明文件.txt".encode("big5"), b"x")], "", ["說明文件.txt"]),
         ("Korean on a machine whose code page is Korean", [("보고서.txt".encode("cp949"), b"x")], "cp949", ["보고서.txt"]),
-        ("GBK on a machine whose code page is Chinese", [("说明.txt".encode("gbk"), b"x")], "gb18030", ["说明.txt"])):
+        ("GBK on a machine whose code page is Chinese", [("说明.txt".encode("gbk"), b"x")], "gb18030", ["说明.txt"]),
+        # the machine's own code page is a tie-break, not the first word: a reading that is plainly the common
+        # characters of its script wins over one that is rare ones (GBK read as Big5: "佽隴.txt")
+        ("GBK on a machine whose code page is Big5 (Taiwan)",
+         [(n.encode("gbk"), b"x") for n in GBK_NAMES], "big5", GBK_NAMES),
+        ("Korean on a machine whose code page is Chinese (read as GBK it was \"焊绊辑.txt\")",
+         [("보고서.txt".encode("cp949"), b"x"), ("회의록.txt".encode("cp949"), b"y")], "gb18030",
+         ["보고서.txt", "회의록.txt"]),
+        ("Korean with no code page of the machine to go by",
+         [("보고서.txt".encode("cp949"), b"x"), ("회의록.txt".encode("cp949"), b"y")], "", ["보고서.txt", "회의록.txt"]),
+        ("Big5 on a machine whose code page is Chinese", [("說明文件.txt".encode("big5"), b"x")], "gb18030",
+         ["說明文件.txt"])):
     codec, names, datas = names_of(raw_zip("names.zip", members), prior)
     check("names: %s" % label, names == want and len(datas) == len(want), "%r %r" % (codec, names))
 CHAP = "第一章.xhtml"
