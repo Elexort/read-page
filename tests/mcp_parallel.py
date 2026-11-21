@@ -188,7 +188,8 @@ try:
     dt = time.monotonic() - t0
     ok_ids = sorted(r.get("id") for r in got if (r.get("result") or {}).get("structuredContent", {}).get("status") == "ok")
     check("four read_url calls run at once (each page takes 2.5 s)",
-          ok_ids == [11, 12, 13, 14] and dt < 8, "%.1f s, answered %s" % (dt, ok_ids))
+          ok_ids == [11, 12, 13, 14] and dt < 9.5,    # one after another they take 4 x 2.5 s = 10 s and more; 8.4 s on a macOS Intel runner
+          "%.1f s, answered %s" % (dt, ok_ids))
 
     # ------------------------------------------------ a cancelled call is killed and gets no answer
     send({"jsonrpc": "2.0", "id": 21, "method": "tools/call",
