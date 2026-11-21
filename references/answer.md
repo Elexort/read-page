@@ -67,7 +67,9 @@ tables and they were put back where they stood; `outside the text: 6.2 KB … - 
 `page.md` has (menus, link lists, fragments). `fragment` in the first line is not a status: the
 text is real but shorter than the page, so the answer shows `page.md`. `partial` there means the
 transfer was cut (a timeout, a broken connection): the text may stop early, and the advice says how
-to get the rest. Status words describe the *text*, not its length: a five-line status page is `ok`,
+to get the rest. `charset gb18030 (guessed)` there means the page named no encoding and its text was read by
+what its characters are (`guessed, doubtful` when little text or two readings alike make it a close call: some
+characters may be wrong; the same is `signals.charset_guess`). Status words describe the *text*, not its length: a five-line status page is `ok`,
 a page that quotes "access denied" in prose is `ok`. Any status but `ok` comes with a `reason:` line
 naming the rule that fired (`a challenge page: Just a moment...`), so a status can be checked
 instead of trusted. Content is never hidden, whatever the status.
@@ -225,7 +227,7 @@ picture N - the page's other files stay as they are, and a picture still only an
 downloaded first. An SVG drawing gives its own `<text>`; any other picture goes through
 tesseract twice, as it is in grey and as dark ink on light, and the reading with more confident
 words wins (a diagram on tinted boxes: 7 of its 16 labels in grey, 14 as ink). Languages are
-`READ_PAGE_OCR_LANGS` (`eng`), plus Russian on a Russian page when the pack is there. The `ocr:`
+`READ_PAGE_OCR_LANGS` (`eng`), plus the pack of the page's script (Chinese, Japanese, Korean, Russian) and of the user's language (`READ_PAGE_LANG`, the system's) when the pack is there; a pack the text needs and the machine lacks is named on the `ocr:` line. The `ocr:`
 line names the picture, the engine and the pass - or why there is no text: no such picture, not
 on disk, no OCR engine.
 

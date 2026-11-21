@@ -104,6 +104,7 @@ import ddworker                                                     # noqa: E402
 import debuglog                                                     # noqa: E402
 import docreaders                                                   # noqa: E402
 import engines                                                      # noqa: E402
+import intl                                                         # noqa: E402
 import netguard                                                     # noqa: E402
 import pdftables                                                    # noqa: E402
 import pictures                                                     # noqa: E402
@@ -578,6 +579,74 @@ def cmd_line(cmd):
             q = '"%s"' % (a + "\\" * (len(a) - len(a.rstrip("\\"))))     # a trailing \ before the quote doubles
         out.append(q)
     return " ".join(out)
+
+
+def ascii_stage_root():
+    """An ASCII-only folder for programs that take their arguments in the ANSI code page (pdftotext, tesseract, lynx):
+    under the cache when its path is ASCII, else its 8.3 short name, else one of the system's own public folders.
+    "" when there is none (not Windows, or no such folder is writable)."""
+    if os.name != "nt":
+        return ""
+    who = hashlib.sha1(os.path.expanduser("~").encode("utf-8", "replace")).hexdigest()[:8]
+    base = cache_root()
+    for root in (base, ownenv.ascii_path(base), os.path.join(os.environ.get("PUBLIC", ""), "read-page-" + who),
+                 os.path.join(os.environ.get("ProgramData", ""), "read-page-" + who)):
+        if not root or not root.isascii():
+            continue
+        folder = os.path.join(root, "tmp")
+        try:
+            os.makedirs(folder, exist_ok=True)
+            return folder
+        except OSError:
+            continue
+    return ""
+
+
+def narrow_paths(ins, outs=()):
+    """(inputs, outputs, done) for a program that takes narrow arguments: on Windows a path with a character outside
+    ASCII - under a profile named in Chinese, Cyrillic, or a name whose second byte in Big5 is 0x5C -
+    is read by such a program in the ANSI code page, or not at all. Each such input is linked (copied) into an
+    ASCII folder under a name of ours, each such output is a name in it; `done()` moves the outputs to their
+    real places and removes the folder. Anywhere else, or when every path is ASCII, nothing changes."""
+    ins, outs = [str(x) for x in ins], [str(x) for x in outs]
+    if os.name != "nt" or all(x.isascii() for x in ins + outs):
+        return ins, outs, (lambda: None)
+    root = ascii_stage_root()
+    if not root:
+        return ins, outs, (lambda: None)
+    stage = os.path.join(root, os.urandom(6).hex())
+    try:
+        os.makedirs(stage)
+    except OSError:
+        return ins, outs, (lambda: None)
+    new_ins, new_outs = [], []
+    for i, x in enumerate(ins):
+        if x.isascii():
+            new_ins.append(x)
+            continue
+        ext = os.path.splitext(x)[1]
+        dst = os.path.join(stage, "in%d%s" % (i, ext if ext.isascii() else ""))
+        try:
+            os.link(x, dst)
+        except OSError:
+            try:
+                shutil.copyfile(x, dst)
+            except OSError:
+                dst = x
+        new_ins.append(dst)
+    for j, x in enumerate(outs):
+        ext = os.path.splitext(x)[1]
+        new_outs.append(x if x.isascii() else os.path.join(stage, "out%d%s" % (j, ext if ext.isascii() else "")))
+
+    def done():
+        for real, staged in zip(outs, new_outs):
+            if staged != real and os.path.exists(staged):
+                try:
+                    replace_file(staged, real)
+                except OSError as e:
+                    debuglog.exc("narrow paths: output", e)
+        shutil.rmtree(stage, ignore_errors=True)
+    return new_ins, new_outs, done
 
 
 def run_tool(cmd, timeout=120):
@@ -1885,9 +1954,12 @@ def _cffi_get(url, imp, accept=None, verify=True, download=False, headers=None, 
         except ImportError:
             timeout = (min(HTTP_CONNECT_TIMEOUT, left), HTTP_LOW_SPEED[1])
     h = {"Accept": accept or ACCEPT}
+    lang = intl.accept_language()            # "" for an English reader: the impersonation sends its own
+    if lang:
+        h["Accept-Language"] = lang
     h.update(headers or {})
     kw = {"curl_options": opts} if opts else {}
-    return cr.get(url, impersonate=imp, timeout=timeout, allow_redirects=False, verify=verify,
+    return cr.get(intl.iri_to_uri(url), impersonate=imp, timeout=timeout, allow_redirects=False, verify=verify,
                   headers=h, stream=True, **kw)
 
 
@@ -1942,7 +2014,7 @@ def _cffi_follow(url, imp, accept=None, verify=True, download=False, headers=Non
         except Exception as _dbg_e:                            # noqa: BLE001
             debuglog.exc("cookies: save after a hop", _dbg_e)
         if r.status_code in (301, 302, 303, 307, 308):
-            loc = (r.headers.get("location") or "").strip()
+            loc = intl.header_text((r.headers.get("location") or "").strip())
             if not loc:
                 return r, cur
             nxt = urllib.parse.urljoin(cur, loc)
@@ -2167,7 +2239,7 @@ def _fetch_urllib(url, download, spool_dir, cond, deadline, out, t):
             out["error"] = out.get("error") or "the time for the page ran out"
             break
         p = urllib.parse.urlparse(cur)
-        headers = {"Accept": ACCEPT, "User-Agent": UA}
+        headers = {"Accept": ACCEPT, "User-Agent": UA, "Accept-Language": intl.accept_language("en-US,en;q=0.9")}
         headers.update(cond)
         sent = cookies_for(load_cookies(cur), host_of(cur), p.path or "/", p.scheme or "https")
         if sent:
@@ -2175,7 +2247,7 @@ def _fetch_urllib(url, download, spool_dir, cond, deadline, out, t):
             _COOKIE_STATS["sent"] += 1
         try:
             # one socket timeout for the connect and for every read: silence for 10 s is the floor
-            r = opener(_NoRedirect).open(urllib.request.Request(cur, headers=headers),
+            r = opener(_NoRedirect).open(urllib.request.Request(intl.iri_to_uri(cur), headers=headers),
                                     timeout=max(1.0, min(HTTP_LOW_SPEED[1], left)))
         except urllib.error.HTTPError as e:
             r = e                                  # a 3xx, 4xx or 5xx still has headers and a body
@@ -2184,7 +2256,7 @@ def _fetch_urllib(url, download, spool_dir, cond, deadline, out, t):
             break
         code = getattr(r, "code", None) or getattr(r, "status", 0) or 0
         if code in (301, 302, 303, 307, 308):
-            loc = (r.headers.get("Location") or "").strip()
+            loc = intl.header_text((r.headers.get("Location") or "").strip())
             r.close()
             if not loc:
                 out["error"] = "a redirect without a Location"
@@ -2240,7 +2312,7 @@ def _fetch_urllib(url, download, spool_dir, cond, deadline, out, t):
         out.update(status=code, ct=r.headers.get("Content-Type", "") or "", body=body, path=path,
                    size=size, head=head, final=cur, partial=bool(state["cut"]), cut=state["cut"],
                    etag=r.headers.get("ETag", "") or "", last_modified=r.headers.get("Last-Modified", "") or "",
-                   disposition=r.headers.get("Content-Disposition", "") or "",
+                   disposition=intl.header_text(r.headers.get("Content-Disposition", "") or ""),
                    headers=wall_headers(r.headers), expected=int(expected) if expected.isdigit() else 0)
         break
     out["ms"] = int((now() - t) * 1000)
@@ -2349,7 +2421,7 @@ def _fetch_once(url, download=False, workdir=None, validators=None, plain_only=F
                        size=size, head=head, final=final, partial=bool(cut), cut=cut, expected=known,
                        etag=(r.headers.get("etag") or ""),
                        last_modified=(r.headers.get("last-modified") or ""),
-                       disposition=(r.headers.get("content-disposition") or ""),
+                       disposition=intl.header_text(r.headers.get("content-disposition") or ""),
                        headers=wall_headers(r.headers))
             out["ms"] = int((now() - t) * 1000)
             if refused_fingerprint(r.status_code) and r.status_code != 406:
@@ -2419,7 +2491,8 @@ def _fetch_once(url, download=False, workdir=None, validators=None, plain_only=F
                    "-b", "cookies.txt", "-c", "cookies.txt",
                    "-o", "body.part", "-D", "body.hdr",
                    "-w", "%{http_code}|%{content_type}|%{redirect_url}|%{size_download}",
-                   "-H", "Accept: " + ACCEPT, "-A", UA, cur]
+                   "-H", "Accept: " + ACCEPT, "-H", "Accept-Language: " + intl.accept_language("en-US,en;q=0.9"),
+                   "-A", UA, intl.iri_to_uri(cur)]
             for k, v in cond.items():
                 cmd[-1:-1] = ["-H", "%s: %s" % (k, v)]
             if download:
@@ -2442,8 +2515,9 @@ def _fetch_once(url, download=False, workdir=None, validators=None, plain_only=F
             etag = last_modified = disposition = expected = ""
             seen_headers = {}
             try:
-                with open(os.path.join(stage, "body.hdr"), encoding="utf-8", errors="replace") as fh:
-                    for line in fh:
+                with open(os.path.join(stage, "body.hdr"), "rb") as fh:
+                    for rawline in fh:
+                        line = intl.header_bytes(rawline)
                         low = line.lower()
                         if low.startswith("etag:"):
                             etag = line.split(":", 1)[1].strip()
@@ -2556,64 +2630,29 @@ def _fetch_once(url, download=False, workdir=None, validators=None, plain_only=F
     return out
 
 
-WEAK_CHARSETS = {"iso-8859-1", "latin1", "latin-1", "windows-1252", "cp1252", "us-ascii", "ascii"}
-_CYR_COMMON = set("\u043e\u0435\u0430\u0438\u043d\u0442\u0441\u0440\u0432\u043b\u043a\u043c\u0434\u043f\u0443\u044f\u044b\u044c\u0433\u0437\u0431\u0447\u0439\u0445\u0436\u0448\u044e\u0446\u0449\u044d\u0444")
-_BOMS = ((b"\xff\xfe\x00\x00", "utf-32"), (b"\x00\x00\xfe\xff", "utf-32"), (b"\xef\xbb\xbf", "utf-8-sig"),
-         (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16"))
-
-
-def plausible(text):
-    """How much a decoded text reads like its own script: the share of the common lower-case
-    letters among Cyrillic ones (KOI8 read as windows-1251 fails it: windows-1251 never raises an
-    error, so it used to win every guess). Other scripts pass at 0.5."""
-    letters = [c for c in (text or "")[:20000] if c.isalpha()]
-    if not letters:
-        return 0.5
-    cy = [c for c in letters if "\u0400" <= c <= "\u04ff"]
-    if len(cy) > len(letters) * 0.3:
-        return sum(c in _CYR_COMMON for c in cy) / float(len(cy))
-    return 0.5
+WEAK_CHARSETS = intl.WEAK_CHARSETS
+_BOMS = intl.BOMS
+plausible = intl.plausible
+decode_page = intl.decode_page
 
 
 def smart_decode(body, ct=""):
-    """The page's text in the encoding it really is in: a BOM first; then the header, unless it
-    says latin-1 or ascii (servers send that by default, it is not a statement); then <meta>; then
-    UTF-8 - each kept only when the text reads like its script; then the bytes themselves
-    (charset_normalizer, when installed); then a small repair heuristic."""
-    body = body or b""
-    for bom, cs in _BOMS:
-        if body.startswith(bom):
-            return body.decode(cs, "replace"), cs.replace("-sig", "")
-    head = (re.search(r"charset=[\"']?([\w-]+)", ct or "", re.I) or [None, ""])[1].lower()
-    meta = (re.search(rb"charset=[\"']?([\w-]+)", body[:4096], re.I) or [None, b""])[1].decode("ascii", "ignore").lower()
-    order = ([head] if head and head not in WEAK_CHARSETS else []) + ([meta] if meta else []) + ["utf-8"]
-    for cand in order:
-        try:
-            text = body.decode(cand)
-        except (LookupError, UnicodeDecodeError):
-            continue
-        if plausible(text) >= 0.5:
-            return text, cand
-    try:
-        from charset_normalizer import from_bytes
-        best = from_bytes(body[:200000]).best()
-        if best is not None and best.encoding:
-            return body.decode(best.encoding, "replace"), best.encoding
-    except Exception:                                         # noqa: BLE001
-        pass
-    # no charset_normalizer: a declared weak charset still beats a guess; then the guess
-    if head in WEAK_CHARSETS:
-        return body.decode(head if head not in ("us-ascii", "ascii") else "latin-1", "replace"), head
-    tried = []
-    for cand in ("windows-1251", "koi8-r", "shift_jis", "gbk", "euc-kr", "windows-1252"):
-        try:
-            tried.append((plausible(body.decode(cand)), cand))
-        except (LookupError, UnicodeDecodeError):
-            continue
-    if tried:
-        score, cand = max(tried, key=lambda x: x[0])
-        return body.decode(cand, "replace"), cand
-    return body.decode("utf-8", "replace"), "utf-8"
+    """The page's text in the encoding it really is in, and that encoding's name: intl.decode_page,
+    which also says how it knows (a header, the bytes' own look) and whether the reading may be wrong."""
+    got = intl.decode_page(body, ct)
+    return got[0], got[1]
+
+
+def note_charset(manifest, got):
+    """What a reader of the manifest needs of a page's encoding: its name, and - when the page did not
+    say it, so the text was read by a guess - that, and whether the guess is a doubtful one. A silent
+    wrong reading is what a Chinese or Japanese page used to get on a machine without charset_normalizer."""
+    manifest["url"]["charset"] = got.charset
+    if got.how in ("guessed", "detected") or (got.how == "utf-8" and got.doubt):
+        manifest["signals"]["charset_guess"] = got.charset + (" (doubtful)" if got.doubt else "")
+        if got.doubt and not manifest.get("advice"):
+            manifest["advice"] = ("the page does not say what encoding it is in; its text was read as %s, a guess "
+                                  "that may be wrong: some characters may be mistaken" % got.charset)
 
 
 def title_of(html):
@@ -2857,17 +2896,23 @@ def text_browser(html, workdir):
     except Exception as _dbg_e:                                         # noqa: BLE001
         debuglog.exc("text browser", _dbg_e)
         return "", ""
-    for name in ("lynx", "w3m"):
-        exe = which(name)
-        if not exe:
-            continue
-        if name == "lynx":
-            args = [exe, "-dump", "-nolist", "-assume_charset=utf-8", "-display_charset=utf-8", src]
-        else:
-            args = [exe, "-dump", "-T", "text/html", "-I", "utf-8", "-O", "utf-8", src]
-        rc, so, se = run(args, timeout=budget.cap(60, floor=1.0))
-        if rc == 0 and so.strip():
-            return so.decode("utf-8", "replace"), name
+    if not (which("lynx") or which("w3m")):
+        return "", ""
+    narrowed, _outs, narrow_done = narrow_paths([src])
+    try:
+        for name in ("lynx", "w3m"):
+            exe = which(name)
+            if not exe:
+                continue
+            if name == "lynx":
+                args = [exe, "-dump", "-nolist", "-assume_charset=utf-8", "-display_charset=utf-8", narrowed[0]]
+            else:
+                args = [exe, "-dump", "-T", "text/html", "-I", "utf-8", "-O", "utf-8", narrowed[0]]
+            rc, so, se = run(args, timeout=budget.cap(60, floor=1.0))
+            if rc == 0 and so.strip():
+                return so.decode("utf-8", "replace"), name
+    finally:
+        narrow_done()
     return "", ""
 
 
@@ -3573,9 +3618,11 @@ def _render(url, c, shots, shot_dir, box, ready, wall=False):
                     started = True
                     # service workers are off: a request one of them makes is not routed
                     # screenshots: a laptop's window and reduced motion (screens.py)
-                    ctx = br.new_context(locale="en-US", service_workers="block", **(
+                    ctx = br.new_context(locale=intl.browser_locale(), service_workers="block", **dict(
                         {"viewport": {"width": screens.SCREEN_W, "height": screens.SCREEN_H},
-                         "reduced_motion": "reduce"} if not text_only else {}))
+                         "reduced_motion": "reduce"} if not text_only else {},
+                        **({"extra_http_headers": {"Accept-Language": intl.accept_language()}}
+                           if intl.accept_language() else {})))
                     blocked = (guard_requests(ctx, url, text_only=text_only)
                                if guard is None or b.get("kind") == "webkit" else [])
                     try:                             # the session the HTTP tiers already hold
@@ -4354,13 +4401,30 @@ def _tesserocr():
 OCR_DARK_ON_LIGHT = 120      # the second pass of a picture's OCR: darker than this is ink (ocr_picture)
 
 
-def _ocr_langs(have, page_text):
-    """READ_PAGE_OCR_LANGS (eng), plus Russian on a page written in it; only packs this machine has."""
-    want = [x.strip() for x in OCR_LANGS.split("+") if x.strip()]
-    if "rus" not in want and len(re.findall("[Ѐ-ӿ]", (page_text or "")[:20000])) > 50:
-        want.append("rus")
+def _ocr_own_packs():
+    """The language packs of the user's own languages, unless the user named the languages themselves."""
+    return [] if "READ_PAGE_OCR_LANGS" in os.environ else intl.locale_packs()
+
+
+def _ocr_plan(have, page_text=""):
+    """(the packs to read with, the packs the read needs and this machine lacks). What READ_PAGE_OCR_LANGS names
+    (eng), the pack of the page's script (Chinese, Japanese, Korean, Russian text: intl.script_pack), and - when the
+    user did not name languages - the pack of the user's own language; only packs this machine has are used.
+    A pack named or called for by the text and missing is reported; the user's own is only a wish."""
+    asked = [x.strip() for x in OCR_LANGS.split("+") if x.strip()]
+    want = list(asked)
+    hint = intl.script_pack(page_text)
+    for x in [hint] + _ocr_own_packs():
+        if x and x not in want:
+            want.append(x)
     use = [x for x in want if not have or x in have]
-    return use or (["eng"] if "eng" in have else [x for x in have if x != "osd"][:1] or ["eng"])
+    lost = [x for x in want if have and x not in have and (x in asked or x == hint)]
+    return (use or (["eng"] if "eng" in have else [x for x in have if x != "osd"][:1] or ["eng"])), lost
+
+
+def _ocr_langs(have, page_text):
+    """The packs to read with: _ocr_plan's first half."""
+    return _ocr_plan(have, page_text)[0]
 
 
 def _ocr_tsv(tsv):
@@ -4432,7 +4496,7 @@ def ocr_picture(path, page_text=""):
     if not tessdata and exe and os.path.isdir(os.path.join(os.path.dirname(exe), "tessdata")):
         tessdata = os.path.join(os.path.dirname(exe), "tessdata")
     best = None                                          # (good words, text, pass)
-    engine, langs, broken = "", [], ""
+    engine, langs, broken, lost = "", [], "", []
     try:
         import tesserocr
         if passes and passes[0][1] is not None:
@@ -4442,7 +4506,7 @@ def ocr_picture(path, page_text=""):
                 if tessdata and not api_dir:
                     raise OSError(ownenv.NONASCII_WHY % tessdata)
                 where, have = tesserocr.get_languages(api_dir) if tessdata else tesserocr.get_languages()
-                langs = _ocr_langs(have, page_text)
+                langs, lost = _ocr_plan(have, page_text)
                 api = tesserocr.PyTessBaseAPI(path=where, lang="+".join(langs))
             try:
                 for name, img in passes:
@@ -4463,19 +4527,21 @@ def ocr_picture(path, page_text=""):
     if best is None:
         if not exe:
             return "", {"why": broken or "no OCR engine here: tesseract, or tesserocr from pip"}
-        langs = _ocr_langs(tesseract_langs(exe), page_text)
+        langs, lost = _ocr_plan(tesseract_langs(exe), page_text)
         extra = (["--tessdata-dir", _tess_dir(os.environ["READ_PAGE_TESSDATA"]) or os.environ["READ_PAGE_TESSDATA"]]
                  if os.environ.get("READ_PAGE_TESSDATA") else [])
         for name, img in passes:
             src = path
             if img is not None:
-                fd, src = tempfile.mkstemp(suffix=".png")
+                fd, src = tempfile.mkstemp(suffix=".png", dir=ascii_stage_root() or None)
                 os.close(fd)
                 img.save(src)
+            shown, _outs, narrow_done = narrow_paths([src])
             try:
-                rc, so, _se = run_tool([exe, src, "stdout", "-l", "+".join(langs), "--psm", "3"] + extra + ["tsv"],
+                rc, so, _se = run_tool([exe, shown[0], "stdout", "-l", "+".join(langs), "--psm", "3"] + extra + ["tsv"],
                                        timeout=budget.cap(OCR_TIMEOUT, floor=2.0))
             finally:
+                narrow_done()
                 if src != path:
                     try:
                         os.unlink(src)
@@ -4491,7 +4557,10 @@ def ocr_picture(path, page_text=""):
     if best is None:
         return "", {"why": "tesseract read nothing from it"}
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(ln.rstrip() for ln in (best[1] or "").splitlines())).strip()
-    return text, {"engine": engine, "langs": "+".join(langs), "pass": best[2], "seconds": round(now() - t0, 2)}
+    info = {"engine": engine, "langs": "+".join(langs), "pass": best[2], "seconds": round(now() - t0, 2)}
+    if lost:
+        info["note"] = "no %s language data here: %s" % ("/".join(lost), ownenv.fix("ocr-langs", "install it into tessdata"))
+    return text, info
 
 
 def ocr_answer(workdir, manifest, n):
@@ -4542,12 +4611,9 @@ def ocr_pages(paths):
         if not lib and not exe and _OCR_STATE["why"] and "tesseract" not in SKIP and "ocr" not in SKIP:
             info["error"] = "tesserocr is installed but " + _OCR_STATE["why"]    # not an OCR that found nothing
         return "", info
-    want = [x.strip() for x in OCR_LANGS.split("+") if x.strip()]
     have = info["have"]
-    use = [x for x in want if not have or x in have]
-    info["missing"] = [x for x in want if have and x not in have]
-    if not use:
-        use = [x for x in have if x != "osd"] or want[:1] or ["eng"]
+    use, info["missing"] = _ocr_plan(have, "")
+    info["maybe"] = [x for x in _ocr_own_packs() if have and x not in have]        # a wish of the user's languages
     info["used"] = use
     extra = (["--tessdata-dir", _tess_dir(os.environ["READ_PAGE_TESSDATA"]) or os.environ["READ_PAGE_TESSDATA"]]
              if os.environ.get("READ_PAGE_TESSDATA") else [])
@@ -4559,7 +4625,11 @@ def ocr_pages(paths):
 
     def one(n, png):
         if not lib:
-            done[n] = run_tool([exe, png, "stdout", "-l", "+".join(use)] + extra, timeout=secs)
+            shown, _outs, narrow_done = narrow_paths([png])
+            try:
+                done[n] = run_tool([exe, shown[0], "stdout", "-l", "+".join(use)] + extra, timeout=secs)
+            finally:
+                narrow_done()
             return
         # tesserocr (--setup's OCR) in-process: it lets the other threads run while it reads, and
         # its own clock stops a page at the step's seconds
@@ -4567,7 +4637,17 @@ def ocr_pages(paths):
             with ownenv.tess_dir(lib[1]) as tdir:            # started from the folder's parent where a narrow path fails
                 api = lib[0].PyTessBaseAPI(path=tdir, lang="+".join(use))
             with api:
-                api.SetImageFile(png)
+                try:
+                    from PIL import Image
+                    with Image.open(png) as shot:
+                        shot.load()
+                        api.SetImage(shot)               # no path for the library to open in the ANSI code page
+                except ImportError:
+                    shown, _outs, narrow_done = narrow_paths([png])
+                    try:
+                        api.SetImageFile(shown[0])
+                    finally:
+                        narrow_done()
                 try:
                     api.Recognize(int(secs * 1000))
                 except TypeError:
@@ -5420,7 +5500,11 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 return text, note
         if c["cli"].get("pdftotext"):
             outp = os.path.join(workdir, "_pdf.txt")
-            run([c["cli"]["pdftotext"], "-enc", "UTF-8", path, outp], timeout=secs)
+            pdf_in, pdf_out, pdf_done = narrow_paths([path], [outp])
+            try:
+                run([c["cli"]["pdftotext"], "-enc", "UTF-8", pdf_in[0], pdf_out[0]], timeout=secs)
+            finally:
+                pdf_done()
             if os.path.exists(outp):
                 text = open(outp, encoding="utf-8", errors="replace").read()
                 if len(text.strip()) < 20:
@@ -5775,7 +5859,7 @@ def wayback(url):
         if not rows:
             return b"", "", "never archived"
         ts, orig = rows[-1][0], rows[-1][1]
-        snap = "%s/web/%sid_/%s" % (WAYBACK_URL, ts, orig)
+        snap = "%s/web/%sid_/%s" % (WAYBACK_URL, ts, intl.iri_to_uri(orig))
         req = urllib.request.Request(snap, headers={"Accept": ACCEPT, "User-Agent": UA})
         with urllib.request.urlopen(req, timeout=max(1.0, secs)) as r:
             snap_state.update(ct=r.headers.get("content-type", ""), ts=ts, enc=r.headers.get("content-encoding", ""))
@@ -6244,7 +6328,8 @@ def video_text(url, c, workdir):
     yt = c["cli"].get("yt-dlp")
     if not yt:
         return "", "", "yt-dlp is not installed"
-    langs = os.environ.get("READ_PAGE_SUB_LANGS", "en,ru")
+    asked = intl.sub_langs()
+    langs = ",".join(asked)
     extra = []
     jar = cookies_for_url(url)
     if jar:                                   # age-gated and members-only videos need the session
@@ -6271,7 +6356,19 @@ def video_text(url, c, workdir):
                      + extra + ["-o", os.path.join(workdir, "video.%(ext)s"), url],
                      timeout=video_secs)
     files = os.listdir(workdir)
-    vtt = next((f for f in files if f.endswith(".vtt")), "")
+    vtt = pick_vtt(files, asked)
+    if not vtt and rc != -1 and not os.environ.get("READ_PAGE_SUB_LANGS"):
+        # none of the user's tracks and English: the video's own language, when it names one
+        own = own_tracks(workdir, files, asked)
+        left = video_secs - (now() - t_yt)
+        if own and left > 3:
+            run([yt, "--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", own,
+                 "--sub-format", "vtt"] + extra + ["-o", os.path.join(workdir, "video.%(ext)s"), url],
+                timeout=max(1.0, left))
+            files = os.listdir(workdir)
+            vtt = pick_vtt(files, [own])
+            if vtt:
+                langs = "%s, then %s" % (langs, own)
     budget.record("yt-dlp", t_yt, budget.ended(VIDEO_TIMEOUT, video_secs) if rc == -1 else "ok" if vtt else "fail",
                   own=VIDEO_TIMEOUT, given=video_secs, note="subtitles" if vtt else "no subtitles")
     title = ""
@@ -6297,6 +6394,34 @@ def video_text(url, c, workdir):
     return text, title, "" if text else "subtitles were empty"
 
 
+def pick_vtt(files, langs):
+    """The subtitle file yt-dlp wrote for the first of `langs` that has one (`video.<lang>.vtt`), else any."""
+    vtts = sorted(f for f in files if f.endswith(".vtt") and f != "transcript.vtt")
+    for lang in langs:
+        for f in vtts:
+            if f[:-4].rsplit(".", 1)[-1].lower() == lang.lower():
+                return f
+    return vtts[0] if vtts else ""
+
+
+def own_tracks(workdir, files, asked):
+    """The subtitle track named for the video itself in yt-dlp's info file - its language, its first
+    manual track, an automatic track in the original language - when the user's list did not ask for
+    it; "" when there is none. A Chinese video said `no subtitles in en,ru`."""
+    info = next((f for f in files if f.endswith(".info.json")), "")
+    try:
+        with open(os.path.join(workdir, info), encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return ""
+    found = []
+    subs, autos = d.get("subtitles") or {}, d.get("automatic_captions") or {}
+    for k in [d.get("language")] + list(subs)[:1] + [k for k in autos if str(k).endswith("-orig")][:1]:
+        if k and isinstance(k, str) and k not in asked and k not in found and (k in subs or k in autos):
+            found.append(k)
+    return ",".join(found[:2])
+
+
 def youtube_id(url):
     """The 11-character id of a YouTube watch, short, embed, live or youtu.be address, or ""."""
     m = re.search(r"(?i)(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|embed/|live/)|youtu\.be/)([\w-]{11})", url or "")
@@ -6315,7 +6440,7 @@ def transcript_video(url, workdir):
         from youtube_transcript_api import YouTubeTranscriptApi
     except Exception:                                         # noqa: BLE001  (not installed)
         return "", ""
-    langs = [x.strip() for x in os.environ.get("READ_PAGE_SUB_LANGS", "en,ru").split(",") if x.strip()]
+    langs = intl.sub_langs()
     box = {}
 
     def fetch():
@@ -6514,8 +6639,7 @@ def save_media(f, workdir, kind):
     given = os.path.splitext(os.path.basename(name))[1].lower()
     if re.match(r"^\.[A-Za-z0-9]{1,6}$", given):
         ext = given
-    stem = re.sub(r"[^A-Za-z0-9._ -]+", "-", os.path.splitext(os.path.basename(name))[0])
-    stem = stem.strip(" .")[:40]
+    stem = intl.file_stem(os.path.splitext(os.path.basename(name))[0])
     if not stem:
         return take_body(f, os.path.join(workdir, "raw" + ext))
     return take_body(f, os.path.join(workdir, server_file_name(workdir, stem, ext)))
@@ -6628,17 +6752,21 @@ def meta_refresh_target(html, base):
 
 
 def disposition_name(value):
-    """`filename` or `filename*` from a Content-Disposition header, or ""."""
-    v = value or ""
+    """`filename` or `filename*` from a Content-Disposition header, or "": a name in any script and any
+    charset the header names (`filename*=GBK''%CD%BC.png`), or the raw bytes of one (UTF-8, GBK)."""
+    v = intl.header_text(value or "")
     m = re.search(r"(?i)filename\*\s*=\s*([^;]+)", v)
     if m:
         raw = m.group(1).strip().strip('"')
-        if "''" in raw:
-            raw = raw.split("''", 1)[1]
+        charset = "utf-8"
+        if "'" in raw:
+            parts = raw.split("'", 2)
+            if len(parts) == 3:
+                charset, raw = parts[0] or "utf-8", parts[2]
         try:
-            return urllib.parse.unquote(raw)
-        except Exception:                                     # noqa: BLE001
-            return raw
+            return urllib.parse.unquote(raw, encoding=intl.codec_of(charset), errors="replace")
+        except Exception:                                     # noqa: BLE001  (a charset Python does not have)
+            return urllib.parse.unquote(raw, errors="replace")
     m = re.search(r'(?i)filename\s*=\s*"([^"]*)"', v) or re.search(r"(?i)filename\s*=\s*([^;]+)", v)
     return m.group(1).strip() if m else ""
 
@@ -6774,7 +6902,7 @@ def _fetch_image(ref, base, limit=MEDIA_LIMIT, allow_private=False, known=None):
             headers["Cookie"] = cj
             _COOKIE_STATS["sent"] += 1
         headers.update(cond)
-        req = urllib.request.Request(url, headers=headers)
+        req = urllib.request.Request(intl.iri_to_uri(url), headers=headers)
         try:
             with img_opener.open(req, timeout=IMAGE_TIMEOUT) as r:
                 data = r.read(want)
@@ -6797,7 +6925,7 @@ def _fetch_image(ref, base, limit=MEDIA_LIMIT, allow_private=False, known=None):
                 ref = ""
             if not ref:
                 return {"why": str(e.code)}
-            req = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": ref,
+            req = urllib.request.Request(intl.iri_to_uri(url), headers={"User-Agent": UA, "Referer": ref,
                                                        "Accept": "image/*,*/*;q=0.8",
                                                        **({"Cookie": cj} if cj else {}), **cond})
             with img_opener.open(req, timeout=IMAGE_TIMEOUT) as r:
@@ -8201,6 +8329,9 @@ def read(args):
                 manifest["signals"]["scanned"] = True
                 otext, oinfo = ocr_pages(rendered)
                 ocr_missing = oinfo.get("missing") or []
+                if oinfo.get("maybe") and not otext.strip():
+                    # nothing came out of the scan, and the user's own language has no pack here
+                    ocr_missing = ocr_missing + [x for x in oinfo["maybe"] if x not in ocr_missing]
                 if oinfo.get("used"):
                     manifest["signals"]["ocr_langs"] = "+".join(oinfo["used"])
                 if ocr_missing:
@@ -8240,8 +8371,9 @@ def read(args):
             store_cache(workdir, manifest, url)
             return finish(workdir, manifest, t0, args, None)
         body_bytes_all = body_bytes(f)
-        body_text, charset = smart_decode(body_bytes_all, f["ct"])
-        manifest["url"]["charset"] = charset
+        decoded = decode_page(body_bytes_all, f["ct"])
+        body_text = decoded.text
+        note_charset(manifest, decoded)
         if looks_binary(f.get("head") or body_bytes_all[:4096]) and not looks_html(body_bytes_all):
             # not HTML, not a known format, mostly control bytes: nothing to read, say so
             manifest["signals"]["binary"] = True

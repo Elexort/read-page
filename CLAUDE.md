@@ -26,11 +26,18 @@ git-ignored, so a contributor may keep a file of their own under that name.
   the suites import the skill's modules, and a `__pycache__` beside them is listed to agents.
 - Offline: reading sources blocks images speed mcp_parallel timeouts deadline formats statuses
   security contract props fixes channel office_fixtures docreaders mcp_smoke setup_audit
-  environment. Live: browser_live, sources_live.
+  environment cjk. Live: browser_live, sources_live.
 - On a machine where `readpage.py --setup` has run, every suite that starts `readpage.py` or the
   MCP server as a process tests the environment's engines (they go under its Python by
   themselves); in-process checks use the Python the suite runs in. `READ_PAGE_SKIP=env` runs a
   suite without it; CI has none.
+- `tests/cjk.py` is the Chinese, Japanese, Korean and Russian suite (encodings, raw non-ASCII addresses and file
+  names, the MCP server's stdin, OCR packs, the languages sent, a Chinese home and cache). On Windows a copy of
+  `python.exe` whose application manifest says `<activeCodePage>zh-CN</activeCodePage>` (UpdateResourceW,
+  RT_MANIFEST 24, id 1; `zh-TW` is 950, `ja-JP` 932, `ko-KR` 949) has the ANSI code page 936 for that process:
+  run the suites with it, `READ_PAGE_SKIP=env`, no `PYTHONUTF8`, and `TEMP` in a Chinese folder, in the core
+  shape (`PYTHONNOUSERSITE=1`) and with the engines on the path; `fixes`, `deadline` and `cjk` are the ones that
+  need it. `scripts/intl.py` holds the decoding, the IRI-to-URI step and the user's languages.
 - While working, run the suites a change touches; before a commit, all of them (about 13 minutes).
 - Lint as CI does: `python -m ruff check --no-cache --select F scripts tests tools` (no `.ruff_cache` in
   the skill's folder) and

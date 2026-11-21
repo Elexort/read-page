@@ -3,7 +3,7 @@
 ## Unreleased (0.5.0)
 
 Two branches: `main` is the skill alone - SKILL.md, README.md, scripts/,
-references/, LICENSE and .gitattributes, 31 files - so a clone, a ZIP or an installer
+references/, LICENSE and .gitattributes, 32 files - so a clone, a ZIP or an installer
 brings an agent nothing else; `dev` carries the code with its tests, CI, notes and this log.
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
@@ -136,6 +136,46 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   give it; an engine is named once (the browser step and the check no longer repeat it); the package manager is
   the machine's (apk, dnf, zypper, pacman, apt, by its os-release; no `sudo` for root, which a container does not
   have); the note for Node on musl says nodejs.org has no build for it.
+
+**Chinese, Japanese, Korean and Russian on any machine** (`scripts/intl.py`, `tests/cjk.py`: found by running the
+skill under a real code page 936 - a copy of `python.exe` whose manifest says `<activeCodePage>zh-CN</activeCodePage>`
+has it for its process - with the profile, the temp folder and the cache in Chinese; every offline suite was green
+while the rows below stood)
+- **Text in GBK or Big5 is read right, and a guess says so.** A page, a text file or a CSV that names no encoding
+  was read as Cyrillic (`╧ЗнЯт╨╥╒╡╪вНпбм╗ж╙`) with status `ok` on a machine without `charset_normalizer` - the standard-library
+  core before `--setup`; with it, 10 to 20 characters of GBK came back as cp949, cp932 or cp1006. Now each of
+  GB18030, Big5-HKSCS, Shift_JIS, EUC-JP, EUC-KR, windows-1251 and KOI8-R reads the bytes and the one whose non-ASCII
+  characters are most often the common ones of its script wins (ideographs alone cannot tell GBK from Big5: both
+  decode every pair of bytes into ideographs); ties go to the machine's ANSI code page or language. A declared
+  `gb2312`, `gbk`, `big5`, `shift_jis` or `euc-kr` is read as a browser does (gb18030, Big5-HKSCS, Windows-31J,
+  Windows-949), so one character outside GB2312 no longer drops a page to the guess; a UTF-8 page cut in the middle
+  of a character stays UTF-8; German with no charset is windows-1252, not Cyrillic. A reading by guess is
+  `signals.charset_guess` (with `(doubtful)` for under ten characters or two readings alike) and `charset gb18030
+  (guessed)` in the answer's first line.
+- **The MCP server reads its standard input as UTF-8** whatever the locale. It used the locale's code page unless
+  Python started with `-X utf8`, which a client's config is written without: on a Chinese Windows a Chinese URL
+  or folder arrived as other characters.
+- **A raw non-ASCII address becomes a URI** (host to punycode, the rest percent-encoded as UTF-8) at curl_cffi, curl,
+  urllib, a picture and the archive's snapshot. Every picture whose `src` had Chinese in it was `not downloaded: ordinal
+  not in range(128)`; Git's curl and older Windows curls sent the path in GBK (`%d2%b3%c3%e6`). A Location header
+  that arrives as Latin-1 or raw GBK is read back to what it was.
+- **A server's Chinese file name is kept** (`filename*=UTF-8''...`, raw UTF-8 or GBK bytes, `filename*=GBK''...`):
+  it was `-.png`.
+- **OCR asks for the pack of the text's script and of the user's language** (`chi_sim` or `chi_tra`, `jpn`, `kor`,
+  `rus`; the user's own unless `READ_PAGE_OCR_LANGS` is set) when it is installed, and names a missing one in
+  `improve` (`signals.ocr_missing_langs`; on the `ocr:` line of `--ocr N`).
+- **pdftotext, tesseract's command and lynx are given ASCII paths** on Windows (the file linked or copied into an
+  ASCII folder under the cache, its 8.3 name or a public folder of the system; the output moved back); tesserocr gets
+  its picture from Pillow. A profile named in Chinese or Cyrillic - or in Big5, a name with 許, 功 or 蓋, whose
+  second byte is 0x5C - made them fail or read nothing.
+- **English defaults follow the user.** `READ_PAGE_LANG` (else the system's language, then English) sets
+  `Accept-Language` on curl_cffi, curl and urllib (curl and urllib sent none), the browser's locale (it was
+  `en-US`) and headers, and the subtitle tracks (they were `en,ru`: a Chinese video said `no subtitles in en,ru`; now
+  `zh-Hans,zh-CN,zh,en`, and a video with none of them is asked once for the language its info names, the track
+  of the user's first language is the one kept). `READ_PAGE_SUB_LANGS` and `READ_PAGE_OCR_LANGS`, when set, win. What
+  is sent: `references/engines.md`.
+- tests: `cjk.py` 134 (105 without curl_cffi and charset_normalizer, 131 off Windows; offline, any OS; under a POSIX locale
+  that is not UTF-8 its folders are ASCII, row 175).
 
 **`readpage.py --setup`**
 - **one command installs every engine** into the skill's own environment, one folder of the user's

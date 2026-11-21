@@ -153,6 +153,11 @@ so images go as blocks, everything else as text with a path.
 }}}
 ```
 
+The server reads and writes UTF-8 whatever the machine's code page is: it reconfigures its own standard
+input and output at the start, so a client config without `-X utf8` (a Chinese Windows, code page 936) still
+delivers `https://例子.测试/页面` and a folder under `C:\Users\张三` intact. The flag stays in the example: it
+makes the children and everything else UTF-8 too.
+
 ## Why not a third tool
 
 `search`, `screenshot`, `click` belong to a browser-automation tool, not to a reader, and the
