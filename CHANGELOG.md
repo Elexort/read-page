@@ -42,6 +42,15 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   the docs and in the setup's log and report. `--setup` fetches English and the pack of the user's own language
   (Windows' user locale or `LANG`: zh-CN `chi_sim`, zh-TW `chi_tra`, ja `jpn`, ko `kor`, ru `rus`, ...) instead of
   English and Russian for everyone, and a read in the environment reads with it beside English.
+- **CI for what was not yet checked** (KNOWN-ISSUES 174-176): `install.yml` also runs `--setup` in Debian 11 and
+  Ubuntu 20.04 (glibc 2.31), Rocky Linux 8 (glibc 2.28), Fedora, Arch and openSUSE containers; behind a TLS-inspecting
+  proxy (mitmproxy, its root in the OS's store only) on Linux, Windows and macOS; on a Windows whose Python and Git's
+  curl have the ANSI code page of zh-CN (936) or zh-TW (950) through an application manifest (asserted), in a profile
+  named in Chinese with a space, with files named and written in Chinese; the suites under `LC_ALL=zh_CN.GBK` on Linux;
+  and README's ZIP. They found a floor with no fix (Ubuntu 20.04 and Debian 11: Playwright has no browser for them -
+  the report now names the machine's own Chromium), and that behind such a proxy a read carries on after an
+  unverified retry (row 176). The tests no longer assume an ASCII temp folder or a UTF-8 console (`text=True`
+  without an encoding), and two timing bounds allow a slow runner.
 - **CI: real installs** (`.github/workflows/install.yml`, on dev and ci-install pushes and by hand; the helper
   is `tools/ci_install.py`). Every standard runner a public repository gets free: `--setup` from nothing into
   a folder with a space and Cyrillic in its path on Linux, Windows and macOS (x64 and arm64) - its time, the

@@ -38,13 +38,19 @@ git-ignored, so a contributor may keep a file of their own under that name.
 - CI: `tests.yml` on every push (Ubuntu with Python 3.9 and 3.12, Windows, a browser job, lint);
   `macos.yml` on every push to dev (macOS 15, arm64), or by hand from the Actions tab.
   Every suite runs even when an earlier one failed, so read all of a red run.
-  `install.yml` (pushes to dev and ci-install, and by hand) is the real install: `--setup` into a folder
-  with a space and Cyrillic in its path, the suites under the environment's Python, then a user's
-  clone-and-read, a bare Python, and Alpine and Ubuntu containers, on every free runner (Linux, Windows,
-  macOS; x64 and arm64). `tools/ci_install.py` is what the jobs run; a matrix row's `expect` lists what
-  its platform lacks for want of wheels (a floor), and any other gap is red. A run takes about 20 minutes
-  (the suites); a read of a failed job: `gh run view <id> --log-failed`, or the artifacts
-  `install-logs-*` (setup.log, setup-detail.log, setup.json, each suite's log).
+  `install.yml` (pushes to dev, ci-install and installer-wave, and by hand) is the real install: `--setup` into a
+  folder with a space and Cyrillic in its path, the suites under the environment's Python, then a user's
+  clone-and-read (and README's ZIP), a bare Python, containers (Alpine, Ubuntu 20.04 and 24.04, Debian 11, Rocky 8,
+  Fedora, Arch, openSUSE), a proxy that inspects TLS (`tools/ci_proxy.py`: mitmproxy, its root in the OS's store),
+  a Windows whose Python has the code page 936 or 950 in a profile named in Chinese (`tools/ci_acp.py`: an
+  application manifest with `activeCodePage`, asserted by `GetACP()`), and the suites under `LC_ALL=zh_CN.GBK`, on
+  every free runner (Linux, Windows, macOS; x64 and arm64). `tools/ci_install.py` is what the jobs run; a matrix
+  row's `expect` lists what its platform lacks for want of wheels (a floor), and any other gap is red. A run takes
+  about 45 minutes (the suites); a read of a failed job: `gh run view <id> --log-failed` (once the whole run is
+  done; `gh api --allow-escape-sequences repos/<owner>/<repo>/actions/jobs/<id>/logs` for a finished job of a
+  run still going), or the artifacts `install-logs-*` (setup.log, setup-detail.log, setup.json, each suite's log).
+  A suite never assumes an ASCII temp folder or a UTF-8 console: `text=True` always has an `encoding`, and a check
+  that is about an ASCII path makes one (`ascii_base()` in `tests/environment.py`).
   The workflows live on dev only (`main` is the skill alone): `gh workflow run <file> --ref <branch>` works
   from a branch that has the file, though the default branch has no workflow.
 - Bugs that belong to one OS (sockets and processes on Linux, paths and subprocesses on Windows)
