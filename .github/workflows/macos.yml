@@ -125,6 +125,11 @@ jobs:
         shell: bash
         run: python -X utf8 tests/docreaders.py
 
+      - name: CJK and Cyrillic input (encodings, addresses, file names, narrow tools, the user's languages)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/cjk.py
+
       - name: MCP protocol smoke
         if: ${{ !cancelled() }}
         shell: bash
