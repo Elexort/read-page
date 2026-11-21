@@ -7,6 +7,10 @@ on:
     branches: [dev]
   workflow_dispatch:
 
+env:
+  # the suites that import the skill in-process must not leave a __pycache__ beside its scripts
+  PYTHONDONTWRITEBYTECODE: "1"
+
 jobs:
   offline:
     name: offline (macos)

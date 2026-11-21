@@ -91,7 +91,19 @@ with open(os.path.join(home, "setup.json"), "w", encoding="utf-8") as fh:
 base = dict(os.environ, READ_PAGE_HOME=home, READ_PAGE_CACHE=os.path.join(home, "cache-test"))
 base.pop("PYTHONDONTWRITEBYTECODE", None)       # -E in the hop drops it anyway: readpage keeps .pyc out
 
+def compiled():
+    """What has been compiled beside the skill's scripts: {file: modification time}. The suites that ran
+    before this one in a job (CI runs them one after another) import the skill in-process and may leave
+    some, so a check looks at what the code under test changes - before and after - never at what is there."""
+    folder = os.path.join(SCRIPTS, "__pycache__")
+    try:
+        return {n: os.stat(os.path.join(folder, n)).st_mtime_ns for n in os.listdir(folder)}
+    except OSError:
+        return {}
+
+
 # ---------------------------------------------------------------- found and used
+pyc_before = compiled()
 c = caps(base)
 env = c.get("env") or {}
 check("a run goes on under the environment's Python", env.get("used") is True
@@ -99,8 +111,8 @@ check("a run goes on under the environment's Python", env.get("used") is True
       "%s %s" % (env.get("python"), c.get("error", "")))
 check("its programs come first on PATH", os.path.normcase(os.path.dirname((c.get("cli") or {}).get("yt-dlp") or ""))
       == os.path.normcase(bindir), str((c.get("cli") or {}).get("yt-dlp")))
-check("no compiled module lands beside the skill's scripts", not os.path.isdir(os.path.join(SCRIPTS, "__pycache__")),
-      "")
+check("no compiled module lands beside the skill's scripts", compiled() == pyc_before,
+      sorted(n for n, t in compiled().items() if pyc_before.get(n) != t))
 rc, out, err = run([], base)
 check("the setup report names the environment and when it was set up",
       "environment: %s, set up 2026-11-19" % home in out, [ln for ln in out.splitlines() if "environment" in ln][:1])
@@ -872,16 +884,42 @@ try:
         refused8 = True
     check("on a Python with no tar filters a chain of links cannot write outside (l1 -> ., l2 -> l1/.., l2/x)",
           refused8 and not os.path.exists(os.path.join(td8, "x")), os.listdir(td8))
+    # a tar writes its links with "/", and a Windows link whose target has one does not resolve: Node's own
+    # `bin/npm -> ../lib/node_modules/npm/bin/npm-cli.js` then looked to lead out of the folder (a Windows
+    # runner, which may make links, refused it with "a chain of links out of its folder"). Seen from what
+    # unpack hands os.symlink, so this holds on an account that cannot make links too
+    asked_links, real_symlink = [], os.symlink
+
+    def record_symlink(src, dst, *args, **kw):
+        asked_links.append(src)
+        return real_symlink(src, dst, *args, **kw)
+    os.symlink = record_symlink
+    try:
+        try:
+            envsetup.unpack(good_tar, os.path.join(td8, "ok-recorded"))
+        except ValueError:
+            pass                                         # where it cannot make links: what it asked for is all we need
+    finally:
+        os.symlink = real_symlink
+    check("a link is made with this OS's separators in its target",
+          asked_links == ["..%slib%snode_modules%snpm%sbin%snpm-cli.js" % ((os.sep,) * 5)], str(asked_links))
     try:
         os.symlink("x", os.path.join(td8, "can-link"))
         can_link = True
     except OSError:
         can_link = False                                 # Windows without the right to make links (Node's tar is POSIX's)
     if can_link:
-        envsetup.unpack(good_tar, os.path.join(td8, "ok"))
+        why8 = ""
+        try:
+            envsetup.unpack(good_tar, os.path.join(td8, "ok"))
+        except ValueError as e:
+            link8 = os.path.join(td8, "ok", "node-v1", "bin", "npm")
+            why8 = "%s (target %r, resolved %r, folder %r)" % (
+                e, os.readlink(link8) if os.path.islink(link8) else None, os.path.realpath(link8),
+                os.path.realpath(os.path.join(td8, "ok")))
         check("... and Node's own layout (files, folders, links inside) still unpacks there",
               os.path.isfile(os.path.join(td8, "ok", "node-v1", "lib", "node_modules", "npm", "bin", "npm-cli.js"))
-              and os.path.islink(os.path.join(td8, "ok", "node-v1", "bin", "npm")), "")
+              and os.path.islink(os.path.join(td8, "ok", "node-v1", "bin", "npm")), why8)
     else:
         print("SKIP Node's tar layout without tar filters (this account cannot make symbolic links)")
     for what, mk in (("a hard link", lambda ti: (setattr(ti, "type", _tar.LNKTYPE), setattr(ti, "linkname", "a"))),
@@ -991,11 +1029,11 @@ check("_detached starts the work and says which way: free, or attached where a j
       "%r %r (a job around this test ends what it starts: %s)" % (how1, how2, ends))
 
 # the probe's child runs with -I, which ignores the caller's PYTHONDONTWRITEBYTECODE: it must say -B itself
+pyc_before = compiled()
 probe = subprocess.run(ownenv._probe_argv(), capture_output=True, timeout=60)
-pyc_dir = os.path.join(SCRIPTS, "__pycache__")
 check("the job probe's child leaves no compiled module beside the scripts",
-      probe.stdout in (b"0", b"1") and not os.path.isdir(pyc_dir),
-      "%r %s" % (probe.stdout, os.listdir(pyc_dir) if os.path.isdir(pyc_dir) else ""))
+      probe.stdout in (b"0", b"1") and compiled() == pyc_before,
+      "%r %s" % (probe.stdout, sorted(n for n, t in compiled().items() if pyc_before.get(n) != t)))
 try:
     import psutil
 except ImportError:

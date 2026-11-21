@@ -534,8 +534,8 @@ def fetch_json(url, timeout=30):
 
 
 def _inside(root, name):
-    target = os.path.realpath(os.path.join(root, name))
-    base = os.path.realpath(root)
+    target = os.path.normcase(os.path.realpath(os.path.join(root, name)))
+    base = os.path.normcase(os.path.realpath(root))
     return target == base or target.startswith(base.rstrip(os.sep) + os.sep)
 
 
@@ -602,7 +602,10 @@ def _extract_plain(t, members, dest):
         if not _inside(dest, os.path.join(parent, m.linkname)):
             raise ValueError("a link out of its folder: %s" % m.name)
         try:
-            os.symlink(m.linkname, place)
+            # a tar's links are written with "/"; a Windows link whose target has one does not resolve
+            # (the file system reads the target as it is), so the final check below judged Node's own
+            # `bin/npm -> ../lib/node_modules/npm/bin/npm-cli.js` to lead out of the folder
+            os.symlink(m.linkname.replace("/", os.sep) if os.name == "nt" else m.linkname, place)
         except (OSError, NotImplementedError) as e:
             raise ValueError("a link that cannot be made here (%s): %s" % (e, m.name))
         made.append(place)

@@ -5,6 +5,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  # as CLAUDE.md runs the suites: the ones that import the skill in-process must not leave a
+  # __pycache__ beside its scripts (it is listed to agents, and environment.py looks for one)
+  PYTHONDONTWRITEBYTECODE: "1"
+
 jobs:
   lint:
     # pyflakes rules and the oldest Python the skill promises (3.8). Known defects are tagged with

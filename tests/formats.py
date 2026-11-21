@@ -647,14 +647,17 @@ try:
                   tab.get("heavy") == "1-2" and tab.get("left") == "1-2" and not tab.get("asked")
                   and "too heavy" in (r.manifest.get("advice") or "") and r.seconds < 20,
                   "%.1f s %s %s" % (r.seconds, tab, r.manifest.get("advice")))
-            # under those counts the model can still take long (2 010 strokes: 11 s, 8 010: 24 s): its
-            # process is killed when the time is up, and the read keeps its deadline
+            # under those counts the model can still take long (2 010 strokes: 11 s, 8 010: 24 s on a laptop):
+            # its process is killed when the time is up, and the read keeps its deadline. The real model is no
+            # measure of that: on a CI runner it laid these 7 000 strokes out in 2 s, so the page was not slow
+            # and the check failed there. The slowness is the stand-in's (RP_STUB_SLEEP), the same everywhere
             sl = os.path.join(tmp, "slow.pdf")
             doc = pymupdf.open()
             strokes_page(doc, strokes=7000)
             doc.save(sl)
             doc.close()
-            r = run_read(sl, env=dict(env, READ_PAGE_TEST_DEADLINE="4"))
+            r = run_read(sl, env=dict(env, READ_PAGE_TEST_DEADLINE="4", READ_PAGE_TEST_MODEL_PATH=stubdir,
+                                      RP_STUB_SLEEP="30"))
             tab = (r.manifest.get("signals") or {}).get("tables") or {}
             check("a PDF's tables: a slow page does not hold the read past its deadline (4 s here)",
                   r.manifest.get("status") == "ok" and tab.get("left") == "1" and r.seconds < 7
