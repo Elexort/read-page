@@ -30,6 +30,8 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   read as UTF-8 when it is, else in the CJK code page that decodes the archive's names into its script (the
   machine's own first; kana for Shift-JIS, GB2312's characters for GBK, Big5, Hangul); ASCII and CP437 names of
   accented letters stay (`docreaders.fix_zip_names`).
+- The marker patterns of the answer (`pictures.MARK`) and of the MCP server (`ANY_MARKER`) were quadratic on a
+  run of `[img #N · ` that no `]` closes (KNOWN-ISSUES 179): 16 000 in a line took 43.7 s, now 1.4 ms.
 - CI: the repository is public, so `macos.yml` runs on every push to dev, as `tests.yml` does.
 - **The installer's open rows** (KNOWN-ISSUES 142-145, 151):
   - Sources: every setting that sends an installer elsewhere than its default or skips a check - uv's index,

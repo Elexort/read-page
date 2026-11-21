@@ -476,4 +476,37 @@ else:
     finally:
         srv_o.close()
 
+
+# ------------------------------------------------ a run of `[img #N · ` that no `]` closes
+# The marker pattern scanned from each one to the end of its line: 8 000 in a line took 8.2 s, 16 000 43.7 s
+# (2026-11-21). Linear is a ratio of two sizes, not a number of seconds (a slow runner is slower at both).
+def timed_twice(fn, small, big):
+    """fn(small) and fn(big): (the big result, seconds big / small, whether big is within 8 times small)."""
+    import time as _t
+
+    def one(arg):
+        t0 = _t.perf_counter()
+        out = fn(arg)
+        return out, _t.perf_counter() - t0
+    out, hi = one(big)
+    lo = one(small)[1]
+    if hi > 8 * max(lo, 0.05):                          # a busy machine slows one run, not both: again
+        hi, lo = min(hi, one(big)[1]), min(lo, one(small)[1])
+    return out, "%.3fs / %.3fs" % (hi, lo), hi <= 8 * max(lo, 0.05)
+
+
+import pictures                                              # noqa: E402
+for label, piece in (("[img #1 · ", "[img #1 · "), ("[img #1 · [", "[img #1 · [")):
+    out, said, linear = timed_twice(lambda n: pictures.compact([piece * n]), 2000, 8000)
+    check("pictures.MARK is linear on 8 000 unclosed %r in a line (8 000 took 8.2 s)" % label,
+          linear and out == [piece * 8000], said)
+out = pictures.compact(["[img #3 · 100x80 3K · alt] img/03-alt.png and [img #3 · 100x80 3K · alt] img/03-alt.png"])
+check("... and a repeated marker is still shortened", out == ["[img #3 · 100x80 3K · alt] img/03-alt.png and [img #3]"],
+      repr(out))
+import mcp_server                                            # noqa: E402
+out, said, linear = timed_twice(lambda n: mcp_server.ANY_MARKER.findall("[img #1 · " * n), 2000, 8000)
+check("the MCP server's marker pattern is linear on the same run (it had the same scan)", linear and out == [], said)
+check("... and still finds a marker", mcp_server.ANY_MARKER.findall("x [img #2 · 5x5 1K · a] img/02-a.png y")
+      == [("2", "img/02-a.png")], "")
+
 sys.exit(check.done())

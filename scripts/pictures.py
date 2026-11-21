@@ -28,7 +28,10 @@ IMG_LINK = re.compile(r"!\[((?:\\.|[^\]\\\n!]|%s)*)\]\(\s*<?((?:[^)\s>!]|%s)+)>?
 # a fence line, its indent spaces and tabs: `^\s*` crossed line ends, and ran from every blank line
 # to the end of a run of them (30 000 took 2.7 s)
 FENCE = re.compile(r"(?m)^[ \t]*(```|~~~)")
-MARK = re.compile(r"\[img #(\d+)((?: · [^\]\n]*)?)\](?: (\S+))?")
+# a marker's middle holds no "[img #": from each of a run of them that no "]" closed, the scan went to the
+# end of the line (8 000 in a line took 8.2 s, 16 000 43.7 s)
+MARK_BODY = r"(?:[^\]\n\[]|\[(?!img #))*"
+MARK = re.compile(r"\[img #(\d+)((?: · %s)?)\](?: (\S+))?" % MARK_BODY)
 TINY_SIDE = 48          # px: a repeat this small with a short alt is printed as its alt
 TINY_ALT = 16           # characters
 LIST_LINES = 10         # pictures with no place in the text: this many lines, then a count
