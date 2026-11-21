@@ -600,18 +600,28 @@ else:
         shared_root = mod.ascii_stage_root()
         ins, outs, done = narrow([pdf], [out_txt])
         done()
-        own_home = os.path.join(ROOT, "ascii-home-%d" % os.getpid())
+        # an ASCII folder for the stand-in home (this suite's own folder is under a Chinese TEMP in the
+        # Chinese-Windows job): a test folder, removed below
+        own_home = next((os.path.join(b, "rp-ascii-home-%d" % os.getpid()) for b in
+                         (ROOT, tempfile.gettempdir(), os.environ.get("RUNNER_TEMP"), os.environ.get("PUBLIC"))
+                         if b and b.isascii() and os.path.isdir(b)), "")
         mod.ownenv.home = lambda: own_home
-        home_root = mod.ascii_stage_root()
+        home_root = mod.ascii_stage_root() if own_home else ""
     finally:
         mod.cache_root, mod.ownenv.ascii_path, mod.ownenv.home = real_cache, real_short, real_home
+        if own_home:
+            shutil.rmtree(own_home, ignore_errors=True)
     shared = [x for x in (os.environ.get("PUBLIC"), os.environ.get("ProgramData")) if x]
     check("narrow paths: with no ASCII folder of the user's own, nothing is copied into a folder other users read "
           "(the program gets the path as it is)",
           shared_root == "" and ins == [pdf] and not any(os.path.normcase(r) in os.path.normcase(ins[0]) for r in shared),
           "%r %r" % (shared_root, ins))
-    check("... and an environment folder with an ASCII path (READ_PAGE_HOME) is one of the user's own",
-          bool(home_root) and os.path.normcase(home_root).startswith(os.path.normcase(own_home)), home_root)
+    if not own_home:
+        check.skip("... and an environment folder with an ASCII path (READ_PAGE_HOME) is one of the user's own",
+                   "no ASCII folder on this machine to stand in for one")
+    else:
+        check("... and an environment folder with an ASCII path (READ_PAGE_HOME) is one of the user's own",
+              bool(home_root) and os.path.normcase(home_root).startswith(os.path.normcase(own_home)), home_root)
 
 # ---------------------------------------------------------------- 8. what is sent in the user's name
 sub = getattr(intl, "sub_langs", None)
