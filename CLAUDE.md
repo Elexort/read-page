@@ -25,8 +25,8 @@ git-ignored, so a contributor may keep a file of their own under that name.
   Run them with `PYTHONDONTWRITEBYTECODE=1` (Claude Code sets it; a plain terminal does not):
   the suites import the skill's modules, and a `__pycache__` beside them is listed to agents.
 - Offline: reading sources blocks images speed mcp_parallel timeouts deadline formats statuses
-  security contract props fixes channel office_fixtures mcp_smoke setup_audit environment. Live:
-  browser_live, sources_live.
+  security contract props fixes channel office_fixtures docreaders mcp_smoke setup_audit
+  environment. Live: browser_live, sources_live.
 - On a machine where `readpage.py --setup` has run, every suite that starts `readpage.py` or the
   MCP server as a process tests the environment's engines (they go under its Python by
   themselves); in-process checks use the Python the suite runs in. `READ_PAGE_SKIP=env` runs a

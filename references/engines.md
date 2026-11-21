@@ -287,8 +287,8 @@ step is kept. The constants are at the top of `readpage.py` and in `scripts/budg
 | readers | **20 s** | Firecrawl, Jina, Exa, Tavily, defuddle.md, at most 12 s each; the next only while 2 s are left | only with `--allow-external`; no reader is asked twice (a credit each time) |
 | Wayback | **20 s**, leaving 1.5 tails | the CDX lookup and the snapshot together; once per run | the CDX API itself sometimes takes a minute |
 | pictures | **6 s**, inside the tail (about 4 s near the deadline) | 32 threads; a connection silent for 4 s is stuck; only the pictures of the lines an answer prints, each call its own; one 6 s phase an answer, shared by up to three rounds as the printed window grows; one cut by the phase or lost to the network is fetched when its lines are printed again; one another page of the host has is a hard link, no request | `--download` takes every picture of the page with no limit; the site's cookie jar is sent with each request; what the phase did not reach is marked `not downloaded: no time (6 s)`. 6 s, not 4: with no limit 129 reads of picture-heavy pages took p95 2.6 s and at most 5.8; 4 s cut 2.3 % of them, twice pictures still arriving (NASA), and 6 s none |
-| `pdftotext` / `pandoc` (a machine's own `markitdown` last) | 10 s each | 1 | local converters; a hung process is killed |
-| our EPUB, ODT and RTF readers (`docreaders.py`) | **10 s a read**, all its documents together (a ZIP's too), less near the deadline; none with `--download` | a process of its own (`-I -S -B`: the standard library alone), which stops reading a little before the time, writes what it read, and is killed at the time; RLIMIT_AS holds it to 2 GB where the OS has one | a process start costs about 0.1 s on Windows. Before (in the read's own process) a few KB of hostile EPUB, ODT or RTF held a read for 62-91 s; 68 hostile files of this kind now end in 8.9 s at most. A ZIP's document the time did not reach, or whose reader was stopped, says so under its name |
+| `pdftotext`; a machine's own `pandoc`, then `markitdown` (an office file nothing else reads) | 10 s each | 1 | local converters; a hung process is killed |
+| our EPUB, ODT and RTF readers (`docreaders.py`) | **10 s a read**, all its documents together (a ZIP's too), less near the deadline; none with `--download` | a process of its own (`-I -S -B`: the standard library alone), which stops reading a little before the time, writes what it read, and is killed at the time; RLIMIT_AS holds it to 2 GB where the OS has one | a process start costs about 0.1 s on Windows, 0.05 s in WSL. Before (in the read's own process) a few KB of hostile EPUB, ODT or RTF held a read for 62-91 s; 68 hostile files of this kind now end in 8.9 s at most. A ZIP's document the time did not reach, or whose reader was stopped, says so under its name |
 | a package's picture order | **10 s**, less near the deadline | a docx's `a:blip` references, an EPUB's spine and the `<img>` of each chapter, in the read's own process; no picture, no scan | tags read as `[^<>]{0,8192}`, a set beside each list, a chapter named twice scanned once; with no time left there is no order, not a guess (`images_ordered` unset). A 40 000-tag container: 68.9 s before, 0.00 s |
 | a PDF's tables | **10 s a read**, all its PDFs together (a ZIP's, an archived copy) | the layout model in a process of its own (`-E -B`: a caller's PYTHONPATH stays out), a page at a time while the next are chosen; a page over 8 000 vector paths or 2 000 words in a block is not asked | the model's call cannot be interrupted: a process still at work when the time is up is killed, its pages named (`signals.tables.left`, `heavy`), and one whose read was killed from outside ends with it (it watches the read's process; where the OS will not let it - a sandbox that refuses SYNCHRONIZE on Windows - it is not watched, and stdin's end ends it with the read). A page of 5 010 strokes (20 s in the model) read in 10.8 s; before, 20.7 s, and a scatter plot of 20 010 strokes 27.5 s |
 | `--alternate` on a PDF | what the read has left | pymupdf4llm's Markdown: a warm-up call of 2 pages gives the model's rate, then calls of 10 pages at most, each to fit what is left (one call with `--download`) | the pages no call reached stay plain, named in `signals.tables.left` and the advice; 600 pages: 49.7 s (262 s at one go); four reads of GPT-3 at once on two slow cores laid out none in 51 s with one long call, 26-27 of its 75 pages each in 50 s with calls of ten |
@@ -322,7 +322,7 @@ wherever it installs them, else the machine's own command:
 | `curl_cffi` | Chrome TLS fingerprint (npm, Medium, Reddit), better charset handling |
 | `defuddle` (Node) | best main-content extraction (1.5-3x more text on docs sites) |
 | `trafilatura`, `readability-lxml`, `html2text` | in-process extraction and `page.md` |
-| `pymupdf`, `pymupdf4llm`, `pandoc` (the office readers before it) | PDF and its tables (the layout model, [documents.md](documents.md)), office documents, EPUB, RTF, ODT, a plain ZIP |
+| `pymupdf`, `pymupdf4llm`, the office readers | PDF and its tables (the layout model, [documents.md](documents.md)), office documents, a plain ZIP; EPUB, RTF and ODT need nothing (our own readers, the standard library: pandoc left on 2026-11-21) |
 | `yt-dlp` | video transcripts |
 | Playwright and its `chromium-headless-shell` (or Patchright + Chrome/Edge) | JavaScript rendering |
 | `pillow` | MCP `inline_images`: GIF, WebP, AVIF, BMP as PNG, pictures over 1 568 px scaled (PyMuPDF does SVG) |
@@ -339,9 +339,9 @@ terminal or for the next agent ("not set up" in that agent's shell, every read i
 Python), and its files were slow to reach (a stat 372 us against 49 in the home folder). What it
 installs: uv 0.13.9 from
 PyPI (its wheel's SHA256 pinned in `envsetup.py` for every platform: `UV_WHEEL_SHA256`), CPython 3.13.18 from python-build-standalone through it (`--no-bin
---no-registry`: nothing outside the folder), a venv `envs/py<version>-<lock hash>` with the 55
+--no-registry`: nothing outside the folder), a venv `envs/py<version>-<lock hash>` with the 54
 packages of `scripts/setup-lock.txt` (each file pinned by SHA256: `tools/setup_lock.py` writes the lock
-with `--generate-hashes` - 1 099 files, about 94 KB - and uv checks the hashes of `-r` and of `-c`, the
+with `--generate-hashes` - 1 092 files, about 94 KB - and uv checks the hashes of `-r` and of `-c`, the
 one-package-at-a-time fallback and the yt-dlp step included; yt-dlp, which floats, has none and is not
 refused for it; wheels only; a package with no wheel for the machine is left
 out and named) and, not pinned, yt-dlp in the newest release that has been out three days
@@ -352,8 +352,9 @@ through that npm (`--ignore-scripts`; its own 26 packages as npm resolved them a
 instant, `--before=2026-11-19T00:00:00Z`: the pinned version must exist by it), Playwright's `chromium-headless-shell`
 (`PLAYWRIGHT_BROWSERS_PATH` = the folder's `browsers`), `eng` and `rus` from tessdata_fast 4.1.0
 with pinned SHA256 (plus any language `READ_PAGE_OCR_LANGS` names) - then a check of every engine
-on a sample (import, `pandoc --version`, defuddle on a page, the browser on a page, OCR of a
-rendered line). tessdata_fast against tessdata_best and the standard tessdata, through tesserocr on
+on a sample (import, defuddle on a page, the browser on a page, OCR of a rendered line). No
+pandoc since 2026-11-21: our own readers read EPUB, ODT and RTF ([documents.md](documents.md)).
+tessdata_fast against tessdata_best and the standard tessdata, through tesserocr on
 60 readings of English, Russian and mixed text in three fonts and two sizes, clean and as a poor
 scan (2026-11-19): clean CER 0.19 / 0.48 / 1.71 %, poor 39.6 % all three, 0.21 / 0.61 / 0.45 s a
 picture, eng+rus 8 / 31 / 43 MB; on the agent post's figures fast found as many words at
@@ -369,9 +370,10 @@ its end. That is asked of a small child that has broken away (the job it lands i
 lets nothing leave), not read from the job the process is in: a venv's `python.exe` runs its
 interpreter in a job of its own, nested in the harness's, and hides it. A background yt-dlp update has a lock of its own (`ytdlp.lock`); a `--setup` waits for it, up
 to five minutes, and holds it for its run.
-Its first line says what it will download (about 430 MB on Windows, 480 on Linux, 380 on macOS -
-the pinned wheels by PyPI's sizes, the Python, Node and browser archives by their Content-Length)
-and keep (1.2 GB on Windows), or that the folder is up to date and only a check follows. The steps run
+Its first line says what it will download (about 390 MB on Windows, 445 on Linux, 355 on macOS -
+the pinned wheels by PyPI's sizes, the Python, Node and browser archives by their Content-Length;
+430, 480 and 380 with pandoc) and keep (about 0.95 GB on Windows, 1.1 GB on Linux; 1.2 and 1.3
+with pandoc), or that the folder is up to date and only a check follows. The steps run
 one after another; only the check's engines answer side by side. Side by side was built and
 measured (2026-11-19, from nothing into fresh folders): 62 and 68 s against 68 and 65
 one after another, WSL 83 against 79 - no gain, so not kept. The link is the limit: 9 MB/s, no
@@ -385,8 +387,8 @@ flight and deletes older ones. `readpage.py` and `mcp_server.py` check `setup.js
 other imports (`ownenv.use`): outside the environment the run goes on under its Python - `exec`
 on POSIX, on Windows a child with the same arguments on the same console, the first process itself in a job
 that dies with it before the child starts (so everything the read starts is born inside it, nested
-inside a harness's job where there is one), its exit code passed on - and inside it the venv's `Scripts`/`bin`, Node, the
-npm prefix and pandoc's folder come first on `PATH`, with `PLAYWRIGHT_BROWSERS_PATH` and
+inside a harness's job where there is one), its exit code passed on - and inside it the venv's `Scripts`/`bin`, Node and the
+npm prefix come first on `PATH`, with `PLAYWRIGHT_BROWSERS_PATH` and
 `READ_PAGE_TESSDATA` set. Measured on Windows (2026-11-19, the environment in the home folder):
 `--version` 0.18 s in the machine's Python, 0.24 s in the environment's, 0.34 s through the hop
 (0.29 and 0.40 s while the environment was under AppData, inside a packaged app's private copy;

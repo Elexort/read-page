@@ -3,7 +3,7 @@
 ## Unreleased (0.5.0)
 
 Two branches: `main` is the skill alone - SKILL.md, README.md, scripts/,
-references/, LICENSE and .gitattributes, 30 files - so a clone, a ZIP or an installer
+references/, LICENSE and .gitattributes, 31 files - so a clone, a ZIP or an installer
 brings an agent nothing else; `dev` carries the code with its tests, CI, notes and this log.
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
@@ -15,19 +15,20 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   (`.read-page` in the home folder on Windows, `~/Library/Application Support/read-page`,
   `$XDG_DATA_HOME` or `~/.local/share/read-page`; `READ_PAGE_HOME` moves it), never the skill's
   folder: no questions (running it is the consent), no admin rights, the same pinned versions
-  everywhere - uv 0.13.9, CPython 3.13.18 (python-build-standalone), the 55 packages of
+  everywhere - uv 0.13.9, CPython 3.13.18 (python-build-standalone), the 54 packages of
   `scripts/setup-lock.txt` (curl_cffi, trafilatura, readability, html2text, PyMuPDF and
-  pymupdf4llm, youtube-transcript-api, Playwright, tesserocr with tesseract 5.5.4, pandoc 3.9 in
-  pypandoc_binary, Pillow, psutil, the Office readers), yt-dlp (alone not pinned, below),
-  Node 24.22.3 from nodejs.org checked against SHASUMS256.txt (nodejs-wheel-binaries from
-  PyPI when nodejs.org cannot be reached), defuddle 0.19.4 through that npm with its own 26
-  packages as of one day (`--before`), Playwright's
+  pymupdf4llm, youtube-transcript-api, Playwright, tesserocr with tesseract 5.5.4, Pillow,
+  psutil, the Office readers; pandoc 3.9 in pypandoc_binary until 2026-11-21, below), yt-dlp
+  (alone not pinned, below), Node 24.22.3 from nodejs.org checked against SHASUMS256.txt
+  (nodejs-wheel-binaries from PyPI when nodejs.org cannot be reached), defuddle 0.19.4 through
+  that npm with its own 26 packages as of one day (`--before`), Playwright's
   `chromium-headless-shell`, and English and Russian OCR data from tessdata_fast 4.1.0 with pinned
-  SHA256. Then every engine is checked on a sample. Its first line names the download (about 430 MB
-  on Windows, 480 on Linux, 380 on macOS) and what it keeps (1.2 GB on Windows), or says the folder is up
-  to date. From nothing 65-70 s on a 9 MB/s link (~48 of them downloads), an up-to-date
-  check 8 s; the steps side by side were built and measured (62/68 s against 68/65, WSL 83 against
-  79: the branches only shared the link) and not kept. (The first run, still with markitdown, took
+  SHA256. Then every engine is checked on a sample. Its first line names the download (about 390 MB
+  on Windows, 445 on Linux, 355 on macOS - 430, 480 and 380 with pandoc) and what it keeps (about
+  0.95 GB on Windows, 1.2 with pandoc), or says the folder is up to date. From nothing 65-70 s on
+  a 9 MB/s link (~48 of them downloads), an up-to-date check 8 s; the steps side by side were
+  built and measured (62/68 s against 68/65, WSL 83 against 79: the branches only shared the link)
+  and not kept. (The first run, still with markitdown, took
   1 min 47 s.) What it cannot do it names with this OS's command (OCR on Windows on
   ARM and macOS 14 or older; a bare Linux's browser libraries). The work runs detached and the
   command follows it for 100 s (to the end in a terminal), so a harness's timeout does not stop it;
@@ -54,7 +55,7 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   step of its own after the engines. A video read in the environment looks for a newer one every
   three days - in a process of its own that no read waits for (`ytdlp.stamp`;
   `READ_PAGE_SKIP=update` turns it off). The environment's yt-dlp gets the environment's Node for
-  YouTube's JavaScript challenges (`--js-runtimes`). The lock has 55 packages.
+  YouTube's JavaScript challenges (`--js-runtimes`). The lock has 54 packages (55 with pandoc).
 - **`--alternate`, measured** (is the flag called at all, is it worth its engines).
   238 hard pages read the way SKILL.md says, then again with the flag where the advice named it
   and on a sample (72 pages both ways), and 14 headless agent sessions (three weak models) on
@@ -427,6 +428,42 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   - **nothing lost**: the A/B against pandoc again on the 52 files - every count the same
     (headings, table rows, list items, notes, pictures, code blocks), prose words 1 336 902 ->
     1 336 908 (the linked picture's address, and a literal `node\_name` now escaped).
+- **EPUB, ODT and RTF are our own readers', and pandoc leaves `--setup`** (decided after the
+  measurement and the hardening above). `scripts/docreaders.py` reads EPUB 2 and 3, ODT
+  and RTF as Markdown with the standard library alone: headings, nested lists, tables with merged
+  cells, notes, links, pictures as markers where they stand, code, formulas (an ODT's StarMath),
+  code pages and `\u` escapes. Against pandoc 3.9 on 52 files through the CLI (15 EPUB, 18 ODT,
+  19 RTF; LibreOffice's guides, gov.uk's Word files, Google Docs; Word, WordPad, TextEdit; English,
+  Russian, Chinese, Greek, Hebrew, Italian): the files' own words within 0.03 %; headings 2 440
+  against 2 313, table rows 2 282 against 1 970, notes 77 against 74, pictures placed in the text
+  1 126 against 760. pandoc garbled every non-Latin RTF (Greek, Hebrew and Chinese as Latin-1
+  mojibake, Russian without its spaces), lost Frankenstein's endnotes, 62 of the 66 chapter
+  headings of Gutenberg's Pride and Prejudice, whole tables of gov.uk's reports and 573 figure
+  captions of the Calc guide, and left 7 688 HTML tags in it. A document's CLI median, ours in its
+  own process: 0.74 s against 1.27 (EPUB), 0.64 against 0.88 (ODT), 0.60 against 0.80 (RTF).
+  - `doc_text()` asks our readers first and alone for these three formats; `pypandoc_binary` left
+    `envsetup.TOP`, `_pandoc()`, its check and its folder on `PATH` are gone, and the lock is
+    regenerated by `tools/setup_lock.py`: 54 packages, 1 092 hashes, nothing else moved. The
+    download is 41, 35 and 26 MB smaller (about 390 MB on Windows, 445 on Linux, 355 on macOS: the
+    locked wheels by PyPI's sizes, the archives by their Content-Length) and the environment 226 MB
+    (Windows) and 162 MB (Linux) smaller: about 0.95 and 1.1 GB. A machine's own pandoc stays the
+    last resort for an office file the office readers cannot read, as its markitdown does; no
+    advice offers it any more (`setup_rows`, `improve`: "pip install pymupdf");
+  - found and fixed by the readers' measurement, on the pandoc path too (KNOWN-ISSUES 161-164): a
+    damaged part of an EPUB or a DOCX crashed the read ("internal error": the picture order caught
+    `KeyError` alone); an ODT whose `content.xml` unpacks to 1 GB was read whole by `odf_text()`
+    (141 s, 2.1 GB), an EPUB chapter of 1 GB by the picture order (2 GB); an ODT's pictures
+    (`Pictures/`, `media/`) and an EPUB's outside `images/` and `media/` were never placed (176
+    broken markers in two gov.uk reports); `office_fast()` gave nothing for `.docm`, `.dotx`,
+    `.ppsx`, `.potx` and Strict OOXML, which pandoc read - `office_plain()` gives python-docx and
+    python-pptx the plain content type and namespaces;
+  - what nobody reads now: a DOCX of formulas alone (pandoc wrote TeX; the formulas of a DOCX with
+    text were dropped before too: row 165), an RTF's pictures (pandoc's links pointed at files it
+    never wrote: row 166); a cut archive's misleading answer is row 167;
+  - `tests/docreaders.py` (88 checks, 89 on Linux) runs in CI beside the office fixtures; the CLI
+    checks there read with a machine's pandoc on PATH or not, and `tests/setup_audit.py` counts no
+    pandoc among `--setup`'s engines (36). `SKILL.md` names none of this and does not change; main
+    carries one file more (`scripts/docreaders.py`: 31 files).
 - **PubMed** (found by a run without paid keys, 2026-11-20: 69 of 71 pages, the
   other miss a site answering 503 to everyone). Its page answers a client that did not run its
   script with HTTP 203 and "Cookies must be enabled ... reload this page to continue": that

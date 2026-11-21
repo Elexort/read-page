@@ -3,11 +3,11 @@
     python -X utf8 tests/formats.py
 
 RTF and OpenDocument are known by their content - an RTF served as octet-stream, an ODT whose
-`mimetype` is not EPUB's - and read through pandoc, or the stdlib readers without it. A file
+`mimetype` is not EPUB's - and read by our own readers (docreaders.py, tests/docreaders.py). A file
 on this machine goes through the same converters with no network; over MCP only one inside
 read-page's own folders. --alternate reads a PDF with pymupdf4llm when it is installed
 (headings as markdown). YouTube's caption track when yt-dlp gives none - youtube-transcript-api,
-else a machine's own markitdown. Also pandoc's Markdown cleaned
+else a machine's own markitdown. Also a machine's own pandoc's Markdown cleaned
 with code untouched, a DOCX's content controls and text boxes, a PPTX's groups and tables, a plain
 ZIP's files and their text.
 """
@@ -245,7 +245,6 @@ s = serve({"/report.rtf": (200, {"Content-Type": "application/rtf"}, RTF),
 env = {"READ_PAGE_SKIP": "browser"}
 try:
     mod = module()
-    have_pandoc = bool(mod.which("pandoc"))
     # ------------------------------------------------ RTF, by its content too
     for path in ("/report.rtf", "/blob"):
         r = run_read(s.url(path), env=env)
@@ -270,7 +269,7 @@ try:
               r.manifest.get("status") == "ok" and "ODT-MARKER" in text and "ODT-HEADING" in text,
               "%s: %r" % (r.manifest.get("status"), text[:80]))
     plain = mod.odf_text(odt_path)
-    check("ODT without pandoc: heading and paragraphs in order (the stdlib reader)",
+    check("an ODS or ODP's plain text: heading and paragraphs in order (odf_text)",
           plain.startswith("# ODT-HEADING") and plain.rstrip().endswith("ODT-MARKER."), repr(plain[:60]))
 
     # ------------------------------------------------ a picture is saved under its own ending
@@ -949,22 +948,21 @@ try:
             zf.writestr("OEBPS/images/one.png", png(30, 20, (255, 0, 0)))
             zf.writestr("OEBPS/images/two.png", png(40, 30, (0, 255, 0)))
         return path_
-    if not have_pandoc:
-        check.skip("an EPUB with one picture missing from its archive", "no pandoc: no text that names the pictures")
-    else:
-        r = run_read(picture_epub("m4.epub"), "--refresh", env=env)
-        imgs = r.manifest.get("images") or []
-        check("an EPUB with one picture missing from its archive keeps the others, listed first",
-              [(e.get("n"), bool(e.get("file"))) for e in imgs] == [(1, True), (2, True), (3, False)],
-              "%s %s" % (r.manifest.get("status"), [(e.get("n"), e.get("file"), e.get("why")) for e in imgs]))
-        shown = r.file("content.md")
-        folder = os.path.join(r.dir, "img")
-        check("--refresh leaves their files, and every marker of the text has its own number",
-              sorted(os.listdir(folder)) == ["01-one.png", "02-two.png"] if os.path.isdir(folder) else False,
-              "%s %s" % (sorted(os.listdir(folder)) if os.path.isdir(folder) else None,
-                         re.findall(r"\[img #\d+", shown)))
-        check("no two markers share a number", sorted(set(re.findall(r"\[img #(\d+)", shown))) == ["1", "2", "3"]
-              and len(re.findall(r"\[img #\d+", shown)) == 3, str(re.findall(r"\[img #\d+", shown)))
+    # our EPUB reader names the pictures where they stand, on every machine (pandoc's text did, where
+    # pandoc was installed)
+    r = run_read(picture_epub("m4.epub"), "--refresh", env=env)
+    imgs = r.manifest.get("images") or []
+    check("an EPUB with one picture missing from its archive keeps the others, listed first",
+          [(e.get("n"), bool(e.get("file"))) for e in imgs] == [(1, True), (2, True), (3, False)],
+          "%s %s" % (r.manifest.get("status"), [(e.get("n"), e.get("file"), e.get("why")) for e in imgs]))
+    shown = r.file("content.md")
+    folder = os.path.join(r.dir, "img")
+    check("--refresh leaves their files, and every marker of the text has its own number",
+          sorted(os.listdir(folder)) == ["01-one.png", "02-two.png"] if os.path.isdir(folder) else False,
+          "%s %s" % (sorted(os.listdir(folder)) if os.path.isdir(folder) else None,
+                     re.findall(r"\[img #\d+", shown)))
+    check("no two markers share a number", sorted(set(re.findall(r"\[img #(\d+)", shown))) == ["1", "2", "3"]
+          and len(re.findall(r"\[img #\d+", shown)) == 3, str(re.findall(r"\[img #\d+", shown)))
     # a container whose <rootfile tags never close (a few hundred bytes zipped) held the read for a
     # minute and a half; the pictures are still found, in the archive's own order
     control = run_read(picture_epub("h5-control.epub", "<container><rootfiles>" + "<rootfile " * 10, missing=False),

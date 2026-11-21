@@ -20,12 +20,13 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import envsetup  # noqa: E402
 import ownenv  # noqa: E402
 
-# the versions the suites ran green with. yt-dlp is not here: it is never pinned (envsetup.YTDLP)
+# the versions the suites ran green with (pypandoc_binary left 2026-11-21). yt-dlp is not here: it
+# is never pinned (envsetup.YTDLP)
 PINS = {"curl_cffi": "0.17.0", "trafilatura": "2.2.0", "readability-lxml": "0.9", "lxml": "6.1.3",
         "lxml_html_clean": "0.4.5", "html2text": "2025.4.15", "pymupdf": "1.28.2", "pymupdf4llm": "1.28.2",
         "python-docx": "1.2.0", "openpyxl": "3.1.5", "python-pptx": "1.0.2", "pillow": "13.0.0",
         "psutil": "7.2.2", "youtube-transcript-api": "1.2.5", "playwright": "1.63.0",
-        "tesserocr": "2.13.0", "pypandoc_binary": "1.17"}
+        "tesserocr": "2.13.0"}
 
 
 def main(argv):

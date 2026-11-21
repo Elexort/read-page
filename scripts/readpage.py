@@ -141,7 +141,8 @@ BROWSER_STEP_SECONDS = 25          # the browser step: launch, load, settle; a s
 READER_SECONDS = 12                # one remote reader (Firecrawl, Jina), connect included
 READERS_STEP_SECONDS = 20          # all of them; the next one only while time is left
 ARCHIVE_STEP_SECONDS = 20          # Wayback: the CDX lookup and the snapshot together
-CONVERTER_TIMEOUT = 10             # defuddle / pdftotext / markitdown / pandoc; defuddle takes ~1 s
+CONVERTER_TIMEOUT = 10             # defuddle / pdftotext / a machine's markitdown or pandoc each, and our
+                                   # EPUB/ODT/RTF readers for all the read's documents; defuddle takes ~1 s
 PICTURE_ORDER_SECONDS = 10         # an archive's pictures put in reading order (a book's spine); ms for a real one
 OCR_TIMEOUT = 30                   # tesseract on one rendered page of a scan
 OCR_LANGS = os.environ.get("READ_PAGE_OCR_LANGS", "eng")
@@ -921,8 +922,6 @@ def os_install(what):
         "tesseract": ("winget install --id UB-Mannheim.TesseractOCR",
                       "brew install tesseract",
                       "sudo apt install tesseract-ocr"),
-        "pandoc": ("winget install --id JohnMacFarlane.Pandoc", "brew install pandoc",
-                  "sudo apt install pandoc"),
         "lynx": ("choco install lynx", "brew install lynx",
                  "sudo apt install lynx"),
     }
@@ -982,10 +981,9 @@ def setup_rows(c):
         # Pillow is not built in (markitdown[all] brings it through python-pptx)
         ("pillow", bool(libs.get("PIL")), fix("pillow", "pip install pillow"),
          "MCP inline_images: GIF, WebP, AVIF and BMP as PNG, big pictures scaled to 1 568 px"),
-        # markitdown is not recommended any more: pandoc and the office readers read what it
-        # did - one on the machine is still the last resort for a document, never a row of its own
-        ("pandoc", bool(cli.get("pandoc")), fix("pandoc", os_install("pandoc")),
-         "EPUB, RTF, ODT, and what the office readers miss, as Markdown"),
+        # neither markitdown nor pandoc (2026-11-21) is recommended any more: the office readers and
+        # our EPUB, ODT and RTF readers read what they did, and better - one on the machine is still
+        # the last resort for an office file, never a row of its own
         ("pdftotext", True if cli.get("pdftotext") else None if libs.get("pymupdf") else False,
          os_install("poppler"), "PDF text on machines without pymupdf"),
         ("tesseract", tess, (ownenv.ocr_fix(c.get("ocr_error")) if not tess else "")
@@ -4867,9 +4865,12 @@ def tables_advice(info):
 
 def doc_text(path, kind, c, workdir, alternate=False, name=""):
     """PDF / DOCX / PPTX / XLSX / EPUB / ODT / RTF / a plain ZIP -> text, plus a note when a text
-    layer is missing. markitdown is no longer installed: pandoc and the office readers
-    read what it did, and better (the A/B in references/documents.md); one already on the machine
-    is the last resort. `name`: a file's name inside an archive (its tables are reported by it)."""
+    layer is missing. EPUB, ODT and RTF are our own readers' (docreaders.py, the standard library
+    alone, in a process of their own): measured against pandoc on 52 files they lose nothing it
+    kept and keep what it lost (references/documents.md), so --setup installs no pandoc, and no
+    markitdown either. A machine's own pandoc, then its markitdown, are the last resort for an
+    office file the office readers cannot read. `name`: a file's name inside an archive (its
+    tables are reported by it)."""
     note = ""
     sub = zip_subtype(path) if kind == "zip" else ""
     secs = budget.cap(CONVERTER_TIMEOUT, floor=1.0)
@@ -4877,26 +4878,18 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
         fast = office_fast(path, sub)
         if len(fast.strip()) > 5:
             return fast, ""
-    if kind == "rtf" or sub in ("odt", "ods", "odp"):
-        # pandoc reads RTF and ODT into markdown (tables, lists, headings); without it the
-        # stdlib readers keep the text
-        if c["cli"].get("pandoc") and sub != "ods" and sub != "odp":
-            t_pd = now()
-            md = pandoc_md(c["cli"]["pandoc"], path, "rtf" if kind == "rtf" else "odt", secs)
-            _DOCS["spent"] += now() - t_pd           # one converter time, pandoc's in it
-            if md.strip():
-                return md, ""
-        if kind == "rtf" or sub == "odt":
-            # our reader's answer stands: a reader that breaks gives its plain text itself, in its own
-            # process (the old plain readers here read a part whole, or in quadratic time)
-            md, why = own_doc(path, "rtf" if kind == "rtf" else "odt")
-            return md, why or ("" if md.strip() else "no text in this %s" % (sub or kind).upper())
+    if kind == "rtf" or sub == "odt":
+        # our reader's answer stands: a reader that breaks gives its plain text itself, in its own
+        # process (the old plain readers here read a part whole, or in quadratic time)
+        md, why = own_doc(path, "rtf" if kind == "rtf" else "odt")
+        return md, why or ("" if md.strip() else "no text in this %s" % (sub or kind).upper())
+    if sub in ("ods", "odp"):
+        # a sheet or a slide deck as its headings and paragraphs (odf_text)
         notes = []
         text = odf_text(path, notes)
         if text.strip():
-            return text, "; ".join(notes) or ("" if c["cli"].get("pandoc") else
-                                              "read without pandoc: plain text, tables flattened")
-        return "", "; ".join(notes) or "no text in this %s" % (sub or kind).upper()
+            return text, "; ".join(notes) or "plain text, tables flattened"
+        return "", "; ".join(notes) or "no text in this %s" % sub.upper()
     if kind == "pdf":
         if c["libs"].get("pymupdf"):
             text = None
@@ -4977,24 +4970,23 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
         text = zip_text(path, c, workdir)               # a plain archive: its files and their text
         if text.strip():
             return text, note
-    elif kind == "zip" and c["cli"].get("pandoc"):
-        t_pd = now()
-        md = pandoc_md(c["cli"]["pandoc"], path, sub if sub in ("epub", "docx", "pptx", "xlsx") else "", secs)
-        if sub == "epub":
-            _DOCS["spent"] += now() - t_pd           # one converter time, pandoc's in it
-        if md.strip():
-            return md, note
-    if sub == "epub":
+    elif sub == "epub":
         md, why = own_doc(path, "epub")
         if md.strip() or not why.startswith("the reader failed"):
             return md, why or note or ("" if md.strip() else "no text in this EPUB")
         note = note or why
+    elif kind == "zip" and c["cli"].get("pandoc"):
+        # a machine's own pandoc: the last resort for an office file the office readers cannot read
+        # (a DOCX that is one formula; --setup installs none)
+        md = pandoc_md(c["cli"]["pandoc"], path, sub if sub in ("docx", "pptx", "xlsx") else "", secs)
+        if md.strip():
+            return md, note
     if c["cli"].get("markitdown"):                      # a machine's own markitdown: the last resort
         outp = os.path.join(workdir, "_doc.md")
         rc, so, se = run_tool([c["cli"]["markitdown"], path, "-o", outp], timeout=secs)
         if rc == 0 and os.path.exists(outp):
             return open(outp, encoding="utf-8", errors="replace").read(), note
-    return "", note or "no converter for this file type (pandoc, pymupdf)"
+    return "", note or "no converter for this file type (pymupdf)"
 
 
 # ---------------------------------------------------------------- external
@@ -5931,9 +5923,8 @@ def gaps(c, ctx):
     if ctx.get("need_browser") and (ctx.get("browser_disabled") or not c.get("browsers")):
         spec_m.append({"what": "browser", "fix": fix("browser", "install Chrome or Edge, then pip install patchright"),
                        "gain": "JavaScript pages and hash routes (this page needs it)"})
-    if ctx.get("kind_doc") and not (libs.get("pymupdf") or cli.get("pandoc") or cli.get("markitdown")
-                                    or cli.get("pdftotext")):
-        spec_m.append({"what": "documents", "fix": fix("pymupdf", "pip install pymupdf, and pandoc"),
+    if ctx.get("kind_doc") and not (libs.get("pymupdf") or cli.get("markitdown") or cli.get("pdftotext")):
+        spec_m.append({"what": "documents", "fix": fix("pymupdf", "pip install pymupdf"),
                        "gain": "reading this file type"})
     if ctx.get("no_text_layer") and c.get("ocr_error") and not (cli.get("tesseract") or libs.get("tesserocr")):
         # OCR is installed and cannot start: a gap of this scan, said as one - not an `empty` with no word of it

@@ -103,8 +103,10 @@ check("empty machine: the report names --setup, and that the user's one yes is a
 setup_rows_ = [(n, f) for n, good, f, _g in rows if not good and f == "readpage.py --setup"]
 own = [n for n, good, f, _g in rows if not good and f and f != "readpage.py --setup"]
 check("empty machine: --setup is the fix for every engine it installs here",
-      {"curl_cffi", "defuddle", "trafilatura", "browser", "pymupdf", "pandoc", "yt-dlp"}
+      {"curl_cffi", "defuddle", "trafilatura", "browser", "pymupdf", "yt-dlp"}
       <= {n for n, _f in setup_rows_}, str(sorted(own)))
+check("empty machine: no pandoc is offered (our readers read EPUB, ODT and RTF; --setup installs none)",
+      "pandoc" not in {n for n, _g, _f, _x in rows} and "pandoc" not in report.lower(), "")
 want_installer = {"nt": "winget", "darwin": "brew"}.get(
     "nt" if os.name == "nt" else ("darwin" if sys.platform == "darwin" else ""), "apt")
 check("empty machine: what --setup cannot install names this OS's installer",
@@ -219,10 +221,12 @@ covered = {n for n, _g, _f, _x in rows_full}
 check("every library caps() looks for is either a row or not used",
       {"trafilatura", "html2text", "pymupdf", "curl_cffi", "readability"} <= covered,
       str(sorted({"trafilatura", "html2text", "pymupdf", "curl_cffi", "readability"} - covered)))
-# markitdown is looked for only as a document's last resort when the machine has one: never a row
+# markitdown and pandoc are looked for only as an office file's last resort when the machine has one:
+# never a row
 check("every CLI caps() looks for is either a row or not used",
-      {"defuddle", "pandoc", "pdftotext", "curl", "tesseract", "yt-dlp"} <= covered and "markitdown" not in covered,
-      str(sorted({"defuddle", "pandoc", "pdftotext", "curl", "tesseract", "yt-dlp"} - covered)))
+      {"defuddle", "pdftotext", "curl", "tesseract", "yt-dlp"} <= covered
+      and not ({"markitdown", "pandoc"} & covered),
+      str(sorted({"defuddle", "pdftotext", "curl", "tesseract", "yt-dlp"} - covered)))
 check("the report names nothing the reader never runs (LibreOffice, ffmpeg)",
       not ({"libreoffice", "ffmpeg"} & covered) and "libreoffice" not in mod.setup_report(empty).lower()
       and "ffmpeg" not in mod.setup_report(empty).lower(), str(sorted(covered)))

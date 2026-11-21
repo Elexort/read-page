@@ -145,6 +145,11 @@ jobs:
         shell: bash
         run: python -X utf8 tests/office_fixtures.py
 
+      - name: our EPUB, ODT and RTF readers (what they keep; hostile files in a child, past time or memory)
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python -X utf8 tests/docreaders.py
+
       - name: MCP protocol smoke
         if: ${{ !cancelled() }}
         shell: bash

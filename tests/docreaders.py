@@ -3,9 +3,9 @@ reader keeps - headings, lists, tables, notes, links, pictures, code, code pages
 answers a hostile file: a cut archive, broken XML, an entity bomb, a zip bomb, deep nesting,
 garbage. The hostile files of an independent review (2026-11-21) are built here, small, and each
 is read in a child Python killed past its time or its memory, so the old code fails them in
-seconds. Then the CLI with READ_PAGE_SKIP=pandoc, which puts these readers in
-pandoc's place, and the readers' own process: stopped at its time, one clock for a ZIP's
-documents. No network.
+seconds. Then the CLI, which reads these formats with these readers alone (pandoc left --setup on
+2026-11-21), and the readers' own process: stopped at its time, one clock for a ZIP's documents.
+No network.
 
     python -X utf8 tests/docreaders.py
 """
@@ -641,12 +641,13 @@ with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
 got, secs, peak = peak_alloc(readpage.docx_notes, buf.getvalue())
 check("133: a docx's footnotes that unpack to 60 MB are read up to a cap", peak < 50, "%.2fs, %.0f MB" % (secs, peak))
 
-# ------------------------------------------------ the CLI with these readers in pandoc's place
+# ------------------------------------------------ the CLI: these readers, with a machine's own pandoc there or not
 for name, fact in (("book.epub", "ENDNOTE-TEXT"), ("doc.odt", "ODT-NOTE"), ("doc.rtf", "RTF-NOTE")):
-    r = run_read(path(name), env={"READ_PAGE_SKIP": "pandoc,browser"})
+    r = run_read(path(name), env={"READ_PAGE_SKIP": "browser", "READ_PAGE_TRACE": "1"})
     text = r.file("content.md")
-    check("cli without pandoc: %s is read, its notes too" % name,
-          r.manifest.get("status") == "ok" and fact in text, "%s %r" % (r.manifest.get("status"), text[:60]))
+    check("cli: %s is read by our reader, its notes too" % name,
+          r.manifest.get("status") == "ok" and fact in text and b"event=document.own" in r.err,
+          "%s %r" % (r.manifest.get("status"), text[:60]))
 
 # ------------------------------------------------ the readers in a process of their own, on one clock
 readpage.budget.start(readpage.budget.SECONDS)
