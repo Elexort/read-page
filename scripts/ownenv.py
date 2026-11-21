@@ -11,6 +11,7 @@ run imports it before the environment, if any, takes over.
 import json
 import os
 import sys
+import threading
 
 STATE_SCHEMA = 1
 
@@ -75,6 +76,59 @@ def ascii_path(p):
     except (AttributeError, OSError, ValueError):
         return ""
     return short if short.isascii() else ""
+
+
+def tess_arg(td):
+    """(the path tesserocr is given for the tessdata folder `td`, the working directory to give it from or None).
+    `td` itself where it opens (ASCII, or off Windows) and its 8.3 short name where Windows has one. Where it has
+    none - a volume that makes no short names: the D: of a CI runner, a dev drive - the folder's own name, which
+    is ASCII, from its parent (the process's working directory is a wide-character path: only the narrow
+    argument is the trouble). ("", None) when none of that opens it: the folder's own name is outside ASCII."""
+    short = ascii_path(td)
+    if short or not td:
+        return short or td, None
+    parent, name = os.path.split(os.path.abspath(td))
+    if name.isascii() and os.path.isdir(td):
+        return name, parent
+    return "", None
+
+
+_CWD = threading.RLock()                 # the working directory is the whole process's: one mover at a time
+
+
+class tess_dir(object):
+    """`with ownenv.tess_dir(td) as path:` - hand `path` to tesserocr (get_languages, PyTessBaseAPI) and let it
+    start inside the block. When the path is relative (tess_arg) the working directory is the folder's parent
+    for the block only: tesseract reads its data when it starts, and the picture is read after. tesserocr
+    opens a narrow path in the system's ANSI code page, so a tessdata folder under a profile named in another
+    alphabet (a local account `Ivan`, in Cyrillic) was dead for OCR without a word; a
+    runner's own volume made the short name the 2026-11-21 CI relied on impossible."""
+
+    def __init__(self, td):
+        self.td, self.old = td, None
+
+    def __enter__(self):
+        path, cwd = tess_arg(self.td)
+        if cwd:
+            _CWD.acquire()
+            try:
+                self.old = os.getcwd()
+                os.chdir(cwd)
+            except OSError:
+                self.old = None
+                _CWD.release()
+                return ""
+        return path
+
+    def __exit__(self, *exc):
+        if self.old is not None:
+            try:
+                os.chdir(self.old)
+            except OSError:
+                pass
+            self.old = None
+            _CWD.release()
+        return False
 
 
 # what to say when OCR cannot start for a path (the one fix that works: --setup would meet the same wall)
@@ -470,6 +524,74 @@ def mac_version():
         return tuple(int(x) for x in platform.mac_ver()[0].split(".")[:2])
     except ValueError:
         return (0,)
+
+
+def platform_name():
+    """This machine, as a sentence says what it lacks: "musl Linux on arm64", "Windows on ARM", "macOS 14.7 on x64"."""
+    m = machine()
+    if os.name == "nt":
+        return "Windows on ARM" if m == "arm64" else "Windows on %s" % m
+    if sys.platform == "darwin":
+        return "macOS %s on %s" % (".".join(str(x) for x in mac_version()), m)
+    return "%sLinux on %s" % ("musl " if musl() else "", m)
+
+
+def linux_family(text=None):
+    """The package manager of this Linux by its /etc/os-release (ID and ID_LIKE, or `text`): apk, apt, dnf,
+    zypper or pacman; '' when it is none of those."""
+    if text is None:
+        try:
+            with open("/etc/os-release", encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            return ""
+    ids = set()
+    for ln in text.splitlines():
+        k, _, v = ln.partition("=")
+        if k.strip() in ("ID", "ID_LIKE"):
+            ids.update(v.strip().strip("\"'").lower().split())
+    for fam, names in (("apk", ("alpine",)), ("apt", ("debian", "ubuntu")),
+                       ("dnf", ("fedora", "rhel", "centos", "rocky", "almalinux", "amzn")),
+                       ("zypper", ("suse", "opensuse", "sles")), ("pacman", ("arch", "manjaro"))):
+        if ids & set(names):
+            return fam
+    return ""
+
+
+def sudo():
+    """'sudo ' for a user; '' for root, whose container has no sudo and needs none."""
+    try:
+        return "" if os.geteuid() == 0 else "sudo "
+    except AttributeError:                       # Windows
+        return "sudo "
+
+
+# what the machine's own package manager calls each tool (winget / brew / a Linux family's packages)
+_SYSTEM = {"curl": ("winget install --id cURL.cURL", "brew install curl", {}, "curl"),
+           "chromium": ("winget install --id Google.Chrome", "brew install --cask google-chrome", {}, "chromium"),
+           "poppler": ("winget install --id oschwartz10612.Poppler", "brew install poppler",
+                       {"pacman": "poppler", "zypper": "poppler-tools"}, "poppler-utils"),
+           "tesseract": ("winget install --id UB-Mannheim.TesseractOCR", "brew install tesseract",
+                         {"apt": "tesseract-ocr", "apk": "tesseract-ocr"}, "tesseract"),
+           "lynx": ("choco install lynx", "brew install lynx", {}, "lynx")}
+_INSTALL = {"apt": "apt install", "apk": "apk add", "dnf": "dnf install", "zypper": "zypper install",
+            "pacman": "pacman -S"}
+
+
+def system_install(what, family=None, root=None):
+    """The command a user of *this* machine types to get `what` (curl, chromium, poppler, tesseract, lynx) from
+    its own package manager: winget or choco on Windows, brew on macOS, and on a Linux the one its os-release
+    names (apt where it is unknown) - without `sudo` for root, which a container has none of."""
+    win, mac, names, default = _SYSTEM[what]
+    if os.name == "nt":
+        return win
+    if sys.platform == "darwin":
+        return mac
+    fam = (linux_family() if family is None else family) or "apt"
+    pre = (sudo() if root is None else ("" if root else "sudo "))
+    if fam == "apt" and what == "chromium":
+        return "%sapt install chromium-browser  (or %ssnap install chromium)" % (pre, pre)
+    return "%s%s %s" % (pre, _INSTALL[fam], names.get(fam, default))
 
 
 def ocr_here():

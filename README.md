@@ -296,8 +296,24 @@ in the background (`READ_PAGE_SKIP=update` turns that off).
 
 What `--setup` cannot do, it says, with this OS's command: OCR on Windows on ARM and macOS 14 or
 older (no `tesserocr` build: `winget`/`brew install tesseract`), the browser's system libraries on a
-bare Linux (`sudo apt-get install` of the libraries it names), `curl`, `pdftotext` and `lynx`, which stay the
-machine's own. A language beyond English and Russian: name it in `READ_PAGE_OCR_LANGS`
+bare Linux (`apt-get install` of the libraries it names), `curl`, `pdftotext` and `lynx`, which stay the
+machine's own. A package with no build for the machine is left out and named with its reason and what to
+do (the package manager of the machine: `apt`, `apk`, `dnf`, `zypper` or `pacman` on Linux, by its
+os-release). Measured by a real install on every runner GitHub gives a public repository
+(`.github/workflows/install.yml`, 2026-11-21), the floors are:
+
+| Machine | `--setup` leaves out | What still reads |
+|---|---|---|
+| Linux with glibc (x64, arm64), Windows x64, macOS 15 and newer (arm64, Intel) | nothing; a bare Linux lacks the browser's system libraries, and the report names them | everything |
+| Windows on ARM | PDF tables (no `pymupdf-layout` wheel), OCR (`tesserocr`) | PDF text, the office readers, EPUB, ODT and RTF; `winget install` of tesseract gives OCR |
+| Alpine and other musl Linux, x64 | the browser (no Playwright build), PDF tables | everything else; Node comes from PyPI there |
+| musl Linux, arm64 | the same, and PyMuPDF (PDF text then comes from `pdftotext`), OCR | `apk add poppler-utils tesseract-ocr` |
+| macOS 14 and older | OCR (`tesserocr` needs macOS 15; not run in CI: GitHub retired its macOS 14 runners) | `brew install tesseract` |
+
+Where the home folder has letters outside ASCII (a local account `Иван`) OCR still starts: by the 8.3 short
+name of its data folder where the volume makes one, else by the folder's own name from its parent.
+
+A language beyond English and Russian: name it in `READ_PAGE_OCR_LANGS`
 (`eng+deu`), then `--setup` again. Without the environment the skill uses whatever the machine
 has, as before. Behind a proxy it uses the machine's (`HTTPS_PROXY`, or Windows' own setting); a
 company's package mirror named in `UV_DEFAULT_INDEX` or `PIP_INDEX_URL` is used for the Python
@@ -373,8 +389,8 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | The 226-page check (2026-11-06), pages picked to be hard | **202 ok, 6 blocked, 4 login_required, 5 not_found, 7 error, 2 empty**, each with its reason; p50 2.1 s, max 22.9 s on a fast machine, p50 4.8 s, max 30.9 s on an emulated weak laptop |
 | A set read the way `SKILL.md` says (2026-11-07): `--allow-external` first, advice followed, the outline to jump | a 34-page set **34 of 34**, 37 held-out pages no rule was tuned on **37 of 37** (each fact taken from a real Chrome; walls and paywalls by an honest status or through a reader); **1.10 calls** a question; every answer within 9 911 bytes and 309 lines, no CR; from the cache p50 0.22 s, max 0.26; UTF-8 whole in cmd, PowerShell 5.1 and 7, Git Bash and WSL under five code pages |
 | Contract | every manifest in the suite validated against `references/manifest-schema.json` (17 manifests, 0 errors) |
-| Tests | answer contract **84**, statuses **43**, timeouts **15**, deadline **22**, formats **76** (73 off Windows), reading **19**, sources **42**, blocks **26**, images **48**, speed **8**, MCP parallel **14**, security **42** (38 on Windows), props **82**, fixes **154**, channel **9**, setup audit **36**, environment **102** (94 off Windows), MCP **28**, office **3**, our EPUB/ODT/RTF readers **88** (89 on Linux), browser live **32**; against the real services: sources live **20** |
-| CI | ubuntu (3.9 and 3.12), windows, macOS; plus a browser job on all three |
+| Tests | answer contract **84**, statuses **43**, timeouts **15**, deadline **22**, formats **76** (73 off Windows), reading **19**, sources **42**, blocks **26**, images **48**, speed **8**, MCP parallel **14**, security **42** (38 on Windows), props **82**, fixes **154**, channel **9**, setup audit **36**, environment **117** (106 off Windows), MCP **28**, office **3**, our EPUB/ODT/RTF readers **88** (89 on Linux), browser live **32**; against the real services: sources live **20** |
+| CI | the offline suites on ubuntu (3.9 and 3.12), windows, macOS; a browser job on all three; and a real install - `--setup` from nothing into a folder with a space and Cyrillic in its path, every engine checked, the suites and a scanned PDF read through OCR under the environment's Python, `--setup` again with nothing to fetch - on Linux, Windows and macOS, x64 and arm64, a user's own clone-and-read, a bare Python, and Alpine and Ubuntu containers (`install.yml`) |
 | Coverage | 65 % of the engine's statements |
 
 The browser job is the interesting one: a shell that mounts in 250 ms, a shell that mounts after 11 s
@@ -412,7 +428,7 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (165 rows: 114 fixed, 13 planned, 38 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (168 rows: 118 fixed, 12 planned, 38 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License

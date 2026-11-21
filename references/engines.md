@@ -360,6 +360,29 @@ scan (2026-11-19): clean CER 0.19 / 0.48 / 1.71 %, poor 39.6 % all three, 0.21 /
 picture, eng+rus 8 / 31 / 43 MB; on the agent post's figures fast found as many words at
 confidence 80+ (Figure 1: 55 / 50 / 48, 14 / 14 / 15 of its 16 labels) in a third of best's time.
 
+**Platform floors.** The whole set installs with one `uv pip install -r` of the lock; where that fails
+(a package of it has no wheel for the OS and CPU), the 16 top packages go one at a time, and each that fails is
+named in `setup.json`'s `problems` with a reason and a fix. uv's words tell a missing build ("has no wheels with a
+matching platform tag", "Wheels are required for X because building from source is disabled") from any other
+failure, which is said as it was. A real install on every GitHub runner (`.github/workflows/install.yml`,
+2026-11-21, the lock of that day) found: Windows on ARM has no wheel of `pymupdf-layout` (so no PDF tables),
+`tesserocr` (no OCR; `pypandoc_binary` had none either, and left the lock on 2026-11-21); musl Linux x64 none of
+`pymupdf-layout` (no PDF tables) or `playwright` (no browser: nothing else drives one, so JavaScript pages stay
+unread); musl arm64 also none of `pymupdf` (PDF text comes from `pdftotext`) or `tesserocr`. Node on musl is
+`nodejs-wheel-binaries` (nodejs.org has no musl build). The fix of a missing engine that is a program (OCR,
+PDF text) is the machine's own package (`ownenv.system_install`: winget, brew, or apt, apk, dnf,
+zypper, pacman by `/etc/os-release`, with no `sudo` for root); for the others it is the plain "none here", and
+what still reads. A bare Linux also lacks the system libraries of Chromium: `playwright install-deps
+--dry-run` names them, and the fix is `apt-get install` of that list. Each matrix row of `install.yml` lists
+what its runner lacks; a gap that is not on the list turns the job red.
+
+**OCR under a folder with letters outside ASCII.** tesserocr opens its data folder in the ANSI code page of the
+system, so `C:\Users\Иван\.read-page\tessdata` failed (code page 1252) and OCR was dead without a word. The
+folder goes by its 8.3 short name where the volume makes one (the system volume does; a runner's `D:` and a
+dev drive do not), else by its own name, which is ASCII, from its parent: the working directory is moved there
+while tesseract starts (`ownenv.tess_dir`; it reads its data at the start, and the picture is read after).
+Measured against a Cyrillic folder on code page 1252: the absolute path fails, the relative one reads.
+
 The work runs detached (its parent, a launcher, is gone at once), so a harness that kills a
 long command does not kill it; the command shows its progress for 100 s (in a terminal, to the
 end), then says it goes on in the background, and a second `--setup` follows the one at work - a run
