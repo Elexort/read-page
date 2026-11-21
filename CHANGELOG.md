@@ -29,7 +29,7 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   make links); and on the slowest runner (macOS Intel) an archive that stalls took 22.7 s against a check of
   22 (it allows 26).
 - **OCR under a home with letters outside ASCII, on a volume that makes no short names** (a GitHub Windows
-  runner's `D:`, a dev drive): the real install there reproduced what the review's H1 had fixed only where
+  runner's `D:`, a dev drive): the real install there reproduced what the fix for OCR under such a path had fixed only where
   Windows makes an 8.3 name - `--setup` said "set READ_PAGE_HOME to an ASCII-only path", and every scan read
   `empty`. The data folder's own name, which is ASCII, is now given to tesserocr from its parent, with the working
   directory moved there while tesseract starts (`ownenv.tess_dir`; it reads its data at the start; measured on

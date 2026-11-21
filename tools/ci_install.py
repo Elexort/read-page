@@ -249,8 +249,7 @@ def cmd_machine(a):
 
 def cmd_home(a):
     base = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
-    # a space and "Ivan" in Cyrillic: the review of --setup asked for exactly this home (H1 of the 2026-11-20
-    # review: OCR died silently on such a path on Windows)
+    # a space and "Ivan" in Cyrillic: OCR once died silently on such a path on Windows
     home = os.path.join(base, "rp home " + IVAN)
     shutil.rmtree(home, ignore_errors=True)
     export_env("READ_PAGE_HOME", home)

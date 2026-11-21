@@ -24,8 +24,8 @@ env:
 
 jobs:
   setup:
-    # From nothing, into a folder with a space and Cyrillic letters in its path (the review of --setup
-    # asked for exactly that): the setup, every engine checked, the offline suites under the
+    # From nothing, into a folder with a space and Cyrillic letters in its path (such a path once left
+    # OCR dead without a word): the setup, every engine checked, the offline suites under the
     # environment's own Python, then --setup again, which must have nothing to fetch.
     name: setup (${{ matrix.name }})
     runs-on: ${{ matrix.os }}

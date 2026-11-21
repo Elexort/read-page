@@ -101,7 +101,7 @@ class tess_dir(object):
     start inside the block. When the path is relative (tess_arg) the working directory is the folder's parent
     for the block only: tesseract reads its data when it starts, and the picture is read after. tesserocr
     opens a narrow path in the system's ANSI code page, so a tessdata folder under a profile named in another
-    alphabet (a local account `Ivan`, in Cyrillic) was dead for OCR without a word (the review's H1); a
+    alphabet (a local account `Ivan`, in Cyrillic) was dead for OCR without a word; a
     runner's own volume made the short name the 2026-11-21 CI relied on impossible."""
 
     def __init__(self, td):
