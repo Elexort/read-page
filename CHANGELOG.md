@@ -39,9 +39,11 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
 - **Mirrors and OCR languages for a user in mainland China** (KNOWN-ISSUES 172, 173): pip's own configuration
   (`pip.ini`, `pip.conf`) is read for its `index-url` when no variable names an index; `READ_PAGE_TESSDATA_URL`
   names a mirror for the OCR data (https, a folder or a template with `{lang}`); every mirror variable is named in
-  the docs and in the setup's log and report. `--setup` fetches English and the pack of the user's own language
-  (Windows' user locale or `LANG`: zh-CN `chi_sim`, zh-TW `chi_tra`, ja `jpn`, ko `kor`, ru `rus`, ...) instead of
-  English and Russian for everyone, and a read in the environment reads with it beside English.
+  the docs and in the setup's log and report. `--setup` fetches English and the packs of the user's own languages
+  (the one the machine is set to - Windows' user locale or `LANG` - and the others in the user's list: Windows'
+  language list, `LANGUAGE`, a Mac's AppleLanguages; at most three: zh-CN `chi_sim`, zh-TW `chi_tra`, ja `jpn`, ko
+  `kor`, ru `rus`, ...) instead of English and Russian for everyone, and a read in the environment reads with them
+  beside English.
 - **CI for what was not yet checked** (KNOWN-ISSUES 174-176): `install.yml` also runs `--setup` in Debian 11 and
   Ubuntu 20.04 (glibc 2.31), Rocky Linux 8 (glibc 2.28), Fedora, Arch and openSUSE containers; behind a TLS-inspecting
   proxy (mitmproxy, its root in the OS's store only) on Linux, Windows and macOS; on a Windows whose Python and Git's

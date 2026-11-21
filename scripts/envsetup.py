@@ -1399,7 +1399,7 @@ class Work:
         td = os.path.join(self.d, "tessdata")
         os.makedirs(td, exist_ok=True)
         self.info["tessdata"] = "tessdata"
-        mine = ownenv.ocr_default_packs(os.environ)               # English, and the pack of this machine's language
+        mine = ownenv.ocr_default_packs(os.environ)               # English, and the packs of the user's languages
         langs = dict((x, TESSDATA.get(x)) for x in mine)
         got, bad = [], []
         for x in os.environ.get("READ_PAGE_OCR_LANGS", "").split("+"):     # a language the user named
@@ -1433,7 +1433,8 @@ class Work:
         if bad:
             self.lack("ocr-langs", "language data not downloaded: %s" % ", ".join(bad))
         self.info["ocr_langs"] = [x for x in got if x != "osd"]
-        why = "" if len(mine) < 2 else " - English and the pack of this machine's language (%s)" % ownenv.system_language()
+        why = "" if len(mine) < 2 else " - English and the packs of the user's languages (%s)" % ", ".join(
+            ownenv.system_languages())
         return bool(got), "%s (tessdata_fast 4.1.0%s; READ_PAGE_OCR_LANGS names others)" % ("+".join(got), why) + (
             "; failed: %s" % ", ".join(bad) if bad else "")
 

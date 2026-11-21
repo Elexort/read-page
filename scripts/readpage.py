@@ -992,8 +992,8 @@ def setup_rows(c):
         packs = fix("ocr-langs", "download a language's .traineddata (rus, deu, jpn...) into tessdata - "
                                  "github.com/tesseract-ocr/tessdata_fast - and name it in READ_PAGE_OCR_LANGS")
         if packs == SETUP:
-            packs += (" (English and the pack of this machine's language; READ_PAGE_OCR_LANGS=eng+deu names others)")
-        # after --setup the choice is made (English and this machine's language): the row is not a nag then
+            packs += (" (English and the packs of the user's languages; READ_PAGE_OCR_LANGS=eng+deu names others)")
+        # after --setup the choice is made (English and the user's languages): the row is not a nag then
         rows.insert(at, ("ocr-langs", True if any(x != "eng" for x in langs) else (
             None if (ownenv.status().get("used") and ownenv.load().get("ocr_langs")) else False), packs,
                          "a scan in another language; tesseract alone reads English"))

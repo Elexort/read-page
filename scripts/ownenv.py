@@ -110,11 +110,58 @@ def system_language(env=None):
     return ""
 
 
+def _os_languages():
+    """The languages the user put in this machine's list, in its order: Windows' (Settings, Language: `['en-US',
+    'ru']`), a Mac's AppleLanguages; [] elsewhere and where the list cannot be read."""
+    if os.name == "nt":
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\International\User Profile") as k:
+                v = winreg.QueryValueEx(k, "Languages")[0]
+            return [str(x) for x in (v if isinstance(v, list) else [v]) if x]
+        except (ImportError, OSError, ValueError):
+            return []
+    if sys.platform == "darwin":
+        import subprocess
+        try:
+            p = subprocess.run(["defaults", "read", "-g", "AppleLanguages"], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return []
+        text = p.stdout.decode("utf-8", "replace") if p.returncode == 0 else ""
+        return re.findall(r'(?m)^\s*"?([A-Za-z]{2,3}(?:[-_][A-Za-z0-9]+)*)"?,?\s*$', text)
+    return []
+
+
+def system_languages(env=None):
+    """The user's languages without repeats: the one the machine is set to first (system_language), then the others
+    the user set up - LANGUAGE's list (`ru:en`), Windows' language list, a Mac's AppleLanguages."""
+    env = os.environ if env is None else env
+    names = [system_language(env)] + (env.get("LANGUAGE") or "").split(":")
+    if env is os.environ:
+        names += _os_languages()
+    out, seen = [], set()
+    for x in names:
+        x = str(x or "").strip()
+        if x and x not in ("C", "POSIX") and not x.startswith("C.") and x.lower() not in seen:
+            seen.add(x.lower())
+            out.append(x)
+    return out
+
+
+OCR_MORE_PACKS = 3          # the packs beyond English that --setup fetches for the user's languages (a few MB each)
+
+
 def ocr_default_packs(env=None):
-    """The OCR packs --setup fetches whatever the user names: English, and the pack of the machine's own language
-    (READ_PAGE_OCR_LANGS names more). It was English and Russian, one person's choice."""
-    pack = ocr_pack_for(system_language(env))
-    return ["eng"] + ([pack] if pack and pack != "eng" else [])
+    """The OCR packs --setup fetches whatever the user names: English, and the packs of the user's own languages -
+    the one the machine is set to and the others in the user's list (an English Windows with Russian in it gets
+    rus), at most OCR_MORE_PACKS of them. READ_PAGE_OCR_LANGS names more."""
+    packs = ["eng"]
+    for name in system_languages(env):
+        pack = ocr_pack_for(name)
+        if pack and pack not in packs and len(packs) <= OCR_MORE_PACKS:
+            packs.append(pack)
+    return packs
 
 
 def ascii_path(p):
@@ -561,7 +608,7 @@ def _tools(d, info):
     if not os.environ.get("READ_PAGE_TESSDATA") and os.path.isdir(td):
         os.environ["READ_PAGE_TESSDATA"] = td
     if not os.environ.get("READ_PAGE_OCR_LANGS"):
-        # the pack --setup fetched for this machine's language (or a language it was asked for) is read with, beside
+        # the packs --setup fetched for the user's languages (or the languages it was asked for) are read with, beside
         # English; Russian keeps its own rule (a Cyrillic page), as before
         more = [x for x in (info.get("ocr_langs") or []) if x not in ("eng", "rus", "osd")]
         if more:

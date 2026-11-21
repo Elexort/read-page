@@ -2101,6 +2101,26 @@ attempt("the machine's language is read from the environment where the OS has no
                  and ownenv.system_language({"LANGUAGE": "ko:en"}) == "ko" and ownenv.system_language({"LANG": "POSIX"}) == ""
                  and ownenv.ocr_default_packs({"LANG": "zh_CN.UTF-8"}) == ["eng", "chi_sim"]
                  and ownenv.ocr_default_packs({"LANG": "en_US.UTF-8"}) == ["eng"], ""))
+real_lang4, real_os4 = ownenv.system_language, getattr(ownenv, "_os_languages", None)
+saved_language4 = os.environ.pop("LANGUAGE", None)
+try:
+    ownenv.system_language = lambda env=None: "en-150"
+    ownenv._os_languages = lambda: ["en-US", "ru"]                 # an English Windows with Russian in its list
+    packs_en_ru = ownenv.ocr_default_packs(os.environ)
+    ownenv.system_language = lambda env=None: "zh-CN"
+    ownenv._os_languages = lambda: ["zh-Hans-CN", "ja", "ko-KR", "de-DE", "fr-FR"]
+    packs_many = ownenv.ocr_default_packs(os.environ)
+finally:
+    ownenv.system_language = real_lang4
+    if real_os4 is not None:
+        ownenv._os_languages = real_os4
+    if saved_language4 is not None:
+        os.environ["LANGUAGE"] = saved_language4
+attempt("... and the user's other languages count: an English Windows with Russian in its language list gets rus too "
+        "(at most three packs beyond English), and so does LANGUAGE's list on POSIX",
+        lambda: (packs_en_ru == ["eng", "rus"] and packs_many == ["eng", "chi_sim", "jpn", "kor"]
+                 and ownenv.ocr_default_packs({"LANG": "ru_RU.UTF-8", "LANGUAGE": "ru:en:de"}) == ["eng", "rus", "deu"],
+                 str((packs_en_ru, packs_many))))
 asked3 = []
 
 
@@ -2112,6 +2132,9 @@ def fetch_names(url, dest, sha=None, timeout=60):
 
 
 real_lang3, real_fetch4 = ownenv.system_language, envsetup.fetch
+real_os3 = getattr(ownenv, "_os_languages", None)
+ownenv._os_languages = lambda: []                  # the language list of the machine that runs the suite stays out
+saved_language3 = os.environ.pop("LANGUAGE", None)
 envsetup.fetch = fetch_names
 results3 = {}
 try:
@@ -2136,12 +2159,16 @@ try:
 finally:
     os.environ.pop("READ_PAGE_TESSDATA_URL", None)
     ownenv.system_language, envsetup.fetch = real_lang3, real_fetch4
+    if real_os3 is not None:
+        ownenv._os_languages = real_os3
+    if saved_language3 is not None:
+        os.environ["LANGUAGE"] = saved_language3
 attempt("--setup fetches English and the pack of the user's own language, not Russian for everyone",
         lambda: (results3["zh"][0] == ["eng.traineddata", "chi_sim.traineddata"] and results3["zh"][1] == ["eng", "chi_sim"]
                  and results3["en"][0] == ["eng.traineddata"] and results3["en"][1] == ["eng"]
                  and results3["ru"][0] == ["eng.traineddata", "rus.traineddata"], str(results3)[:200]))
 attempt("... READ_PAGE_OCR_LANGS adds to it, and the step says which language it took and which variable names others",
-        lambda: (results3["zh+deu"][1] == ["eng", "chi_tra", "deu"] and "this machine's language (zh-TW)" in results3["zh+deu"][2]
+        lambda: (results3["zh+deu"][1] == ["eng", "chi_tra", "deu"] and "the user's languages (zh-TW)" in results3["zh+deu"][2]
                  and "READ_PAGE_OCR_LANGS names others" in results3["zh+deu"][2], results3["zh+deu"][2]))
 attempt("... from the mirror when one is named",
         lambda: (mirror_asked == ["https://m.example/fast/eng.traineddata", "https://m.example/fast/chi_sim.traineddata"], str(mirror_asked)))
