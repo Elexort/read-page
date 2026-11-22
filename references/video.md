@@ -14,7 +14,8 @@ not, and why the usual "chunk + embed + ASR + OCR" recipe is not simply adopted.
 
 Why the timestamps matter: they cost nothing (the VTT already has them) and they turn a transcript
 into something a document can cite. A cue every two seconds is noise, so cues are grouped until
-either a 2-second gap or 30 seconds of speech - that is `vtt_to_text(block_seconds=30)`.
+either a 2-second gap or 30 seconds of speech - that is `vtt_to_text(block_seconds=30)` (a gap is the time between
+two cues' starts; for YouTube's rolling captions it is the time since the line before was last spoken, below).
 
 Limits today: captions only, one track per read (a human track in the user's languages, else the human track in
 the language the speaker uses, else the words as spoken, else - named so - YouTube's machine translation), no
@@ -74,6 +75,24 @@ infos could be read (163 YouTube, 31 RuTube, 5 Bilibili), as an English, a Russi
   user, was "no subtitles" (16 of the 41 videos an English user read for real: every YouTube video not in English
   and every one with many dubs). The call carries `--ignore-errors`: the
   refused track is a warning, the others and the info arrive.
+- **YouTube's automatic captions roll, and are read line by line.** Its VTT shows a screen of two rows (a broadcaster's,
+  three): the line before and the new line, whose words carry their times (`<00:00:13.620>`), and a cue of 10 ms
+  shows the new line alone before the next comes. A phrase stood in three cues, and the reader, which dropped a cue
+  only when it equalled the one before, gave the agent x2.97 the words (a one-hour talk of 8 800 words as 26 400): 169
+  of the 183 automatic files of 125 real videos; the other 14 are a person's text that yt-dlp lists as automatic.
+  `subtitles.rolled_cues()` takes a track that has word times and a row carried up: the bottom row of a cue is the new
+  line, whatever it says (a line the speaker says twice stands twice), a row above it that is the line the screen
+  showed last is carried and left out, and a caption row of digits alone is a line. A pause is counted from when the
+  line before was last spoken - a line is shown until the next one comes, so the cues have no gaps - and a block ends
+  at a pause of 2 s or 30 s: 18 311 blocks of the 48 clips (Japanese apart), 9.5 words of speech each, became 2 961 of
+  59. The
+  result against the measurement's own rule ("a line equal to one of the last three is a repeat"): every line of
+  the track, once, and 348 lines more, which are said again. `transcript.vtt` holds one cue per line, with the time
+  it came in and the cue's end; yt-dlp's own file, with the word times, stays in the folder as `video.<lang>.vtt`. A
+  person's track has no word times and is read as it was, a roll-up one too (4 of the 100 human tracks repeat their
+  lines, x1.5 the words, and still do): 99 of the 101 human tracks, the 25 RuTube tracks and the 14 "automatic"
+  files that are a person's text are byte for byte the same, in the text and in `transcript.vtt`; the other 2 human
+  tracks are a broadcaster's live captions (`es-uYU-mmqFLq8`, `pt-uYU-mmqFLq8`) in the rolling form, and read once.
 
 What the answers did, the census's infos run through the code before and after with a stand-in for yt-dlp that has
 exactly the tracks the info lists (796 answers: 199 videos, four users; and again with YouTube refusing its
