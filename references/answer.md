@@ -5,9 +5,12 @@ flag, the privacy and network rules, the limits, cookies, pictures and video.
 
 ## The answer
 
-`readpage.py URL` prints a header - status, engine, size, the work folder, `reason:`, `ignored:`, `advice:`,
-`missing:`/`improve:` - then the text: whole when it fits, otherwise an outline with line numbers,
-the first block and the line to go on from.
+`readpage.py URL` prints a header - status, engine, size, the work folder, `reason:`, `ignored:`, `document:`,
+`advice:`, `missing:`/`improve:` - then the text: whole when it fits, otherwise an outline with line numbers,
+the first block and the line to go on from. `document:` is what a document's reader says of what it
+left out or could not read (parts that do not unpack, a table cut at its caps, pictures past its limit or in
+a format no browser shows, its time run out, its own error: `signals.document_note`); `missing:` is what this
+machine lacks, never that.
 
 ```
 read-page · ok · defuddle, 87% of the page · content.md 24.7 KB, 389 lines · 1.9 s
@@ -57,10 +60,10 @@ so a file tool that stops at 2 000 still sees every word.
 | `blocked` | an anti-bot wall: a challenge header or markup, a wall's words (20 languages), or HTTP 403/419/429/451 | follow `advice`: `--allow-external` for a public URL; once the readers were stopped too, no flag opens it (`--alternate` opened none of 8 measured walls) - another source, or the user |
 | `login_required` | an account is needed (a password form with its sign-in label on a short page, a sentence of a wall - "sign in to continue", "for subscribers only" - in 20 languages, redirect to /login, 401/407) | not this skill: the user's own browser, or their paste |
 | `not_found` | 404 or a soft 404 (a 200 page that says it is not there, in 20 languages: in its title or heading, or with few words; the browser's page counts); the archive was tried with `--allow-external` | report it |
-| `empty` | no usable text: an app shell, an error stub, or a binary body | follow `advice`: `--alternate` when the browser has not rendered it, `--screenshots` when it has |
+| `empty` | no usable text: an app shell, an error stub, or a binary body; a document with no word of its own; a file named as an archive that is none (a `.doc` saved as `.docx`: `advice` says what it is) | follow `advice`: `--alternate` when the browser has not rendered it, `--screenshots` when it has; for a file that is no archive, what reads it |
 | `media_only` | the URL *is* a file (image/audio/video); it is saved, not converted | the text names the file: open it |
 | `too_large` | the file or page is over the cap, or a document was still arriving when its time ran out | the `reason:` line names the cap; `--download` lifts policy limits |
-| `error` | network, DNS, timeout; a transfer the server stopped (a stub, or a document stuck halfway); or the server's own HTTP 4xx/5xx page (kept as the text) | retry later; for a public page `--allow-external` also tries a reader and the archive |
+| `error` | network, DNS, timeout; a transfer the server stopped (a stub, or a document stuck halfway); the server's own HTTP 4xx/5xx page (kept as the text); or an archive cut or damaged (a DOCX, an EPUB, a ZIP) whose whole members hold under 40 words of their own (`signals.broken_archive`) | retry later; for a public page `--allow-external` also tries a reader and the archive; for a cut or damaged archive what `advice` says - a whole copy of a file on this machine, `--refresh` for a server's |
 
 `+ 3 blocks of page.md` after the engine: the extractor dropped those paragraphs, code blocks or
 tables and they were put back where they stood; `outside the text: 6.2 KB … - page.md` is what only

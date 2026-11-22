@@ -3925,12 +3925,45 @@ def zip_subtype(src):
 # type", after a machine's markitdown had spent its 4 s on them (KNOWN-ISSUES 167). A cut or damaged
 # archive's members are read one after another from their own headers instead, and the whole ones
 # go into an archive of their own, which the readers take as they take any; a file that is no ZIP
-# is named for what it is. What one archive may unpack is capped as the readers' parts are.
+# is named for what it is. What one archive may unpack is capped as the readers' parts are, and so
+# is the work of looking at it: every byte unpacked counts, a member kept or not (members past the
+# size limit or with a wrong CRC were each unpacked to 32 MB and thrown away uncounted - 2 000 of
+# them, 62 MB of file, held the read 44 s), and the read's clock is looked at every member.
 ZIP_WHOLE_PART = 32 * 1024 * 1024      # one member of an archive read so, unpacked
 ZIP_WHOLE_TOTAL = 128 * 1024 * 1024    # all of them together
+ZIP_WHOLE_SPENT = 2 * ZIP_WHOLE_TOTAL  # every byte unpacked (or read) to judge the members, kept or not
 ZIP_WHOLE_MEMBERS = 10000              # members looked at; past them the rest is not
 _ZIP_LOCAL = struct.Struct("<4sHHHHHIIIHH")      # a member's own header (30 bytes)
-_ZIPS = {}                             # "read": what was wrong with the read's own archive, or None
+_ZIP_TOC = (b"PK\x01\x02", b"PK\x05\x06", b"PK\x06\x06")   # the table of contents: its entries, its end
+
+
+class _PerThread(object):
+    """A dict of the thread that uses it: the archive's background read (archived_text -> doc_text) has
+    its own, so a live archive's broken state and an archived copy's are never mixed (they shared one)."""
+
+    def __init__(self):
+        self._local = threading.local()
+
+    def _d(self):
+        d = getattr(self._local, "d", None)
+        if d is None:
+            d = self._local.d = {}
+        return d
+
+    def get(self, key, default=None):
+        return self._d().get(key, default)
+
+    def __getitem__(self, key):
+        return self._d()[key]
+
+    def __setitem__(self, key, value):
+        self._d()[key] = value
+
+    def clear(self):
+        self._d().clear()
+
+
+_ZIPS = _PerThread()                   # "read": what was wrong with the read's own archive, or None
 # what a file whose name or type says ZIP may really be, by its first bytes
 NOT_ZIP = ((b"\x1f\x8b", "a gzip file"), (b"7z\xbc\xaf\x27\x1c", "a 7-Zip archive"),
            (b"Rar!\x1a\x07", "a RAR archive"), (b"BZh", "a bzip2 file"), (b"\xfd7zXZ\x00", "an xz file"),
@@ -3994,19 +4027,22 @@ def _zip64_sizes(extra, usize, csize):
 
 
 def _inflate(fh, csize, room):
-    """A deflated member's data from `fh` (at its start): (data, packed length, why). csize None:
-    its length is not in its header (a data descriptor follows the data), the stream's end tells it.
-    why is "" for data that ends where the stream does, "cut", "breaks" or "over" (more than
-    `room` bytes unpacked: read no further)."""
+    """A deflated member's data from `fh` (at its start): (data, packed length, why, unpacked).
+    csize None: its length is not in its header (a data descriptor follows the data), the stream's
+    end tells it. why is "" for data that ends where the stream does, "cut", "breaks" or "over"
+    (more than `room` bytes unpacked: read no further); `unpacked` is what was unpacked, kept or
+    not. The file is read 64 KB at first, then twice as much each time up to 1 MB: a small member
+    whose size follows its data was read a megabyte ahead (10 000 of them in 700 KB took 2.7 s)."""
     d = zlib.decompressobj(-zlib.MAX_WBITS)
-    out, n, used = [], 0, 0
+    out, n, used, step = [], 0, 0, 1 << 16
     left = csize
     try:
         while not d.eof:
-            want = 1 << 20 if left is None else min(1 << 20, left)
+            want = step if left is None else min(step, left)
+            step = min(step * 2, 1 << 20)
             chunk = fh.read(want) if want else b""
             if not chunk:
-                return b"", used, "cut" if left is None or left else "breaks"
+                return b"", used, "cut" if left is None or left else "breaks", n
             used += len(chunk)
             if left is not None:
                 left -= len(chunk)
@@ -4016,47 +4052,204 @@ def _inflate(fh, csize, room):
                 out.append(piece)
                 n += len(piece)
                 if n > room:
-                    return b"", used, "over"
+                    return b"", used, "over", n
                 data = d.unconsumed_tail
     except zlib.error:
-        return b"", used, "breaks"
-    return b"".join(out), used - len(d.unused_data), ""
+        return b"", used, "breaks", n
+    return b"".join(out), used - len(d.unused_data), "", n
+
+
+def _read_counted(fh, cap, meter):
+    """Up to `cap` bytes of an open member, a megabyte at a time, each counted in meter[0] as it
+    comes: a member whose CRC fails at its end has been unpacked all the same."""
+    parts = []
+    while cap > 0:
+        b = fh.read(min(cap, 1 << 20))
+        if not b:
+            break
+        meter[0] += len(b)
+        cap -= len(b)
+        parts.append(b)
+    return b"".join(parts)
+
+
+def _end_record(fh, size):
+    """Whether the file's last 64 KB (and the 22 bytes of the record) hold a table of contents' end
+    record: without one the file is cut, not damaged, where its table of contents stands."""
+    back = min(size, 65536 + 22)
+    fh.seek(size - back)
+    return b"PK\x05\x06" in fh.read(back)
 
 
 class _ZipOut(object):
-    """A new archive at `dest`, stored, written a member at a time (one is in memory, not all); the
-    file is made at the first member. An office package's .rels come last, each relationship to a
-    part the archive lacks taken out: python-docx, python-pptx and openpyxl give up on a package
-    whose relationship names a part that is not there."""
+    """A new archive at `dest`, stored, written a member at a time: one member is in memory, never
+    all (an office package's index parts wait in files beside it - they were kept in memory, 128 MB
+    of them at most); the file is made at the first member. An office package is made to hold
+    together from the parts it has, as python-docx, python-pptx and openpyxl give up on one that
+    does not (_package_close): each relationship to a part it lacks is taken out, and so are the
+    sheets and slides of the main part whose relationship went; what is missing of its index - its
+    content types, its root relationships, a workbook's list of sheets - is written from the parts
+    there (openpyxl writes them last: a workbook it made, cut anywhere in its sheets, had none)."""
 
     def __init__(self, dest):
-        self.dest, self.w, self.names, self.rels = dest, None, [], []
+        self.dest, self.w, self.names, self.held = dest, None, [], []
 
     def add(self, name, data):
-        import zipfile
         self.names.append(name)
-        if name.endswith(".rels"):
-            self.rels.append((name, data))
+        if name.endswith(".rels") or name in _PACKAGE_INDEX:
+            spill = "%s.%d.part" % (self.dest, len(self.held))
+            with open(spill, "wb") as fh:
+                fh.write(data)
+            self.held.append((name, spill))
             return
+        self._write(name, data)
+
+    def _write(self, name, data):
+        import zipfile
         if self.w is None:
             self.w = zipfile.ZipFile(self.dest, "w", zipfile.ZIP_STORED)
         self.w.writestr(zipfile.ZipInfo(name), data)
 
     def close(self):
-        import zipfile
-        names = set(self.names)
-        office = "[Content_Types].xml" in names
-        for name, data in self.rels:
-            if self.w is None:
-                self.w = zipfile.ZipFile(self.dest, "w", zipfile.ZIP_STORED)
-            self.w.writestr(zipfile.ZipInfo(name), _rels_kept(name, data, names) if office else data)
-        if self.w is not None:
-            self.w.close()
+        try:
+            names = set(self.names)
+            kind = next((k for k, top in (("docx", "word/"), ("xlsx", "xl/"), ("pptx", "ppt/"))
+                         if any(n.startswith(top) for n in names)), "")
+            if kind:
+                _package_close(self, kind, names)
+            else:
+                for name, spill in self.held:
+                    with open(spill, "rb") as fh:
+                        self._write(name, fh.read())
+            if self.w is not None:
+                self.w.close()
+        finally:
+            for _name, spill in self.held:
+                try:
+                    os.unlink(spill)
+                except OSError:
+                    pass
+
+
+# what a package's index is made of: held back until every member is known (_ZipOut)
+_PACKAGE_INDEX = ("[Content_Types].xml", "xl/workbook.xml", "ppt/presentation.xml")
+_PACKAGE_MAIN = {"docx": "word/document.xml", "xlsx": "xl/workbook.xml", "pptx": "ppt/presentation.xml"}
+_OOXML = "application/vnd.openxmlformats-officedocument."
+_RELS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+# a part's content type by its name, for a package whose [Content_Types].xml is lost: the parts the
+# readers take by their type (a slide that is no slide part is a part they cannot read)
+_PART_TYPES = (
+    (r"word/document\.xml", "wordprocessingml.document.main+xml"), (r"word/styles\.xml", "wordprocessingml.styles+xml"),
+    (r"word/numbering\.xml", "wordprocessingml.numbering+xml"), (r"word/settings\.xml", "wordprocessingml.settings+xml"),
+    (r"word/footnotes\.xml", "wordprocessingml.footnotes+xml"), (r"word/endnotes\.xml", "wordprocessingml.endnotes+xml"),
+    (r"word/comments\.xml", "wordprocessingml.comments+xml"), (r"word/header\d*\.xml", "wordprocessingml.header+xml"),
+    (r"word/footer\d*\.xml", "wordprocessingml.footer+xml"), (r"word/fontTable\.xml", "wordprocessingml.fontTable+xml"),
+    (r"word/webSettings\.xml", "wordprocessingml.webSettings+xml"),
+    (r"xl/workbook\.xml", "spreadsheetml.sheet.main+xml"), (r"xl/worksheets/sheet\d+\.xml", "spreadsheetml.worksheet+xml"),
+    (r"xl/sharedStrings\.xml", "spreadsheetml.sharedStrings+xml"), (r"xl/styles\.xml", "spreadsheetml.styles+xml"),
+    (r"ppt/presentation\.xml", "presentationml.presentation.main+xml"), (r"ppt/slides/slide\d+\.xml", "presentationml.slide+xml"),
+    (r"ppt/slideLayouts/slideLayout\d+\.xml", "presentationml.slideLayout+xml"),
+    (r"ppt/slideMasters/slideMaster\d+\.xml", "presentationml.slideMaster+xml"),
+    (r"ppt/notesSlides/notesSlide\d+\.xml", "presentationml.notesSlide+xml"),
+    (r"ppt/notesMasters/notesMaster\d+\.xml", "presentationml.notesMaster+xml"),
+    (r"ppt/presProps\.xml", "presentationml.presProps+xml"), (r"ppt/viewProps\.xml", "presentationml.viewProps+xml"),
+    (r"ppt/tableStyles\.xml", "presentationml.tableStyles+xml"), (r"(?:word|xl|ppt)/theme/theme\d+\.xml", "theme+xml"),
+    (r"docProps/app\.xml", "extended-properties+xml"))
+_DEFAULT_TYPES = {"rels": "application/vnd.openxmlformats-package.relationships+xml", "xml": "application/xml",
+                  "png": "image/png", "jpeg": "image/jpeg", "jpg": "image/jpeg", "gif": "image/gif", "bmp": "image/bmp",
+                  "tif": "image/tiff", "tiff": "image/tiff", "emf": "image/x-emf", "wmf": "image/x-wmf",
+                  "svg": "image/svg+xml", "bin": "application/vnd.openxmlformats-officedocument.oleObject"}
+
+
+def _package_close(out, kind, names):
+    """An office package's held parts written, its index made to hold together (_ZipOut)."""
+    held = dict(out.held)
+
+    def part(name):
+        with open(held[name], "rb") as fh:
+            return fh.read()
+    main = _PACKAGE_MAIN[kind]
+    dropped, sheets = {}, sorted((n for n in names if re.match(r"xl/worksheets/sheet\d+\.xml$", n)),
+                                 key=lambda n: int(re.sub(r"\D", "", posixpath.basename(n)) or 0))
+    made = []                        # index parts written here, as the package lacked them
+    if kind == "xlsx" and sheets and (main not in names or "xl/_rels/workbook.xml.rels" not in names):
+        # a workbook whose list of sheets, or the list's relationships, is lost: one of the sheets
+        # there, in their order, named as the list named them when it is there
+        titles = re.findall(rb'(?is)<(?:\w{1,32}:)?sheet\b[^<>]{0,%d}?\bname\s*=\s*"([^"<>]*)"' % TAG_MAX,
+                            part(main)) if main in names else []
+        titles = [t.decode("utf-8", "replace") for t in titles] if len(titles) == len(sheets) else []
+        entries, rels = [], []
+        for k, sheet in enumerate(sheets, 1):
+            name = unescape(titles[k - 1]) if titles else "Sheet%d" % k
+            entries.append('<sheet name="%s" sheetId="%d" r:id="rId%d"/>' % (_xml_attr(name), k, k))
+            rels.append('<Relationship Id="rId%d" Type="%sworksheet" Target="%s"/>' % (
+                k, _RELS, posixpath.relpath(sheet, "xl")))
+        k = len(sheets)
+        for extra, rtype in (("xl/sharedStrings.xml", "sharedStrings"), ("xl/styles.xml", "styles")):
+            if extra in names:
+                k += 1
+                rels.append('<Relationship Id="rId%d" Type="%s%s" Target="%s"/>' % (k, _RELS, rtype, extra[3:]))
+        held.pop(main, None)
+        names = names | {main, "xl/_rels/workbook.xml.rels"}
+        dropped["xl/_rels/workbook.xml.rels"] = None          # written here, not from the package's own
+        made.append((main, ('<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="http://schemas.openxmlformats.org/'
+                            'spreadsheetml/2006/main" xmlns:r="%s"><sheets>%s</sheets></workbook>'
+                            % (_RELS[:-1], "".join(entries))).encode("utf-8")))
+        made.append(("xl/_rels/workbook.xml.rels", _rels_doc(rels)))
+    for name, _spill in out.held:
+        if name.endswith(".rels") and name not in dropped:
+            data, gone = _rels_kept(name, part(name), names)
+            dropped[name] = gone
+            out._write(name, data)
+    # the main part names its sheets and slides by relationship: one whose relationship went goes too
+    rels_of_main = posixpath.join(posixpath.dirname(main), "_rels", posixpath.basename(main) + ".rels")
+    if main in held:
+        data = part(main)
+        gone = dropped.get(rels_of_main) or set()
+        if gone:
+            data = re.sub(rb"(?is)<(?:\w{1,32}:)?(?:sheet|sldId|sldMasterId|notesMasterId|handoutMasterId)\b[^<>]{0,%d}?"
+                          rb"\b\w{1,32}:id\s*=\s*\"([^\"<>]*)\"[^<>]{0,%d}?/>" % (TAG_MAX, TAG_MAX),
+                          lambda m: b"" if m.group(1).decode("utf-8", "replace") in gone else m.group(0), data)
+        out._write(main, data)
+    for name, data in made:
+        out._write(name, data)
+    if "_rels/.rels" not in names and main in names:
+        out._write("_rels/.rels", _rels_doc(['<Relationship Id="rId1" Type="%sofficeDocument" Target="%s"/>'
+                                             % (_RELS, main)]))
+        names = names | {"_rels/.rels"}
+    if "[Content_Types].xml" in held:
+        out._write("[Content_Types].xml", part("[Content_Types].xml"))
+    else:
+        exts = sorted({n.rsplit(".", 1)[-1].lower() for n in names if "." in posixpath.basename(n)} & set(_DEFAULT_TYPES))
+        over = []
+        for n in sorted(names):
+            for pattern, ctype in _PART_TYPES:
+                if re.match(pattern + "$", n):
+                    over.append('<Override PartName="/%s" ContentType="%s%s"/>' % (_xml_attr(n), _OOXML, ctype))
+                    break
+        if "docProps/core.xml" in names:
+            over.append('<Override PartName="/docProps/core.xml" '
+                        'ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>')
+        out._write("[Content_Types].xml", (
+            '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/'
+            'content-types">%s%s</Types>' % ("".join('<Default Extension="%s" ContentType="%s"/>' % (e, _DEFAULT_TYPES[e])
+                                                     for e in exts), "".join(over))).encode("utf-8"))
+
+
+def _rels_doc(rels):
+    return ('<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/'
+            '2006/relationships">%s</Relationships>' % "".join(rels)).encode("utf-8")
+
+
+def _xml_attr(s):
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
 
 
 def _rels_kept(name, data, names):
-    """A package's .rels with every relationship to a part the archive lacks taken out."""
+    """A package's .rels with every relationship to a part the archive lacks taken out: (its bytes,
+    the ids of the relationships taken out)."""
     folder = posixpath.dirname(posixpath.dirname(name))     # word/_rels/document.xml.rels -> word
+    gone = set()
 
     def keep(m):
         tag = m.group(0).decode("utf-8", "replace")
@@ -4065,45 +4258,74 @@ def _rels_kept(name, data, names):
             return m.group(0)
         part = posixpath.normpath(target.lstrip("/") if target.startswith("/") else
                                   posixpath.join(folder, urllib.parse.unquote(target))).lstrip("/")
-        return m.group(0) if part in names else b""
-    return re.sub(rb"(?is)<Relationship\b[^<>]{0,%d}/>|<Relationship\b[^<>]{0,%d}>\s*</Relationship\s*>"
+        if part in names:
+            return m.group(0)
+        gone.add(_attr(tag, "Id") or "")
+        return b""
+    data = re.sub(rb"(?is)<Relationship\b[^<>]{0,%d}/>|<Relationship\b[^<>]{0,%d}>\s*</Relationship\s*>"
                   % (TAG_MAX, TAG_MAX), keep, data)
+    return data, gone
 
 
-def zip_salvage(path, dest):
+def zip_salvage(path, dest, until=None):
     """The members of an archive zipfile cannot open, read in order from their own headers: the
     whole ones - stored or deflated, their CRC right, within ZIP_WHOLE_PART and ZIP_WHOLE_TOTAL -
     are written to a new archive at `dest` (not written when none is whole). Returns {"how": "cut"
     | "damaged", "members": how many were found, "whole": their names, "broken": [(name, why)],
     "at": the byte where the reading stopped, "size": the file's, "more": a reason the rest was not
-    looked at, or ""}. Linear: each member is read once, its data at most up to the caps."""
+    looked at, or "", "all_members": True when the reading reached the table of contents, so no
+    member is missing after the last one read}. Linear: each member is read once, its data at most
+    up to the caps, and what is unpacked to judge them up to ZIP_WHOLE_SPENT in all; `until` (a
+    time.time()) ends the reading at the member it passes."""
     size = os.path.getsize(path)
-    found, looked, whole, broken, total, seen = 0, 0, [], [], 0, set()
-    how, at, more = "cut", size, ""
+    found, looked, whole, broken, total, spent, seen = 0, 0, [], [], 0, 0, set()
+    how, at, more, toc = "cut", size, "", False
     out = _ZipOut(dest)
     prior = docreaders.machine_cjk()          # a name with no UTF-8 flag: its code page (fix_zip_names)
+    oem = docreaders.machine_oem()
+    spent_said = ("%s unpacked to look at the members before it; the rest were not looked at"
+                  % human_bytes(ZIP_WHOLE_SPENT))
     with open(path, "rb") as fh:
         pos = 0
         while True:
+            if pos > size:
+                break                              # a member's size runs past the end of the file: cut
             fh.seek(pos)
             head = fh.read(30)
-            if looked >= ZIP_WHOLE_MEMBERS and head[:4] == b"PK\x03\x04":
+            member = head[:4] == b"PK\x03\x04"
+            if looked >= ZIP_WHOLE_MEMBERS and member:
                 # folder entries count too: an archive of nothing but them is not walked to its end either
                 more = "%d members looked at; the rest were not" % ZIP_WHOLE_MEMBERS
                 break
-            if head[:4] in (b"PK\x01\x02", b"PK\x05\x06", b"PK\x06\x06"):
-                how, at = "damaged", pos           # its table of contents is there, and zipfile could not read it
+            if member and spent >= ZIP_WHOLE_SPENT:
+                more = spent_said
                 break
-            if len(head) < 30 or head[:4] != b"PK\x03\x04":
-                if len(head) >= 4:
+            if member and until is not None and time.time() > until:
+                more = "the time for it ran out after %d members; the rest were not looked at" % looked
+                break
+            if head[:4] in _ZIP_TOC or (0 < len(head) < 4 and any(s.startswith(head) for s in _ZIP_TOC)):
+                # its table of contents: every member stands before it. With no end record in the
+                # file's last 64 KB the file is cut inside it, its members all there; with one,
+                # zipfile could not read what is there
+                toc, at = True, pos
+                how = "damaged" if _end_record(fh, size) else "cut"
+                break
+            if len(head) < 30 or not member:
+                if len(head) < 30 and b"PK\x03\x04".startswith(head[:4]):
+                    at = pos                       # the file ends here, or in a member's header
+                else:
                     how, at = "damaged", pos       # bytes that start no member where one should start
                 break
             _s, _v, flags, method, _t, _d, crc, csize, usize, nlen, xlen = _ZIP_LOCAL.unpack(head)
             raw_name, extra = fh.read(nlen), fh.read(xlen)
+            codec = "utf-8" if flags & 0x800 else (docreaders.names_codec([raw_name], prior, oem) or "cp437")
+            name = docreaders.zip_name(raw_name, codec)
             if len(raw_name) < nlen or len(extra) < xlen:
-                break                              # cut in the middle of a member's header
-            codec = "utf-8" if flags & 0x800 else (docreaders.names_codec([raw_name], prior) or "cp437")
-            name = raw_name.decode(codec, "replace")
+                if len(raw_name) == nlen:          # cut in the middle of a member's header, its name there
+                    broken.append((name, "cut"))
+                    found += 0 if name.endswith("/") else 1
+                at = pos
+                break
             usize, csize, zip64 = _zip64_sizes(extra, usize, csize)
             start = pos + 30 + nlen + xlen
             folder = name.endswith("/")
@@ -4111,7 +4333,8 @@ def zip_salvage(path, dest):
             found += 0 if folder else 1
             descriptor = bool(flags & 8)           # its CRC and sizes follow its data
             end = None if descriptor else start + csize        # where the next member starts
-            room = min(ZIP_WHOLE_PART, ZIP_WHOLE_TOTAL - total)
+            limit = min(ZIP_WHOLE_PART, ZIP_WHOLE_TOTAL - total)
+            room = min(limit, ZIP_WHOLE_SPENT - spent)
             why, data = "", b""
             if flags & 1:
                 why = "encrypted"
@@ -4120,13 +4343,21 @@ def zip_salvage(path, dest):
             elif method == 0 and descriptor:
                 why = "its size is not in its header"
             elif method == 0:
-                if csize > room:
+                if end > size:
+                    why = "cut"                    # its data runs past the end of the file
+                elif csize > limit:
                     why = "over the size limit"
+                elif csize > room:
+                    why = "spent"
                 else:
                     data = fh.read(csize)
+                    spent += len(data)
                     why = "cut" if len(data) < csize else ""
             else:
-                data, packed, why = _inflate(fh, None if descriptor else csize, room)
+                data, packed, why, unpacked = _inflate(fh, None if descriptor else csize, room)
+                spent += unpacked
+                if why == "over" and room < limit:
+                    why = "spent"
                 why = {"over": "over the size limit", "breaks": "its data breaks"}.get(why, why)
                 if descriptor and not why:
                     fh.seek(start + packed)
@@ -4138,6 +4369,16 @@ def zip_salvage(path, dest):
                     else:
                         crc = struct.unpack("<I", tail[k:k + 4])[0]
                         end = start + packed + k + 4 + 2 * width
+                elif not descriptor and not why and packed < csize:
+                    # the stream ended before the size its header gives: a member's header right
+                    # after it is the next one (the members after a wrong size were lost)
+                    fh.seek(start + packed)
+                    if fh.read(4) == b"PK\x03\x04":
+                        end = start + packed
+            if why == "spent":
+                broken.append((name, "not looked at"))
+                more = spent_said
+                break
             if why == "cut":
                 broken.append((name, "cut"))
                 break
@@ -4160,30 +4401,45 @@ def zip_salvage(path, dest):
             pos = end
     out.close()
     return {"how": how, "members": found, "whole": whole, "broken": broken, "at": at, "size": size,
-            "more": more}
+            "more": more, "all_members": toc}
 
 
-def zip_mend(path, dest):
+def zip_mend(path, dest, until=None):
     """An archive zipfile opens, whose members do not all unpack (a CRC that does not match, data
     that breaks): the ones that do, within the caps, go into a new archive at `dest`. Returns what
-    zip_salvage() does, "how" being "damaged"; nothing is written when every member unpacks."""
+    zip_salvage() does, "how" being "damaged"; nothing is written when every member unpacks. What
+    is unpacked counts against ZIP_WHOLE_SPENT whether the member unpacks or not (200 members whose
+    CRC fails at their end were each unpacked whole: 9 s for a 6.5 MB file), and `until` ends it."""
     import zipfile
-    whole, broken, total, seen = [], [], 0, set()
+    whole, broken, total, spent, seen, more = [], [], 0, 0, set(), ""
     out = _ZipOut(dest)
     with zipfile.ZipFile(path) as z:
         docreaders.fix_zip_names(z)
         infos = [i for i in z.infolist() if not i.is_dir()]
-        for i in infos[:ZIP_WHOLE_MEMBERS]:
-            room = min(ZIP_WHOLE_PART, ZIP_WHOLE_TOTAL - total)
-            if i.file_size > room:
+        if len(infos) > ZIP_WHOLE_MEMBERS:
+            more = "%d members looked at; the rest were not" % ZIP_WHOLE_MEMBERS
+        for k, i in enumerate(infos[:ZIP_WHOLE_MEMBERS]):
+            limit = min(ZIP_WHOLE_PART, ZIP_WHOLE_TOTAL - total)
+            room = min(limit, ZIP_WHOLE_SPENT - spent)
+            if i.file_size > limit:
                 broken.append((i.filename, "over the size limit"))
                 continue
+            if i.file_size > room:
+                more = ("%s unpacked to look at the members before it; the rest were not looked at"
+                        % human_bytes(ZIP_WHOLE_SPENT))
+                break
+            if until is not None and time.time() > until:
+                more = "the time for it ran out after %d members; the rest were not looked at" % k
+                break
+            meter = [0]
             try:
                 with z.open(i) as fh:
-                    data = fh.read(room + 1)
+                    data = _read_counted(fh, room + 1, meter)
             except Exception as e:                            # noqa: BLE001  (bad CRC, data that breaks)
+                spent += meter[0]
                 broken.append((i.filename, "it does not unpack (%s)" % (str(e)[:60] or type(e).__name__)))
                 continue
+            spent += meter[0]
             if len(data) > room:
                 broken.append((i.filename, "over the size limit"))
                 continue
@@ -4197,9 +4453,7 @@ def zip_mend(path, dest):
     if not damaged and os.path.exists(dest):
         os.unlink(dest)                                       # every member unpacks: nothing to mend
     return {"how": "damaged", "members": len(infos), "whole": whole if damaged else [],
-            "broken": damaged, "at": 0, "size": os.path.getsize(path),
-            "more": "%d members looked at; the rest were not" % ZIP_WHOLE_MEMBERS if len(infos) > ZIP_WHOLE_MEMBERS
-            else ""}
+            "broken": damaged, "at": 0, "size": os.path.getsize(path), "more": more, "all_members": not more}
 
 
 def zip_whole(path, workdir):
@@ -4218,23 +4472,32 @@ def zip_whole(path, workdir):
         return None, {"how": "not a ZIP", "what": what, "reason": "not a ZIP archive: the file is %s" % what}
     dest = os.path.join(workdir, "_whole-%s.zip" % hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()[:8])
     try:
-        info = zip_salvage(path, dest)
+        info = zip_salvage(path, dest, zip_until())
     except Exception as e:                                    # noqa: BLE001
         debuglog.exc("zip: salvage", e)
-        info = {"how": "damaged", "members": 0, "whole": [], "broken": [], "at": 0, "size": 0, "more": ""}
+        info = {"how": "damaged", "members": 0, "whole": [], "broken": [], "at": 0, "size": 0, "more": "",
+                "all_members": False}
     info["reason"] = zip_reason(info)
     info["path"] = dest if info["whole"] else ""
     trace("zip.salvage", how=info["how"], members=info["members"], whole=len(info["whole"]),
-          broken=len(info["broken"]), at=info["at"])
+          broken=len(info["broken"]), at=info["at"], more=info["more"][:60])
     return info["path"] or None, info
+
+
+def zip_until():
+    """When the reading of an archive's members stops: the converter's seconds from now, or what
+    the read's deadline leaves; None with --download."""
+    return None if budget.unlimited() else now() + budget.cap(CONVERTER_TIMEOUT, floor=1.0)
 
 
 def zip_reason(info):
     """The reason line of an archive that is not whole: what happened, and how many members are whole."""
+    toc = info.get("all_members") and info["at"]
     if info["how"] == "cut":
-        where = "cut after %s" % human_bytes(info["size"])
+        where = ("cut in its table of contents, after %s" if toc else "cut after %s") % human_bytes(info["size"])
     elif info["at"]:
-        where = "damaged at byte %s of %s" % (exact_bytes(info["at"]), exact_bytes(info["size"]))
+        where = ("its table of contents is damaged, at byte %s of %s" if toc else "damaged at byte %s of %s") % (
+            exact_bytes(info["at"]), exact_bytes(info["size"]))
     else:
         where = "damaged"
     n, found = len(info["whole"]), info["members"]
@@ -4248,9 +4511,23 @@ def zip_reason(info):
         "; " + info["more"] if info.get("more") else "")
 
 
-def zip_advice(info, local):
+def zip_advice(info, local, words=None, transit="", step=False):
     """The advice line for an archive that is not whole or no ZIP: what of it the answer holds, and
-    what gets the rest - a whole copy of a file on this machine, another fetch of a server's."""
+    what gets the rest - a whole copy of a file on this machine, another fetch of a server's. One
+    cut or damaged in its table of contents alone, every member there and whole, has no rest.
+    `words`: the document's own words the readers gave (0: the whole members gave no text).
+    `transit`: the transfer's cut in words (cut_said) when the archive was cut on its way here, not
+    on the server - `step` when it was still arriving as its time ran out."""
+    if transit and info["how"] == "cut":
+        n = len(info["whole"])
+        read = "whole, but no text could be read from them" if n and words == 0 else "whole and read here"
+        held = ("the archive's members all arrived %s, its table of contents did not" % read
+                if info.get("all_members") and not info["broken"] and n else
+                "%d of the archive's members %s %s, what came after %s did not arrive" % (
+                    n, "is" if n == 1 else "are", read, "it" if n == 1 else "them") if n else
+                "no member of the archive arrived whole")
+        return "%s: %s; %s" % (transit, held, "--download has no time limit, and the file arrives whole" if step
+                               else "--refresh tries again, and --download waits as long as the server takes")
     if info["how"] == "not a ZIP":
         what = info["what"]
         if what.startswith("a password-protected"):
@@ -4262,16 +4539,27 @@ def zip_advice(info, local):
         if what == "text":
             return "the file is text, not the archive its name or type says: its text is the answer"
         return "the file is %s, not the archive its name or type says: there is no document in it to read" % what
-    n, bad = len(info["whole"]), [b[0] for b in info["broken"]]
+    n = len(info["whole"])
+    bad = [b[0] for b in info["broken"]]
+    are, them = ("is", "it") if n == 1 else ("are", "them")
+    # what the readers made of the whole members: their text, or none (an office package whose
+    # parts do not hold together, a sheet whose strings were in a part that is lost)
+    read = "whole, but no text could be read from %s" % them if n and words == 0 else "whole and read here"
+    if info.get("all_members") and not info["broken"] and n:
+        # every member is there and whole: only the table of contents is cut or damaged
+        every = "its one member is %s" % read if n == 1 else "all %d of its members are %s" % (n, read)
+        if info["how"] == "cut":
+            return "the archive is cut in its table of contents, after its members: %s" % every
+        return "the archive's table of contents is damaged, not its members: %s" % every
     if info["how"] == "cut":
-        held = ("%d of its members %s whole and read here, what came after %s is missing"
-                % (n, "is" if n == 1 else "are", "it" if n == 1 else "them") if n else "no member of it is whole")
+        held = ("%d of its members %s %s, what came after %s is missing" % (n, are, read, them)
+                if n else "no member of it is whole")
         what = "cut after %s" % human_bytes(info["size"])
     else:
         held = ("%d member%s not unpack (%s)%s" % (
             len(bad), " does" if len(bad) == 1 else "s do", ", ".join(bad[:3]) + (", ..." if len(bad) > 3 else ""),
-            ", the other %d %s read here" % (n, "is" if n == 1 else "are") if n else ", and no other is whole")
-            if bad else "%d of its members %s read here" % (n, "is" if n == 1 else "are"))
+            ", the other %d %s %s" % (n, are, read) if n else ", and no other is whole")
+            if bad else "%d of its members %s %s" % (n, are, read))
         what = "damaged"
     rest = ("a whole copy of the file is needed for the rest" if local else
             "--refresh fetches it again, and the same bytes come back while the server's copy is %s" % info["how"])
@@ -4326,43 +4614,53 @@ def office_plain(data, sub):
     return out.getvalue()
 
 
-_OFFICE = {}          # the last office_fast(): "damaged" (a member did not unpack), "missing" (its library)
+_OFFICE = _PerThread()    # the thread's last office_fast(): "damaged", "missing" (its library), "error"
 OFFICE_LIBS = {"docx": "python-docx", "xlsx": "openpyxl", "pptx": "python-pptx"}
 M_OMATH, M_OMATH_PARA = docreaders.M_NS + "oMath", docreaders.M_NS + "oMathPara"
+
+
+# what holds a paragraph's runs besides the paragraph: python-docx's text reads its runs and its
+# hyperlinks' alone, so a tracked insertion's text, a smart tag's, a field's, an inline content
+# control's - and a formula in any of them - were lost (a deletion, w:del, is left out, as Word
+# shows the document with its changes accepted)
+_DOCX_WRAPS = ("hyperlink", "ins", "moveTo", "smartTag", "customXml", "sdt", "sdtContent", "fldSimple", "dir", "bdo")
 
 
 def docx_para(p, qn):
     """A python-docx paragraph's text with its formulas where they stand: python-docx's text holds no
     m:oMath (a DOCX that is one formula read as nothing, KNOWN-ISSUES 165). Each formula is one line
     (docreaders.omml_text) in backticks, as an ODT's is; one that is a paragraph of its own is that
-    paragraph. A paragraph with no formula is python-docx's text, untouched."""
+    paragraph. The runs and formulas inside a hyperlink, an insertion, a smart tag, a field or a
+    content control are read where they stand. A paragraph with none of them and no formula is
+    python-docx's text, untouched."""
     el = p._p
-    if el.find(M_OMATH) is None and el.find(M_OMATH_PARA) is None:
+    w_r, wraps = qn("w:r"), {qn("w:" + t) for t in _DOCX_WRAPS}
+    w_link = qn("w:hyperlink")
+    if next(el.iter(M_OMATH), None) is None and not any(ch.tag in wraps and ch.tag != w_link for ch in el.iterchildren()):
         return p.text
     from docx.text.run import Run
-    w_r, w_link = qn("w:r"), qn("w:hyperlink")
-    out, math_last = [], False
-    for ch in el.iterchildren():
-        if ch.tag in (M_OMATH, M_OMATH_PARA):
-            maths = [ch] if ch.tag == M_OMATH else list(ch.iterchildren(M_OMATH))
-            said = [docreaders._code(t) for t in (docreaders.omml_text(m).strip() for m in maths) if t]
-            if not said:
-                continue
-            if out and not out[-1][-1:].isspace():
-                out.append(" ")
-            out.append(" ".join(said))
-            math_last = True
-            continue
-        if ch.tag == w_r:
-            t = Run(ch, p).text
-        elif ch.tag == w_link:
-            t = "".join(Run(r, p).text for r in ch.iterchildren(w_r))
-        else:
-            continue
-        if t and math_last and not t[:1].isspace() and t[:1] not in ".,;:!?)]":
-            out.append(" ")
-        out.append(t)
-        math_last = math_last and not t
+    out, math_last = [], [False]
+
+    def walk(node):
+        for ch in node.iterchildren():
+            if ch.tag in (M_OMATH, M_OMATH_PARA):
+                maths = [ch] if ch.tag == M_OMATH else list(ch.iterchildren(M_OMATH))
+                said = [docreaders._code(t) for t in (docreaders.omml_text(m).strip() for m in maths) if t]
+                if not said:
+                    continue
+                if out and not out[-1][-1:].isspace():
+                    out.append(" ")
+                out.append(" ".join(said))
+                math_last[0] = True
+            elif ch.tag == w_r:
+                t = Run(ch, p).text
+                if t and math_last[0] and not t[:1].isspace() and t[:1] not in ".,;:!?)]":
+                    out.append(" ")
+                out.append(t)
+                math_last[0] = math_last[0] and not t
+            elif ch.tag in wraps:
+                walk(ch)
+    walk(el)
     return "".join(out)
 
 
@@ -4476,11 +4774,16 @@ def office_fast(path, sub):
     except ImportError as e:
         debuglog.exc("office: library", e)
         _OFFICE["missing"] = OFFICE_LIBS.get(sub, "")
-    except (zipfile.BadZipFile, zlib.error, EOFError) as e:
+    except (zipfile.BadZipFile, zlib.error, EOFError, OSError, ValueError) as e:
+        # a member that does not unpack, or one where the table of contents says no member starts
+        # (zipfile seeks before the file's start: "negative seek value"); a ValueError of the
+        # library's own costs a look at every member (zip_mend), which then finds none to mend
         debuglog.exc("office: damaged", e)
         _OFFICE["damaged"] = str(e)[:120] or type(e).__name__
+        _OFFICE["error"] = "%s: %s" % (type(e).__name__, str(e)[:120])
     except Exception as e:                                    # noqa: BLE001
         debuglog.exc("office: reader", e)
+        _OFFICE["error"] = "%s: %s" % (type(e).__name__, str(e)[:120])
     return ""
 
 
@@ -4922,7 +5225,13 @@ def own_doc(path, kind, pictures=None):
         return "", "the reader failed: %s" % (err[-1].strip() if err else str(e))[:160]
     budget.record("docreader", t0, "ok", own=CONVERTER_TIMEOUT, given=secs,
                   note="%s, %d words" % (kind, len(md.split())))
-    trace("document.own", kind=kind, words=len(md.split()), note=why[:120])
+    # whether the process's memory was held (docreaders._limit_memory): a Job Object that could not be
+    # set left the reader with no limit, and nothing said so
+    held = res.get("limit")
+    if held is False and sys.platform != "darwin":
+        debuglog.log("docreader", what="its memory is not held: the OS refused the limit", kind=kind)
+    trace("document.own", kind=kind, words=len(md.split()), note=why[:120],
+          memory="held" if held else "not held")
     return md, why
 
 
@@ -5589,7 +5898,41 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
         _ZIPS["read"] = state["broke"]
     if name and state["broke"]:
         note = "; ".join(x for x in (state["broke"]["reason"], note) if x)
+        zip_copy_gone(state["broke"], broke)       # a member's copy is read: it goes (the read's own after its pictures)
     return text, note
+
+
+def zip_copy_gone(*infos):
+    """The archives made of a cut or damaged one's whole members (_whole-*.zip, _mended-*.zip), once read:
+    they stayed in the page's folder for its day, up to 128 MB each."""
+    for info in infos:
+        p = (info or {}).get("path") or ""
+        if p and os.path.basename(p).startswith(("_whole-", "_mended-")):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+def _by_headers(path, workdir, state):
+    """An archive zipfile opens, none of whose members a reader could unpack where its table of
+    contents says they start (its offsets are wrong): its members read from their own headers, as
+    a cut archive's are (zip_salvage). The copy's path, state["broke"] set; None when none is whole."""
+    if state["broke"]:
+        return None
+    dest = os.path.join(workdir, "_whole-%s.zip" % hashlib.sha1(os.path.abspath(path).encode("utf-8")).hexdigest()[:8])
+    try:
+        info = zip_salvage(path, dest, zip_until())
+    except Exception as e:                                    # noqa: BLE001
+        debuglog.exc("zip: by headers", e)
+        return None
+    if not info["whole"]:
+        return None
+    info["reason"], info["path"] = zip_reason(info), dest
+    state["broke"] = info
+    trace("zip.salvage", how=info["how"], members=info["members"], whole=len(info["whole"]),
+          broken=len(info["broken"]), at=info["at"], more=info["more"][:60])
+    return dest
 
 
 def _doc_text(path, kind, c, workdir, alternate, name, state):
@@ -5604,12 +5947,20 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
             # a member python-docx, python-pptx or openpyxl met does not unpack: the ones that do
             dest = os.path.join(workdir, "_mended-%s.zip" % hashlib.sha1(
                 os.path.abspath(path).encode("utf-8")).hexdigest()[:8])
+            salvaged = None
             try:
-                info = zip_mend(path, dest)
+                info = zip_mend(path, dest, zip_until())
+                if info["broken"] and not info["whole"]:
+                    # not one member unpacks where the table of contents says it starts - its offsets
+                    # are wrong (python-docx answered "negative seek value") while the members' own
+                    # headers are right: they are read as a cut archive's are
+                    salvaged = zip_salvage(path, dest, zip_until())
+                    if salvaged["whole"]:
+                        info = salvaged
             except Exception as e:                            # noqa: BLE001
                 debuglog.exc("zip: mend", e)
                 info = None
-            if info and info["broken"]:
+            if info and (info["broken"] or info is salvaged):
                 info["reason"] = zip_reason(info)
                 info["path"] = dest if info["whole"] else ""
                 state["broke"] = info
@@ -5630,6 +5981,10 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
         if pics:
             shutil.rmtree(pics, ignore_errors=True)
         md, why = own_doc(path, "rtf" if kind == "rtf" else sub, pics)
+        again = _by_headers(path, workdir, state) if kind == "zip" and not md.strip() and \
+            "could not be unpacked" in why else None
+        if again:
+            md, why = own_doc(again, sub, pics)
         return md, why or ("" if md.strip() else "no text in this %s" % (sub or kind).upper())
     if kind == "pdf":
         if c["libs"].get("pymupdf"):
@@ -5718,6 +6073,9 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
             return text, note
     elif sub == "epub":
         md, why = own_doc(path, "epub")
+        again = _by_headers(path, workdir, state) if not md.strip() and "could not be unpacked" in why else None
+        if again:
+            md, why = own_doc(again, "epub")
         if md.strip() or not why.startswith("the reader failed"):
             return md, why or note or ("" if md.strip() else "no text in this EPUB")
         note = note or why
@@ -5734,6 +6092,12 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
         rc, so, se = run_tool([c["cli"]["markitdown"], path, "-o", outp], timeout=secs)
         if rc == 0 and os.path.exists(outp):
             return open(outp, encoding="utf-8", errors="replace").read(), note
+    if sub in OFFICE_LIBS:
+        # the office reader and what it said: "no converter (pymupdf)" was said of a DOCX, whose reader
+        # pymupdf is not
+        lib = OFFICE_LIBS[sub]
+        return "", note or ("no converter for this file type: %s is not installed here" % lib if _OFFICE.get("missing")
+                            else "%s could not read it: %s" % (lib, _OFFICE.get("error") or "it gave no text"))
     return "", note or "no converter for this file type (pymupdf)"
 
 
@@ -7576,10 +7940,10 @@ def picture_phase(text, page_text, html, base, workdir, manifest, args, deny, kn
     if not want:
         return text, page_text
     # a document's own pictures (a docx's, an EPUB's: doc_pictures) are placed, numbered and on
-    # disk already; the links its text still has - to a picture the archive does not hold - are
-    # numbered after them, and the placed ones stay in the manifest (one missing picture dropped
-    # them all, and --refresh deleted their files)
-    placed = [e for e in (manifest.get("images") or []) if isinstance(e, dict) and e.get("file")]
+    # disk already, and those it holds no file for say why; the links its text still has - an
+    # address of their own - are numbered after them, and the document's stay in the manifest (one
+    # missing picture dropped them all, and --refresh deleted their files)
+    placed = [e for e in (manifest.get("images") or []) if isinstance(e, dict) and (e.get("file") or e.get("why"))]
     first = max([int(e.get("n") or 0) for e in placed] + [0]) + 1
     if deny or not args.download:
         why = "--deny-images" if deny else PENDING
@@ -7781,19 +8145,41 @@ def _window_round(workdir, manifest, url, view, start, nums, files, seconds, pha
     return manifest
 
 
-def doc_pictures(text, entries, workdir):
+_OWN_ADDRESS = re.compile(r"(?i)^\s*(?:[a-z][a-z0-9+.-]{0,31}:|//)")      # a picture's address of its own
+
+
+def doc_pictures(text, entries, workdir, left=None):
     """A document's pictures (DOCX, PPTX, EPUB in document order): where the text names
     one (`![](word/media/image1.png)`, a converter's `![](images/x.png)`), its marker stands there;
-    the others are listed after the text in document order. Files become img/NN-words.ext."""
-    by_zip = {}
+    the others are listed after the text in document order. Files become img/NN-words.ext.
+    `left`: {name: why} of the pictures the archive or our RTF reader holds that were left out
+    (zip_images, rtf_images): a tracking pixel's link goes, a copy's is its picture's marker,
+    another's is a marker that says why, numbered after the others - and so is a link to a
+    picture the document does not hold. A name inside the document never stays a link for the
+    picture phase, which resolved it against the document's address and asked its server for a
+    file under a name the reader had made up (`rtf-pict-0003.png`). Returns (text, entries)."""
+    by_zip, gone = {}, {}
     for e in entries:
         z = e.pop("_zip", "") or ""
         by_zip.setdefault(z, e)
         by_zip.setdefault(posixpath.basename(z), e)
-    placed = []
-    for _a, _b, alt, src in pictures.links(text):
+    for name, why in (left or {}).items():
+        gone.setdefault(name, why)
+        gone.setdefault(posixpath.basename(name), why)
+
+    def find(src):
+        """(the entry of a picture the text names, or None and why it has none)."""
         key = urllib.parse.unquote(src).lstrip("./")
         e = by_zip.get(key) or by_zip.get(posixpath.basename(key))
+        why, seen = gone.get(key) or gone.get(posixpath.basename(key)), set()
+        while e is None and isinstance(why, tuple) and why[1] not in seen:      # a copy: its picture's
+            seen.add(why[1])
+            e, why = by_zip.get(why[1]), gone.get(why[1])
+        return e, (None if isinstance(why, tuple) else why)
+    links = pictures.links(text)
+    placed = []
+    for _a, _b, alt, src in links:
+        e, _why = find(src)
         if e is not None and not any(e is x for x in placed):
             placed.append(e)
             if alt and not e.get("alt"):
@@ -7806,26 +8192,36 @@ def doc_pictures(text, entries, workdir):
         if os.path.normcase(old) != os.path.normcase(new) and os.path.isfile(old):
             os.replace(old, new)
         e.update(n=n, file=rel, url=e.get("url") or "", **{"in": "text" if n <= len(placed) else "list"})
-    by_src = {}
-    for _a, _b, _alt, src in pictures.links(text):
-        key = urllib.parse.unquote(src).lstrip("./")
-        e = by_zip.get(key) or by_zip.get(posixpath.basename(key))
+    by_src, drop, absent = {}, set(), []
+    for _a, _b, alt, src in links:
+        if src in by_src or src in drop:
+            continue
+        e, why = find(src)
         if e is not None:
             by_src[src] = e
-    text = pictures.mark(text, "", by_src)
+        elif why == "a tracking pixel":
+            drop.add(src)                          # a counter or a spacer: shown nowhere, as on a page
+        elif not _OWN_ADDRESS.match(src):
+            absent.append({"n": len(placed) + len(rest) + len(absent) + 1, "url": urllib.parse.unquote(src).strip(),
+                           "alt": alt or "", "in": "text", "why": why or "not in the document"})
+            by_src[src] = absent[-1]
+    text = pictures.mark(text, "", by_src, drop)
     if rest:
         text = (text or "").rstrip() + "\n\n" + pictures.unplaced_list(rest)
-    return text, placed + rest
+    return text, placed + rest + absent
 
 
 RTF_PICTURES = "_rtf-pictures"      # the folder of a read where our RTF reader writes its pictures
 
 
-def rtf_images(folder, workdir):
+def rtf_images(folder, workdir, left=None):
     """The pictures our RTF reader wrote (docreaders' rtf-pict-NNNN.png and .jpg, KNOWN-ISSUES 166)
     as a document's pictures, in its order: into img/, an entry each for doc_pictures(), which puts
-    each one's marker where the text names it. A tracking pixel is left out; the folder goes."""
+    each one's marker where the text names it. A tracking pixel is left out, and named in `left`
+    (doc_pictures takes its link out); the folder goes. Each file is read for its own size: read
+    for 100 MB, a 100-byte file cost 17 ms, and 1 000 pictures 17 s."""
     out = []
+    left = {} if left is None else left
     try:
         names = sorted(n for n in os.listdir(folder) if re.match(r"^rtf-pict-\d{4}\.(?:png|jpg)$", n))
     except OSError:
@@ -7834,11 +8230,14 @@ def rtf_images(folder, workdir):
         src = os.path.join(folder, name)
         try:
             with open(src, "rb") as fh:
-                data = fh.read(MEDIA_LIMIT + 1)
+                data = fh.read(min(os.fstat(fh.fileno()).st_size, MEDIA_LIMIT) + 1)
         except OSError:
+            left[name] = "it could not be read"
             continue
         w, h = _img_dims(data)
         if not data or len(data) > MEDIA_LIMIT or (w and h and w <= 2 and h <= 2):
+            left[name] = "a tracking pixel" if data and w and h and w <= 2 and h <= 2 else \
+                "empty" if not data else "over the size limit"
             continue
         os.makedirs(os.path.join(workdir, "img"), exist_ok=True)
         os.replace(src, os.path.join(workdir, "img", name))
@@ -7848,7 +8247,7 @@ def rtf_images(folder, workdir):
     return out
 
 
-def zip_images(path, workdir, limit=PAGE_LIMIT):
+def zip_images(path, workdir, limit=PAGE_LIMIT, left=None):
     """DOCX/EPUB keep pictures inside the package (word/media, OEBPS/images/...).
 
     Positions cannot be recovered without parsing document.xml, so the pictures land in img/
@@ -7856,16 +8255,19 @@ def zip_images(path, workdir, limit=PAGE_LIMIT):
     unpack in all: every byte read counts, a picture kept or not (40 copies of a 63 MB picture
     in 2.5 MB of EPUB were each unpacked and hashed, a counter pixel that is a gigabyte of
     zeros the same), and a copy of a picture already unpacked - the same declared size and CRC -
-    is not unpacked again.
+    is not unpacked again. `left` gets {name: why} of each picture left out - ("same", the name
+    of the picture it is a copy of) for a copy - so doc_pictures() never leaves its link for the
+    picture phase to ask the document's server for.
     """
     import zipfile
+    left = {} if left is None else left
     try:
         z = zipfile.ZipFile(path)
         docreaders.fix_zip_names(z)                  # the names an EPUB's spine gives, in a code page with no flag
     except Exception:                                # noqa: BLE001
         return []
     imgdir = os.path.join(workdir, "img")
-    out, seen, used, total, unpacked = [], set(), set(), 0, set()
+    out, seen, used, total, unpacked = [], {}, set(), 0, {}
     names = z.namelist()
     # a docx names its pictures in document.xml, an EPUB in its spine: reading order, and for an
     # EPUB the pictures its pages show wherever they are kept (a.png at the root, jacket/). The
@@ -7892,26 +8294,36 @@ def zip_images(path, workdir, limit=PAGE_LIMIT):
         try:
             info = z.getinfo(name)
             if info.file_size > MEDIA_LIMIT or total + info.file_size > limit:
-                continue                             # a zip bomb is refused before it is read
+                # a zip bomb is refused before it is read
+                left[name] = "over the size limit" if info.file_size > MEDIA_LIMIT else \
+                    "the archive's pictures are over %s" % human_bytes(limit)
+                continue
             if (info.file_size, info.CRC) in unpacked:
+                left[name] = ("same", unpacked[(info.file_size, info.CRC)])
                 continue                             # the same bytes again: not read a second time
             if info.file_size > 64 * 1024 * 1024 and info.compress_size * 100 < info.file_size:
+                left[name] = "not a picture: it unpacks to %s" % human_bytes(info.file_size)
                 continue                             # >100x compression ratio: not a picture
             with z.open(name) as fh:
                 data = fh.read(MEDIA_LIMIT + 1)
         except Exception:                            # noqa: BLE001
+            left[name] = "it does not unpack"
             continue
         total += len(data)
         if not data or len(data) > MEDIA_LIMIT or total > limit:
+            left[name] = "empty" if not data else "over the size limit" if len(data) > MEDIA_LIMIT else \
+                "the archive's pictures are over %s" % human_bytes(limit)
             continue
-        unpacked.add((info.file_size, info.CRC))
+        unpacked[(info.file_size, info.CRC)] = name
         w, h = _img_dims(data)
         if w and h and w <= 2 and h <= 2:            # tracking pixel
+            left[name] = "a tracking pixel"
             continue
         digest = hashlib.sha1(data).hexdigest()
         if digest in seen:
+            left[name] = ("same", seen[digest])
             continue
-        seen.add(digest)
+        seen[digest] = name
         os.makedirs(imgdir, exist_ok=True)
         stem = re.sub(r"[^A-Za-z0-9._-]+", "-", os.path.basename(name))[:60] or "image"
         base = os.path.splitext(stem)[0] or "image"
@@ -8691,10 +9103,13 @@ def read(args):
     ocr_missing = []
     pdf_tables_wanted = 0          # pages that look like a table, on a machine without the model
 
-    if kind in ("pdf", "zip") and f.get("partial"):
-        # a document cut by the step's bound is not mended. A PDF needs its cross-
-        # reference table at the end (arXiv: 0 pages from 10-75 % of the bytes), and building
-        # whole parts out of a cut ZIP is deferred. Why it was cut decides the status: a
+    # an archive cut in transit is read as a cut archive is, from the members that arrived whole (it
+    # was answered too_large or error with nothing read); the transfer's cut decides its status and
+    # advice below when they hold few words
+    transit = cut_said(f, size) if kind == "zip" and f.get("partial") and int(f.get("size") or 0) else ""
+    if kind in ("pdf", "zip") and f.get("partial") and not transit:
+        # a PDF cut by the step's bound is not mended: it needs its cross-reference table at
+        # the end (arXiv: 0 pages from 10-75 % of the bytes). Why it was cut decides the status: a
         # file still arriving when the 20 s ran out is too big for one call (`too_large`); a
         # server that stopped sending, or a connection that broke, is a failure (`error`) - a
         # document stuck at 1 KB is not "too large".
@@ -8746,25 +9161,33 @@ def read(args):
             manifest["chain"]["tried"].append("tables:pymupdf4llm")
         if broke:
             manifest["signals"]["broken_archive"] = dict(
-                {k: broke[k] for k in ("how", "what") if broke.get(k)},
+                {k: broke[k] for k in ("how", "what", "all_members") if broke.get(k)},
                 **({} if broke["how"] == "not a ZIP" else {
                     "members": broke["members"], "whole": len(broke["whole"]),
                     "not_whole": ["%s: %s" % b for b in broke["broken"][:20]]}))
         if kind in ("zip", "rtf"):
-            # an archive's pictures, or the ones our RTF reader wrote out
-            zimg = zip_images(read_path, workdir) if kind == "zip" else \
-                rtf_images(os.path.join(workdir, RTF_PICTURES), workdir)
+            # an archive's pictures, or the ones our RTF reader wrote out; the names of those left out
+            left = {}
+            zimg = zip_images(read_path, workdir, left=left) if kind == "zip" else \
+                rtf_images(os.path.join(workdir, RTF_PICTURES), workdir, left)
+            ordered = any(e.get("order") for e in zimg)
+            # a picture the text names stands there; the rest follow in document order; a name inside
+            # the document that has no picture here says why, and is never asked of the server
+            text, zimg = doc_pictures(text, zimg, workdir, left)
             if zimg:
-                ordered = any(e.get("order") for e in zimg)
-                # a picture the text names stands there; the rest follow in document order
-                text, zimg = doc_pictures(text, zimg, workdir)
                 manifest["images"] = zimg
                 if ordered:
                     manifest["signals"]["images_ordered"] = True
+        zip_copy_gone(broke)                   # read, its pictures too
         engine = "document"
         no_text_layer = note if "text layer" in note else ""
-        if note:
+        if no_text_layer or note.startswith("no converter"):
             manifest["missing"].append({"what": "text layer" if no_text_layer else "converter", "note": note})
+        elif note:
+            # what a reader says of the document it read - parts it left out or could not unpack, a
+            # table cut at its caps, pictures no browser or model shows, its time run out, its own
+            # error: not a converter this machine lacks, which `missing: converter` had said
+            manifest["signals"]["document_note"] = note[:400]
         if no_text_layer and kind == "pdf":
             rendered = render_pdf_pages(raw_path, workdir)
             if rendered:
@@ -9286,14 +9709,23 @@ def read(args):
     # ---------------------------------------------------------------- status, advice
     # `ok` needs a successful answer from the tier whose text this is: an error page's
     # own words are kept and shown, but a 500 with 200 words of apology is not the page.
-    word_count = words_of(text)
+    # A document's words are its own: the markers of its pictures and the list of those with no place
+    # in the text are this skill's (a deck whose slides were all lost was `ok` on its 9 pictures' 60)
+    doc_engine = str(engine or "").startswith("document")
+    word_count = words_of(pictures.unmarked(text) if doc_engine else text)
     cut = bool(manifest["signals"].get("partial"))
     error_why = ""
     # an archive that is cut, damaged or no ZIP at all: what was read of it is the text
     broke = _ZIPS.get("read") if kind == "zip" and source == "http" else None
+    complete = bool(broke and broke.get("all_members") and not broke.get("broken"))   # only its index is broken
     if network_fail and source == "http":          # no reader or archive answered for it
         manifest["status"] = "error"
         error_why = "the host did not answer" + (": " + str(f.get("error"))[:160] if f.get("error") else "")
+    elif cut and word_count < 40 and transit and f.get("cut") == "step":
+        # an archive still arriving when its time ran out, its whole members a few words: too big for one call
+        manifest["status"] = "too_large"
+        manifest["signals"]["limit"] = "the document was still arriving when the time for it ran out (%d s): %s" % (
+            int(round((f.get("ms") or 0) / 1000.0)), cut_said(f, size).split(" after ", 1)[-1])
     elif cut and word_count < 40:
         # a few words and a broken connection are not a page
         manifest["status"] = "error"
@@ -9315,15 +9747,16 @@ def read(args):
     elif by_code == "error":
         manifest["status"] = "error"
         error_why = "HTTP %s from the %s; its own page is the text" % (source_code, SOURCE_NAMES.get(code_from or source, source))
-    elif broke and broke["how"] != "not a ZIP" and word_count < 40:
+    elif broke and broke["how"] != "not a ZIP" and word_count < 40 and not complete:
         # the members that are whole hold a few words or none: not the document (40, as a transfer cut)
         manifest["status"] = "error"
         error_why = broke["reason"]
     elif not (text or "").strip():
         manifest["status"] = "empty"
-    elif word_count < 5 and not str(engine or "").startswith("server:"):
+    elif word_count < 5 and not str(engine or "").startswith("server:") and not (doc_engine and word_count):
         # a five-word HTML page is a shell or an error stub; a short answer from a JSON/text
-        # API *is* the answer (a DOI resolver returns 143 characters of citation metadata)
+        # API *is* the answer (a DOI resolver returns 143 characters of citation metadata), and so
+        # are a document's few words of its own (a DOCX that is one formula: `E = mc^2`)
         manifest["status"] = "empty"
     else:
         manifest["status"] = "ok"
@@ -9403,7 +9836,7 @@ def read(args):
                               "the page is gone; rerun with %s to try the archive" % out_flag if out_flag
                               else "the page is gone")
     elif broke:
-        manifest["advice"] = zip_advice(broke, local)
+        manifest["advice"] = zip_advice(broke, local, word_count, transit, f.get("cut") == "step")
     elif manifest["status"] == "empty":
         if manifest["signals"].get("binary"):
             manifest["advice"] = "the response is binary, not a page; there is no text to read"
