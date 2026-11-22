@@ -113,9 +113,34 @@ def untrust_commands(cert, sha1, system=None):
     if system == "nt":
         return [["certutil", "-delstore", "Root", sha1]] if sha1 else []
     if system == "darwin":
-        return ([["sudo", "security", "remove-trusted-cert", "-d", cert]] if cert and os.path.isfile(cert) else []) + (
-            [["sudo", "security", "delete-certificate", "-Z", sha1, MAC_KEYCHAIN]] if sha1 else [])
+        # the certificate first: its trust setting's removal may wait for an administrator's answer (untrust)
+        return ([["sudo", "security", "delete-certificate", "-Z", sha1, MAC_KEYCHAIN]] if sha1 else []) + (
+            [["sudo", "security", "remove-trusted-cert", "-d", cert]] if cert and os.path.isfile(cert) else [])
     return [["sudo", "rm", "-f", LINUX_CERT], ["sudo", "update-ca-certificates", "--fresh"]]
+
+
+# On a runner each removal is stopped at this many seconds: macOS's `security remove-trusted-cert -d` waits there for
+# an administrator's answer that no one gives, and held the job for its 90 minutes
+UNDO_SECONDS = 60
+_TIMEOUT = subprocess.TimeoutExpired
+
+
+def untrust(cmds, on_runner):
+    """Run the commands that take the certificate out: (what failed, what was left). On a runner each is stopped at
+    UNDO_SECONDS; a trust setting whose removal waits for a prompt is named and left - the certificate is out of the
+    keychain before it and the CA's key is deleted, so nothing can be signed with it any more. Off a runner a prompt
+    is the person's to answer, with no limit."""
+    bad, left = [], []
+    for c in cmds:
+        try:
+            p = run(c, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=UNDO_SECONDS if on_runner else None)
+        except (_TIMEOUT, OSError) as e:
+            why = "no answer in %d s" % UNDO_SECONDS if isinstance(e, _TIMEOUT) else str(e)
+            (left if isinstance(e, _TIMEOUT) and "remove-trusted-cert" in c else bad).append("%s (%s)" % (" ".join(c), why))
+            continue
+        if p.returncode != 0:
+            bad.append("%s (%s)" % (" ".join(c), p.stdout.decode("utf-8", "replace").strip()[-160:]))
+    return bad, left
 
 
 def end_process(pid):
@@ -273,16 +298,15 @@ def cmd_stop(a):
         return 0
     state = save_state(d)
     end_process(state.get("pid"))
-    bad = []
+    bad, left = [], []
     if state.get("trusted") or state.get("sha1"):
-        for c in untrust_commands(state.get("cert") or "", state.get("sha1") or ""):
-            p = run(c, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-            if p.returncode != 0:
-                bad.append("%s (%s)" % (" ".join(c), p.stdout.decode("utf-8", "replace").strip()[-160:]))
+        bad, left = untrust(untrust_commands(state.get("cert") or "", state.get("sha1") or ""),
+                            os.environ.get("GITHUB_ACTIONS") == "true")
         save_state(d, trusted=False)
     shutil.rmtree(state.get("conf") or os.path.join(d, "conf"), ignore_errors=True)       # the CA's key above all
-    print("the proxy is off; its root certificate (SHA-1 %s) is out of the system store%s; its CA and key are deleted"
-          % (state.get("sha1") or "?", "" if not bad else " - NOT for: %s" % "; ".join(bad)))
+    print("the proxy is off; its root certificate (SHA-1 %s) is out of the system store%s; its CA and key are deleted%s"
+          % (state.get("sha1") or "?", "" if not bad else " - NOT for: %s" % "; ".join(bad),
+             "" if not left else "; left, waiting for a prompt no one answers here: %s" % "; ".join(left)))
     return 1 if bad else 0
 
 

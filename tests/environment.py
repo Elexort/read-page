@@ -3098,11 +3098,40 @@ attempt("`ci_proxy.py stop` takes out what `start` put in: the root certificate 
         "- out of the store, the CA and its key deleted",
         lambda: (thumb_pem == sha_pem
                  and ci_proxy.untrust_commands(pem, sha_pem, "nt") == [["certutil", "-delstore", "Root", sha_pem]]
-                 and ci_proxy.untrust_commands(pem, sha_pem, "darwin")[-1] == ["sudo", "security", "delete-certificate", "-Z",
-                                                                              sha_pem, ci_proxy.MAC_KEYCHAIN]
+                 and ci_proxy.untrust_commands(pem, sha_pem, "darwin")[0] == ["sudo", "security", "delete-certificate", "-Z",
+                                                                             sha_pem, ci_proxy.MAC_KEYCHAIN]
                  and ci_proxy.untrust_commands(pem, sha_pem, "linux")[-1] == ["sudo", "update-ca-certificates", "--fresh"]
                  and px_undo[0] == 0 and [c_ for _n, c_ in px_undo[1]] == undo_cmds
                  and not os.path.exists(os.path.dirname(pem)), str(px_undo)[:300]))
+# macOS's runner: `security remove-trusted-cert -d` waits for an administrator's answer no one gives, and `stop` held
+# the job for its 90 minutes, every run (the certificate itself, deleted first now, goes without a word)
+mac_calls = []
+
+
+def mac_run(cmd, **kw):
+    mac_calls.append((list(cmd), kw.get("timeout")))
+    if "remove-trusted-cert" in cmd:
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout") or 0)
+    return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+
+
+mac_pem = os.path.join(pem_dir, "mac-ca-cert.pem")                 # the one above went with stop's conf folder
+with open(mac_pem, "w", encoding="ascii") as fh_:
+    fh_.write("-----BEGIN CERTIFICATE-----\n%s\n-----END CERTIFICATE-----\n" % base64.b64encode(b"a certificate").decode())
+saved_sub_ = ci_proxy.subprocess
+ci_proxy.subprocess = types.SimpleNamespace(run=mac_run, PIPE=-1, STDOUT=-2, DEVNULL=-3,
+                                            TimeoutExpired=subprocess.TimeoutExpired)
+try:
+    with contextlib.redirect_stdout(io.StringIO()):
+        mac_undo = getattr(ci_proxy, "untrust", None) and ci_proxy.untrust(
+            ci_proxy.untrust_commands(mac_pem, sha_pem, "darwin"), True)
+finally:
+    ci_proxy.subprocess = saved_sub_
+attempt("`ci_proxy.py stop` on a runner bounds each removal: macOS's trust setting that waits for a prompt is named and "
+        "left, the certificate deleted before it, the step ends",
+        lambda: (bool(mac_undo) and mac_undo[0] == [] and len(mac_undo[1]) == 1 and "remove-trusted-cert" in mac_undo[1][0]
+                 and [c_[2] for c_, _t in mac_calls] == ["delete-certificate", "remove-trusted-cert"]
+                 and all(t_ and t_ <= 120 for _c, t_ in mac_calls), "%r %r" % (mac_undo, mac_calls)))
 PY_MANIFEST = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<assembly xmlns="urn:schemas-microsoft-com:asm.v1" '
                'manifestVersion="1.0"><trustInfo xmlns="urn:schemas-microsoft-com:asm.v3"><security><requestedPrivileges>'
                '<requestedExecutionLevel level="asInvoker" uiAccess="false"/></requestedPrivileges></security></trustInfo>'
