@@ -673,7 +673,12 @@ def ascii_stage_root():
     if os.name != "nt":
         return ""
     base = cache_root()
-    for root in (base, ownenv.ascii_path(base), os.path.join(ownenv.home(), "cache")):
+    roots = [base, ownenv.ascii_path(base)]
+    if sys.version_info >= (3, 13):
+        # READ_PAGE_HOME may be a folder every user reads (C:\read-page inherits C:\'s rights): only where
+        # os.mkdir(..., 0o700) makes each stage folder this user's alone (Python 3.13 and later do on Windows)
+        roots.append(os.path.join(ownenv.home(), "cache"))
+    for root in roots:
         if not root or not root.isascii():
             continue
         folder = os.path.join(root, "tmp")
@@ -685,21 +690,72 @@ def ascii_stage_root():
     return ""
 
 
+STAGE_STALE = 3600              # a stage folder untouched this long belongs to a read that is gone
+
+
+def prune_stages(folder, older=STAGE_STALE):
+    """Remove the stage folders under `folder` (cache/tmp) that nothing has touched for an hour: a read killed
+    while a document was staged left its copy there, and nothing else ever removed it. A folder counts as
+    touched when it or a file in it changed (a download in progress writes its body)."""
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return
+    for name in names:
+        p = os.path.join(folder, name)
+        try:
+            if not os.path.isdir(p) or os.path.islink(p):
+                continue
+            newest = max([os.path.getmtime(p)] + [e.stat().st_mtime for e in os.scandir(p)])
+            if now() - newest > older:
+                _rmtree_own(p)
+        except OSError:
+            continue
+
+
+def _rmtree_own(path):
+    """Remove a stage folder, a read-only file of ours in it too (a copy: one link) - never changing a file that
+    has another name somewhere (a link to the user's own document keeps its attributes)."""
+    for top, dirs, files in os.walk(path, topdown=False):
+        for name in files:
+            p = os.path.join(top, name)
+            try:
+                os.unlink(p)
+            except OSError:
+                try:
+                    if os.stat(p).st_nlink == 1:
+                        os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+                        os.unlink(p)
+                except OSError:
+                    pass
+        for name in dirs:
+            try:
+                os.rmdir(os.path.join(top, name))
+            except OSError:
+                pass
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
 def narrow_paths(ins, outs=()):
     """(inputs, outputs, done) for a program that takes narrow arguments: on Windows a path with a character outside
     ASCII - under a profile named in Chinese, Cyrillic, or a name whose second byte in Big5 is 0x5C -
-    is read by such a program in the ANSI code page, or not at all. Each such input is linked (copied) into an
-    ASCII folder under a name of ours, each such output is a name in it; `done()` moves the outputs to their
-    real places and removes the folder. Anywhere else, or when every path is ASCII, nothing changes."""
+    is read by such a program in the ANSI code page, or not at all. Each such input is linked (copied when it is
+    read-only, or when it cannot be linked) into an ASCII folder of the user's alone under a name of ours, each such
+    output is a name in it; `done()` moves the outputs to their real places and removes the folder, and a folder
+    a killed read left is pruned. Anywhere else, or when every path is ASCII, nothing changes."""
     ins, outs = [str(x) for x in ins], [str(x) for x in outs]
     if os.name != "nt" or all(x.isascii() for x in ins + outs):
         return ins, outs, (lambda: None)
     root = ascii_stage_root()
     if not root:
         return ins, outs, (lambda: None)
+    prune_stages(root)
     stage = os.path.join(root, os.urandom(6).hex())
     try:
-        os.makedirs(stage)
+        os.mkdir(stage, 0o700)
     except OSError:
         return ins, outs, (lambda: None)
     new_ins, new_outs = [], []
@@ -710,6 +766,10 @@ def narrow_paths(ins, outs=()):
         ext = os.path.splitext(x)[1]
         dst = os.path.join(stage, "in%d%s" % (i, ext if ext.isascii() else ""))
         try:
+            if not os.access(x, os.W_OK):
+                # a read-only file (a CD's, a mail's, some archives'): a link would share its read-only
+                # attribute, which no rmtree removes - the stage stayed, the document with it
+                raise OSError("read-only: copied")
             os.link(x, dst)
         except OSError:
             try:
@@ -728,7 +788,7 @@ def narrow_paths(ins, outs=()):
                     replace_file(staged, real)
                 except OSError as e:
                     debuglog.exc("narrow paths: output", e)
-        shutil.rmtree(stage, ignore_errors=True)
+        _rmtree_own(stage)
     return new_ins, new_outs, done
 
 
@@ -755,7 +815,9 @@ def run(cmd, timeout=120, shell=False, input_bytes=None, cwd=None):
     popen_kw = {"start_new_session": True} if os.name != "nt" else {
         "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
     try:
-        p = subprocess.Popen(cmd, shell=shell, cwd=cwd,
+        # a Python program among them (yt-dlp, markitdown, an engine's own command) writes UTF-8, which is what
+        # its output is read as: else it writes the ANSI code page on Windows, a locale's on POSIX (GBK)
+        p = subprocess.Popen(cmd, shell=shell, cwd=cwd, env=dict(os.environ, PYTHONUTF8="1", PYTHONIOENCODING="utf-8"),
                              stdin=subprocess.PIPE if input_bytes is not None else None,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, **popen_kw)
     except Exception as e:                                    # noqa: BLE001
@@ -1258,6 +1320,7 @@ def prune_cache(pages_root, keep=CACHE_KEEP_HOURS):
                 continue
         trace("cache.prune", dir=pages_root, keep_hours=keep)
         drop_old_picture_stores()
+        prune_stages(os.path.join(cache_root(), "tmp"))      # what a killed read left staged
     except Exception as _dbg_e:                                          # noqa: BLE001
         debuglog.exc("cache prune", _dbg_e)
 
@@ -1546,7 +1609,12 @@ def _cookie_run_reset():
 
 
 def host_of(url):
-    return (urllib.parse.urlparse(url).hostname or "").lower()
+    """The URL's host, lower case, as the request names it (intl.host_ascii: punycode, escapes decoded): the one
+    name its cookies, its cache folder and the network rule go by - a server sets a cookie for its punycode."""
+    h = (urllib.parse.urlparse(url).hostname or "").lower()
+    if h and (not h.isascii() or "%" in h) and ":" not in h:
+        h = intl.host_ascii(h) or h
+    return h
 
 
 def host_dir(url):
@@ -2061,9 +2129,10 @@ def raw_header(headers, name):
         return b""
     if isinstance(v, bytes):
         return v.strip()
+    enc = getattr(headers, "encoding", None)          # a client that says how it decoded them
     try:
-        return str(v).strip().encode("latin-1")
-    except UnicodeEncodeError:
+        return str(v).strip().encode(enc if isinstance(enc, str) and enc else "latin-1")
+    except (LookupError, UnicodeEncodeError):
         return str(v).strip().encode("utf-8")
 
 
@@ -2416,7 +2485,7 @@ def _fetch_urllib(url, download, spool_dir, cond, deadline, out, t):
         out.update(status=code, ct=r.headers.get("Content-Type", "") or "", body=body, path=path,
                    size=size, head=head, final=cur, partial=bool(state["cut"]), cut=state["cut"],
                    etag=r.headers.get("ETag", "") or "", last_modified=r.headers.get("Last-Modified", "") or "",
-                   disposition=intl.header_text(r.headers.get("Content-Disposition", "") or ""),
+                   disposition=intl.header_bytes(raw_header(r.headers, "Content-Disposition")),
                    headers=wall_headers(r.headers), expected=int(expected) if expected.isdigit() else 0)
         break
     out["ms"] = int((now() - t) * 1000)
@@ -2525,7 +2594,7 @@ def _fetch_once(url, download=False, workdir=None, validators=None, plain_only=F
                        size=size, head=head, final=final, partial=bool(cut), cut=cut, expected=known,
                        etag=(r.headers.get("etag") or ""),
                        last_modified=(r.headers.get("last-modified") or ""),
-                       disposition=intl.header_text(r.headers.get("content-disposition") or ""),
+                       disposition=intl.header_bytes(raw_header(r.headers, "content-disposition")),
                        headers=wall_headers(r.headers))
             out["ms"] = int((now() - t) * 1000)
             if refused_fingerprint(r.status_code) and r.status_code != 406:
@@ -2754,13 +2823,12 @@ def smart_decode(body, ct=""):
 def note_charset(manifest, got):
     """What a reader of the manifest needs of a page's encoding: its name, and - when the page did not
     say it, so the text was read by a guess - that, and whether the guess is a doubtful one. A silent
-    wrong reading is what a Chinese or Japanese page used to get on a machine without charset_normalizer."""
+    wrong reading is what a Chinese or Japanese page used to get on a machine without charset_normalizer.
+    The answer's first line says it (`charset gb18030 (guessed, doubtful)`); `advice` is left to what
+    an agent can do, and there is nothing to do about a page that names no encoding."""
     manifest["url"]["charset"] = got.charset
     if got.how in ("guessed", "detected") or (got.how == "utf-8" and got.doubt):
         manifest["signals"]["charset_guess"] = got.charset + (" (doubtful)" if got.doubt else "")
-        if got.doubt and not manifest.get("advice"):
-            manifest["advice"] = ("the page does not say what encoding it is in; its text was read as %s, a guess "
-                                  "that may be wrong: some characters may be mistaken" % got.charset)
 
 
 def title_of(html):
@@ -3726,11 +3794,11 @@ def _render(url, c, shots, shot_dir, box, ready, wall=False):
                     started = True
                     # service workers are off: a request one of them makes is not routed
                     # screenshots: a laptop's window and reduced motion (screens.py)
-                    ctx = br.new_context(locale=intl.browser_locale(), service_workers="block", **dict(
+                    # the locale is the browser's Accept-Language too (one tag: Chromium sends it in place of
+                    # any header given beside it, and navigator.languages says the same)
+                    ctx = br.new_context(locale=intl.browser_locale(), service_workers="block", **(
                         {"viewport": {"width": screens.SCREEN_W, "height": screens.SCREEN_H},
-                         "reduced_motion": "reduce"} if not text_only else {},
-                        **({"extra_http_headers": {"Accept-Language": intl.accept_language()}}
-                           if intl.accept_language() else {})))
+                         "reduced_motion": "reduce"} if not text_only else {}))
                     blocked = (guard_requests(ctx, url, text_only=text_only)
                                if guard is None or b.get("kind") == "webkit" else [])
                     try:                             # the session the HTTP tiers already hold
@@ -4416,7 +4484,10 @@ def office_fast(path, sub):
     return ""
 
 
-def render_pdf_pages(path, workdir, pages=3, dpi=150):
+OCR_RENDER_DPI = 150                    # a scanned page's picture for OCR
+
+
+def render_pdf_pages(path, workdir, pages=3, dpi=OCR_RENDER_DPI):
     """PNG of the first pages, for a model that can look. Returns the file paths."""
     try:
         import pymupdf
@@ -4667,8 +4738,20 @@ def ocr_picture(path, page_text=""):
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(ln.rstrip() for ln in (best[1] or "").splitlines())).strip()
     info = {"engine": engine, "langs": "+".join(langs), "pass": best[2], "seconds": round(now() - t0, 2)}
     if lost:
-        info["note"] = "no %s language data here: %s" % ("/".join(lost), ownenv.fix("ocr-langs", "install it into tessdata"))
+        info["note"] = "no %s language data here: %s" % ("/".join(lost), ocr_pack_fix(lost))
     return text, info
+
+
+def ocr_pack_fix(packs):
+    """The line that gives these OCR packs: --setup fetches English and the user's own languages, and what
+    READ_PAGE_OCR_LANGS names - so the command names them (`READ_PAGE_OCR_LANGS=eng+jpn readpage.py --setup`)."""
+    packs = [p for p in packs if p][:3]
+    files = ", ".join("%s.traineddata" % p for p in packs)
+    if ownenv.problem("ocr-langs"):
+        return "%s: %s" % (files, ownenv.problem("ocr-langs"))
+    if ownenv.gives("ocr-langs"):
+        return "%s: READ_PAGE_OCR_LANGS=%s %s" % (files, "+".join(["eng"] + [p for p in packs if p != "eng"]), SETUP)
+    return "%s into tessdata (github.com/tesseract-ocr/tessdata_fast), or READ_PAGE_OCR_LANGS" % files
 
 
 def ocr_answer(workdir, manifest, n):
@@ -4745,17 +4828,24 @@ def ocr_pages(paths):
             with ownenv.tess_dir(lib[1]) as tdir:            # started from the folder's parent where a narrow path fails
                 api = lib[0].PyTessBaseAPI(path=tdir, lang="+".join(use))
             with api:
-                try:
-                    from PIL import Image
-                    with Image.open(png) as shot:
-                        shot.load()
-                        api.SetImage(shot)               # no path for the library to open in the ANSI code page
-                except ImportError:
-                    shown, _outs, narrow_done = narrow_paths([png])
+                if str(png).isascii():
+                    api.SetImageFile(png)                # the file's own resolution: the page's 150 dpi
+                else:
                     try:
-                        api.SetImageFile(shown[0])
-                    finally:
-                        narrow_done()
+                        from PIL import Image
+                        with Image.open(png) as shot:
+                            shot.load()
+                            dpi = (shot.info.get("dpi") or (OCR_RENDER_DPI,))[0]
+                            api.SetImage(shot)           # no path for the library to open in the ANSI code page
+                            # tesserocr hands the picture over re-saved without its resolution: tesseract
+                            # took 70 dpi for a page rendered at 150
+                            api.SetSourceResolution(int(round(float(dpi))) or OCR_RENDER_DPI)
+                    except ImportError:
+                        shown, _outs, narrow_done = narrow_paths([png])
+                        try:
+                            api.SetImageFile(shown[0])
+                        finally:
+                            narrow_done()
                 try:
                     api.Recognize(int(secs * 1000))
                 except TypeError:
@@ -6446,12 +6536,17 @@ def vtt_to_text(vtt, block_seconds=30):
 
 
 def video_text(url, c, workdir):
-    """Subtitle transcript via yt-dlp (works for YouTube, TikTok, VK, Vimeo, RuTube, ...)."""
+    """Subtitle transcript via yt-dlp (works for YouTube, TikTok, VK, Vimeo, RuTube, ...): (text, title, note) -
+    the note says why there is no text, or which track the text is (`en`, `fr, automatic`, `zh-Hans,
+    machine-translated from en`). The user's languages are asked for, and the track the video speaks in
+    (`<lang>-orig`, YouTube's speech recognition): YouTube offers a machine translation into every language,
+    which is read only when the video has nothing else (pick_vtt)."""
     yt = c["cli"].get("yt-dlp")
     if not yt:
         return "", "", "yt-dlp is not installed"
     asked = intl.sub_langs()
     langs = ",".join(asked)
+    sub_arg = langs if os.environ.get("READ_PAGE_SUB_LANGS") else langs + ",.*-orig"
     extra = []
     jar = cookies_for_url(url)
     if jar:                                   # age-gated and members-only videos need the session
@@ -6474,13 +6569,16 @@ def video_text(url, c, workdir):
         # its own cache (the player's solved challenges) in the one folder, not in ~/.cache/yt-dlp
         extra = ["--cache-dir", os.path.join(ours, "cache", "yt-dlp")] + extra
     rc, so, se = run([yt, "--skip-download", "--write-subs", "--write-auto-subs",
-                      "--sub-langs", langs, "--sub-format", "vtt", "--write-info-json"]
+                      "--sub-langs", sub_arg, "--sub-format", "vtt", "--write-info-json"]
                      + extra + ["-o", os.path.join(workdir, "video.%(ext)s"), url],
                      timeout=video_secs)
     files = os.listdir(workdir)
-    vtt = pick_vtt(files, asked)
-    if not vtt and rc != -1 and not os.environ.get("READ_PAGE_SUB_LANGS"):
-        # none of the user's tracks and English: the video's own language, when it names one
+    kinds = subtitle_kinds(workdir, files)
+    vtt = pick_vtt(files, asked, kinds)
+    if (not vtt or kinds.get(_vtt_lang(vtt), "").startswith("translated")) and rc != -1 \
+            and not os.environ.get("READ_PAGE_SUB_LANGS"):
+        # none of the user's tracks and English, or only a machine translation: the video's own language,
+        # when its info names one
         own = own_tracks(workdir, files, asked)
         left = video_secs - (now() - t_yt)
         if own and left > 3:
@@ -6488,8 +6586,9 @@ def video_text(url, c, workdir):
                  "--sub-format", "vtt"] + extra + ["-o", os.path.join(workdir, "video.%(ext)s"), url],
                 timeout=max(1.0, left))
             files = os.listdir(workdir)
-            vtt = pick_vtt(files, [own])
-            if vtt:
+            got = pick_vtt(files, own.split(",") + asked, kinds)
+            if got and got != vtt:
+                vtt = got
                 langs = "%s, then %s" % (langs, own)
     budget.record("yt-dlp", t_yt, budget.ended(VIDEO_TIMEOUT, video_secs) if rc == -1 else "ok" if vtt else "fail",
                   own=VIDEO_TIMEOUT, given=video_secs, note="subtitles" if vtt else "no subtitles")
@@ -6513,17 +6612,66 @@ def video_text(url, c, workdir):
     except OSError:
         pass
     text = vtt_to_text(raw)
-    return text, title, "" if text else "subtitles were empty"
+    return text, title, track_note(_vtt_lang(vtt), kinds) if text else "subtitles were empty"
 
 
-def pick_vtt(files, langs):
-    """The subtitle file yt-dlp wrote for the first of `langs` that has one (`video.<lang>.vtt`), else any."""
+def _vtt_lang(name):
+    """`video.zh-Hans.vtt` -> "zh-Hans"."""
+    return (name or "")[:-4].rsplit(".", 1)[-1] if (name or "").endswith(".vtt") else ""
+
+
+def subtitle_kinds(workdir, files):
+    """{language: kind} of the tracks yt-dlp's info file lists: "human" (the video's own subtitles), "auto"
+    (speech recognition in the language spoken), "translated from <lang>" (YouTube's machine translation:
+    its address asks for `tlang=`). {} without the info file."""
+    info = next((f for f in files if f.endswith(".info.json")), "")
+    try:
+        with open(os.path.join(workdir, info), encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    autos = d.get("automatic_captions") if isinstance(d.get("automatic_captions"), dict) else {}
+    for lang, fmts in autos.items():
+        urls = [str(x.get("url") or "") for x in (fmts if isinstance(fmts, list) else []) if isinstance(x, dict)]
+        tr = next((u for u in urls if re.search(r"[?&]tlang=", u)), "")
+        if tr:
+            src = (re.search(r"[?&]lang=([^&#]+)", tr) or [None, d.get("language") or ""])[1]
+            out[str(lang)] = "translated" + (" from " + urllib.parse.unquote(src) if src else "")
+        else:
+            out[str(lang)] = "auto"
+    subs = d.get("subtitles") if isinstance(d.get("subtitles"), dict) else {}
+    for lang in subs:
+        out[str(lang)] = "human"                     # yt-dlp takes a language's own subtitles over its automatic ones
+    return out
+
+
+def track_note(lang, kinds):
+    """How the answer names the track it read: `en`, `fr, automatic`, `zh-Hans, machine-translated from en`."""
+    kind = (kinds or {}).get(lang, "")
+    if kind == "auto":
+        return "subtitles %s, automatic" % (lang[:-5] if lang.endswith("-orig") else lang)
+    if kind.startswith("translated"):
+        return "subtitles %s, machine-translated%s" % (lang, kind[len("translated"):])
+    return "subtitles %s" % lang
+
+
+def pick_vtt(files, langs, kinds=None):
+    """The subtitle file to read of those yt-dlp wrote (`video.<lang>.vtt`): a human track, in the order of `langs`;
+    else the words as spoken - speech recognition in one of `langs`, then the video's own (`-orig`); a machine
+    translation only when there is nothing else (YouTube makes one into every language: the user's first
+    language was taken, an English talk read in YouTube's Chinese). With no kinds known, by `langs` alone."""
     vtts = sorted(f for f in files if f.endswith(".vtt") and f != "transcript.vtt")
-    for lang in langs:
-        for f in vtts:
-            if f[:-4].rsplit(".", 1)[-1].lower() == lang.lower():
-                return f
-    return vtts[0] if vtts else ""
+    want = [x.lower() for x in langs]
+    kinds = dict((str(k).lower(), v) for k, v in (kinds or {}).items())
+
+    def order(f):
+        lang = _vtt_lang(f).lower()
+        kind = kinds.get(lang, "")
+        tier = 0 if kind == "human" else 2 if kind.startswith("translated") else 1
+        pos = want.index(lang) if lang in want else len(want) + (0 if lang.endswith("-orig") else 1)
+        return tier, pos, f
+    return min(vtts, key=order) if vtts else ""
 
 
 def own_tracks(workdir, files, asked):
@@ -6658,12 +6806,8 @@ def gaps(c, ctx):
         spec_i.append({"what": "ocr", "fix": fix("tesseract", "tesseract (or a vision model)"),
                        "gain": "text from scanned pages; a vision model can read the rendered page instead"})
     if ctx.get("ocr_missing"):
-        packs = ", ".join("%s.traineddata" % x for x in ctx["ocr_missing"][:3])
         spec_i.insert(0, {"what": "ocr-language",
-                          "fix": packs + (": %s fetches what READ_PAGE_OCR_LANGS names" % SETUP
-                                          if ownenv.gives("ocr-langs") else
-                                          " into tessdata (github.com/tesseract-ocr/tessdata_fast) "
-                                          "or READ_PAGE_OCR_LANGS"),
+                          "fix": ocr_pack_fix(ctx["ocr_missing"]),
                           "gain": "tesseract has %s; a page in another language reads as garbage"
                                   % ("+".join([x for x in (c.get("ocr_langs") or [])
                                                if x != "osd"] or ["no pack"]))})
@@ -7045,8 +7189,9 @@ def meta_refresh_target(html, base):
 
 def disposition_name(value):
     """`filename` or `filename*` from a Content-Disposition header, or "": a name in any script and any
-    charset the header names (`filename*=GBK''%CD%BC.png`), or the raw bytes of one (UTF-8, GBK)."""
-    v = intl.header_text(value or "")
+    charset the header names (`filename*=GBK''%CD%BC.png`). `value` is text, read from the header's bytes
+    once where it came in (intl.header_bytes: UTF-8, else a GBK or Big5 reading, else Latin-1)."""
+    v = value or ""
     m = re.search(r"(?i)filename\*\s*=\s*([^;]+)", v)
     if m:
         raw = m.group(1).strip().strip('"')
@@ -8317,6 +8462,7 @@ def read(args):
         text, title, note = video_text(url, c, workdir)
         manifest["chain"]["tried"].append("video:yt-dlp")
         v_engine = "video:yt-dlp"
+        track = note if text else ""                   # which subtitle track: the answer's first line names it
         ownenv.refresh_ytdlp()        # its own update, every few days, apart from this read (never pinned)
         if not text:
             # YouTube's own caption track by another road when yt-dlp got none or is not
@@ -8352,6 +8498,8 @@ def read(args):
             manifest["status"] = "ok"
             manifest["content"] = {"engine": v_engine, "chars": len(text),
                                    "words": len(text.split()), "title": title}
+            if track and v_engine == "video:yt-dlp":
+                manifest["content"]["track"] = track
             manifest["page"] = {"title": title} if title else {}
             manifest["files"] = {"content": content_path, "page": page_path}
             m, im = gaps(c, {"video": True, "need_browser": False})

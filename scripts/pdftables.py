@@ -47,7 +47,10 @@ import time
 import unicodedata
 from collections import defaultdict
 
-CAPTION = re.compile(r"(?mi)^\s*(table|tab\.|таблица|табл\.)\s*[\dIVXLC]+\b")
+# a table's caption: Table 3, Tab. 2, Таблица 1 - and 表 3, 表3, 表３, 表一 (Chinese and Japanese), 표 2 (Korean),
+# but not 表3所示 in a sentence that starts a line
+CAPTION = re.compile(r"(?mi)^\s*(?:(?:table|tab\.|таблица|табл\.)\s*[\dIVXLC]+\b"
+                     r"|[表표]\s*[\d一二三四五六七八九十]+(?:[-.．][\d]+)*(?!\w))")
 SPAN_GAP = 0.35        # of a word's height: two cells of a row whose words stand this close are one
 BOX_CUTS = True        # a table whose box runs through a word of the page is left as text
 CUT_LINES = True       # a line the column lines cut at a mere space, in a cell of two lines, is text

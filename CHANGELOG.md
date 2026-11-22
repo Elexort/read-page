@@ -117,8 +117,8 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   (`pip.ini`, `pip.conf`) is read for its `index-url` when no variable names an index; `READ_PAGE_TESSDATA_URL`
   names a mirror for the OCR data (https, a folder or a template with `{lang}`); every mirror variable is named in
   the docs and in the setup's log and report. `--setup` fetches English and the packs of the user's own languages
-  (the one the machine is set to - Windows' user locale or `LANG` - and the others in the user's list: Windows'
-  language list, `LANGUAGE`, a Mac's AppleLanguages; at most three: zh-CN `chi_sim`, zh-TW `chi_tra`, ja `jpn`, ko
+  (Windows' display languages, its user locale only when there are none; elsewhere `LANG` and the others in the
+  user's list: `LANGUAGE`, a Mac's AppleLanguages; at most three: zh-CN `chi_sim`, zh-TW `chi_tra`, ja `jpn`, ko
   `kor`, ru `rus`, ...) instead of English and Russian for everyone, and a read in the environment reads with them
   beside English.
 - **CI for what was not yet checked** (KNOWN-ISSUES 174-176): `install.yml` also runs `--setup` in Debian 11 and
@@ -175,15 +175,33 @@ while the rows below stood)
   decode every pair of bytes into ideographs); ties go to the machine's ANSI code page or language. A declared
   `gb2312`, `gbk`, `big5`, `shift_jis` or `euc-kr` is read as a browser does (gb18030, Big5-HKSCS, Windows-31J,
   Windows-949), so one character outside GB2312 no longer drops a page to the guess; a UTF-8 page cut in the middle
-  of a character stays UTF-8; German with no charset is windows-1252, not Cyrillic. A reading by guess is
-  `signals.charset_guess` (with `(doubtful)` for under ten characters or two readings alike) and `charset gb18030
-  (guessed)` in the answer's first line.
-- **The MCP server reads its standard input as UTF-8** whatever the locale. It used the locale's code page unless
-  Python started with `-X utf8`, which a client's config is written without: on a Chinese Windows a Chinese URL
-  or folder arrived as other characters.
-- **A raw non-ASCII address becomes a URI** (host to punycode, the rest percent-encoded as UTF-8) at curl_cffi, curl,
+  of a character stays UTF-8; German with no charset is windows-1252, not Cyrillic. A declared double-byte label
+  is set aside only when another reading is clearly better: a true gb2312 over rare characters (a periodic table,
+  the provinces' one-character names) is kept. A reading by guess is `signals.charset_guess` (with `(doubtful)` for
+  fewer than six non-ASCII characters, two readings alike, or a reading that fits no language well) and `charset
+  gb18030 (guessed)` in the answer's first line; it no longer takes the `advice` line, which is for what an agent
+  can do. A document's own XML part (EPUB, ODT) that says gb2312 is read the same way (it was U+FFFD throughout
+  for one character outside GB2312).
+- **Greek, Hebrew, Thai and Ukrainian are not read as Cyrillic.** The bytes of every single-byte script are letters
+  in windows-1251 and KOI8, and the first guess took them: Greek and Hebrew came out in the Cyrillic alphabet,
+  Thai and Ukrainian's KOI8-U in KOI8's box drawing - with `charset_normalizer` installed too, which was asked only
+  after the guess. A Cyrillic reading now passes the letters' frequencies, their case and words with vowels and no
+  box drawing; KOI8-U is a candidate; with charset_normalizer the double-byte guess still wins over it, and it reads
+  the other single-byte scripts. On Wikipedia prose in ten languages' old code pages, no charset said (42 cases):
+  with charset_normalizer 30 right (21; 0.4.6 also 30) and 3 wrong with no doubt said (13), without it 9 right (6)
+  and none wrong in silence (9); Chinese, Japanese, Korean, Russian and Bulgarian as they were.
+- **The MCP server reads its standard input as UTF-8** whatever the locale, a BOM before the first line dropped. It
+  used the locale's code page unless Python started with `-X utf8`, which a client's config is written without: on a
+  Chinese Windows a Chinese URL or folder arrived as other characters.
+- **A raw non-ASCII address becomes a URI**, as a browser asks for it (host to punycode, the rest percent-encoded as
+  UTF-8, a tab or a line break left out, a backslash before the query a slash, `"<>` escaped) at curl_cffi, curl,
   urllib, a picture and the archive's snapshot. Every picture whose `src` had Chinese in it was `not downloaded: ordinal
-  not in range(128)`; Git's curl and older Windows curls sent the path in GBK (`%d2%b3%c3%e6`). A redirect's
+  not in range(128)`; Git's curl and older Windows curls sent the path in GBK (`%d2%b3%c3%e6`). A host goes out as a
+  browser's name for it: UTS 46 non-transitional with its bidi and joiner rules, in the standard library - the
+  standard library's own IDNA 2003 sent `faß.de` to `fass.de`, another site, `σοφός` without its final sigma, and
+  let through a ZWJ between Latin letters; of 41 hosts tried, 40 now get Chrome's `new URL()` name (the 41st, with an
+  ideographic space, Chrome makes `a%20b.com`; it is refused). The cookie jar and a page's cache folder go by that
+  name: a cookie an IDN site set for its punycode never went back to it. A redirect's
   Location goes on as the bytes it came in, as a browser's does, on every channel: UTF-8 as its own escapes, any
   other byte percent-encoded as it is (`/caf\xe9` -> `/caf%E9`, a GBK path stays GBK; `intl.location`). Re-read by
   a guess, a raw UTF-8 `/café` had gone out as `/caf%D0%B9` - a Cyrillic path, `not_found`; curl's own
@@ -197,23 +215,35 @@ while the rows below stood)
   a picture's redirect too - sends that same name, and a host with no such name, or one Python cannot look up, is
   refused.
 - **A server's Chinese file name is kept** (`filename*=UTF-8''...`, raw UTF-8 or GBK bytes, `filename*=GBK''...`):
-  it was `-.png`.
+  it was `-.png`. The header is read once, from its bytes (a right `été.pdf` had become `йtй.pdf`), and a
+  Windows device's name (`CON.png`, `COM1.pdf`, `LPT².png`) gets `file-` before it.
 - **OCR asks for the pack of the text's script and of the user's language** (`chi_sim` or `chi_tra`, `jpn`, `kor`,
   `rus`; the user's own unless `READ_PAGE_OCR_LANGS` is set) when it is installed, and names a missing one in
-  `improve` (`signals.ocr_missing_langs`; on the `ocr:` line of `--ocr N`).
-- **pdftotext, tesseract's command and lynx are given ASCII paths** on Windows (the file linked or copied into an
-  ASCII folder of the user's own - under the cache, its 8.3 name, or the environment's folder when its path is ASCII, never
-  a folder other users read; the output moved back); tesserocr gets
-  its picture from Pillow. A profile named in Chinese or Cyrillic - or in Big5, a name with 許, 功 or 蓋, whose
-  second byte is 0x5C - made them fail or read nothing.
-- **English defaults follow the user.** `READ_PAGE_LANG` (else the system's language, then English) sets
-  `Accept-Language` on curl_cffi, curl and urllib (curl and urllib sent none), the browser's locale (it was
-  `en-US`) and headers, and the subtitle tracks (they were `en,ru`: a Chinese video said `no subtitles in en,ru`; now
-  `zh-Hans,zh-CN,zh,en`, and a video with none of them is asked once for the language its info names, the track
-  of the user's first language is the one kept). `READ_PAGE_SUB_LANGS` and `READ_PAGE_OCR_LANGS`, when set, win. What
-  is sent: `references/engines.md`.
-- tests: `cjk.py` 141 (111 on Windows without curl_cffi and charset_normalizer, 136 off Windows; offline, any OS; under a POSIX locale
-  that is not UTF-8 its folders are ASCII, row 175); `security.py` 51 (47 on Windows).
+  `improve` with the command that fetches it (`READ_PAGE_OCR_LANGS=eng+jpn readpage.py --setup`;
+  `signals.ocr_missing_langs`; on the `ocr:` line of `--ocr N`). Kana counts as Japanese when it is a real part of the
+  text (five の on a Chinese shop's page made it Japanese), and so do kanji in Japan's own forms (経, 発, 駅: a
+  headline of kanji alone was Chinese). tesserocr reads a page by its path when it can open it: given as a
+  picture, the page lost its 150 dpi (tesseract took 70).
+- **pdftotext, tesseract's command and lynx are given ASCII paths** on Windows (the file linked - copied when it is
+  read-only - into an ASCII folder of the user's own: under the cache, its 8.3 name, or with Python 3.13 and later
+  the environment's folder when its path is ASCII, each stage folder the user's alone; never a folder other users
+  read; the output moved back); a stage a killed read left is removed after an hour. A profile named in Chinese or
+  Cyrillic - or in Big5, a name with 許, 功 or 蓋, whose second byte is 0x5C - made them fail or read nothing. A
+  Python program the skill runs (yt-dlp, markitdown) is given `PYTHONUTF8=1`: its output, read as UTF-8, was in
+  the ANSI code page. A PDF table's caption in Chinese, Japanese or Korean (`表 3`, `表3`, `표 2`) stays text where
+  it stood, as `Table 3` does.
+- **English defaults follow the user.** `READ_PAGE_LANG` (else the system's languages - on Windows its display
+  languages, not the regional format, which made an English Windows with German formats ask for German; `zh_TW.UTF-8`
+  is Taiwan's Chinese, not Simplified - then English) sets `Accept-Language` on curl_cffi, curl and urllib (curl
+  and urllib sent none), the browser's locale (it was `en-US`; Chromium sends its one tag as the header), and the
+  subtitle tracks (they were `en,ru`: a Chinese video said `no subtitles in en,ru`; now `zh-Hans,zh-CN,zh,en` and the
+  track the video speaks in, and a video with none of them is asked once for the language its info names). The
+  track read is a human one in the user's languages, then the words as spoken; YouTube's machine translation of a
+  video, which it offers in every language and which a Chinese or Russian reader of an English talk was handed,
+  only when there is nothing else, named so on the answer's first line (`content.track`). `READ_PAGE_SUB_LANGS` and
+  `READ_PAGE_OCR_LANGS`, when set, win. What is sent: `references/engines.md`.
+- tests: `cjk.py` 182 (175 off Windows, 147 on Windows without curl_cffi and charset_normalizer; offline, any OS;
+  under a POSIX locale that is not UTF-8 its folders are ASCII, row 175); `security.py` 53 (49 on Windows).
 
 **`readpage.py --setup`**
 - **one command installs every engine** into the skill's own environment, one folder of the user's

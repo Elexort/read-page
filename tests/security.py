@@ -337,6 +337,19 @@ try:
     except ValueError:
         ours = False
     check("a server cannot name its file manifest.json", ours, str(sorted(os.listdir(d2)))[:80])
+    # Windows' device names (a file named so is the device on Windows 10 and Server: the download lost)
+    devices = {x: intl.file_stem(x) for x in ("CON", "nul", "COM1", "LPT²", "AUX.tar", "con ", "console", "COM10")}
+    check("a server's name that is a Windows device's (CON, NUL, COM1, LPT², AUX.tar) is not used as it is",
+          [devices[x] for x in ("CON", "nul", "COM1", "LPT²", "AUX.tar", "con ")]
+          == ["file-CON", "file-nul", "file-COM1", "file-LPT²", "file-AUX.tar", "file-con"]
+          and devices["console"] == "console" and devices["COM10"] == "COM10", str(devices))
+    s.public.routes["/con"] = (200, {"Content-Type": "image/png", "Content-Disposition": 'attachment; filename="CON.png"'},
+                               advsrv.PNG1)
+    d3 = tempfile.mkdtemp(prefix="rp-sec-dir-")
+    subprocess.run([sys.executable, "-X", "utf8", SCRIPT, s.public.url("/con"), "--dir", d3, "--json"],
+                   capture_output=True, env=env, timeout=120)
+    check("... and the download is kept under another name", "file-CON.png" in os.listdir(d3),
+          str(sorted(os.listdir(d3)))[:80])
 
     # ------------------------------------------------ the cache belongs to this user only
     if os.name == "posix":
