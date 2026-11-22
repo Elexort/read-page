@@ -3,8 +3,7 @@
 ## Unreleased (0.5.0)
 
 Two branches: `main` is the skill alone - SKILL.md, README.md, scripts/,
-references/, LICENSE and .gitattributes, 34 files - so a clone, a ZIP or an installer
-references/, LICENSE and .gitattributes, 33 files - so a clone, a ZIP or an installer
+references/, LICENSE and .gitattributes, 35 files - so a clone, a ZIP or an installer
 brings an agent nothing else; `dev` carries the code with its tests, CI, notes and this log.
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
@@ -60,7 +59,7 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
 - **A video's subtitles in any text format, in the speaker's own language, a dub named, and a failure said**
   (KNOWN-ISSUES 218-223; measured on a census of 222 public videos - 199 whose info could be read - run through the
   code before and after with a stand-in for yt-dlp, four users, 796 answers, and 41 of them read for real: none is
-  worse). Main carries one file more (`scripts/subtitles.py`: 33 files).
+  worse). Main carries one file more (`scripts/subtitles.py`; with the installer's two locks, 35 files).
   - **RuTube's subtitles come as SRT** and the answer said `no subtitles`: yt-dlp is asked for `--sub-format
     vtt/srt/best`, and `scripts/subtitles.py` turns SRT, SBV, TTML, DFXP, YouTube's srv1-3 and json3, ASS and LRC into the
     same WEBVTT cues, so the blocks and `transcript.vtt` do not depend on the site. 13 of 13 RuTube videos that
