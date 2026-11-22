@@ -473,8 +473,14 @@ def secure_home(d, new=False, profile=None):
     say ('' for nothing)."""
     if os.name != "nt":
         return ""
-    profile = os.path.normcase(os.path.abspath(profile or os.path.expanduser("~"))).rstrip(os.sep) + os.sep
-    if os.path.normcase(os.path.abspath(d)).startswith(profile) or others_write(d) is not True:
+
+    def full(p):
+        # the long names: a path through a short 8.3 one (C:\Users\RUNNER~1, as Windows gives TEMP for a long user
+        # name, and a READ_PAGE_HOME made from it) is the same folder
+        return os.path.normcase(os.path.realpath(os.path.abspath(p)))
+
+    profile = full(profile or os.path.expanduser("~")).rstrip(os.sep) + os.sep
+    if full(d).startswith(profile) or others_write(d) is not True:
         return ""
     sid = user_sid()
     cmd = ["icacls", d, "/inheritance:r", "/grant:r", "*%s:(OI)(CI)F" % (sid or "<your SID>"), "/grant:r",

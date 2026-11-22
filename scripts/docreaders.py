@@ -442,23 +442,28 @@ def machine_cjk():
     return {"zh": "gb18030", "ja": "cp932", "ko": "cp949"}.get(lang[:2], "")
 
 
-def _common_share(text, codec):
-    """(the share of `text`'s non-ASCII characters that are the common ones of `codec`'s script, how many there
-    are): intl.native_share, the measure a page's encoding is guessed by. intl is of this folder and of the
-    standard library alone; this process, started with -I, does not have the folder on its path by itself.
+def _intl():
+    """intl, of this folder and of the standard library alone: this process, started with -I, does not have the
+    folder on its path by itself (a bare `import intl` failed every EPUB whose parts declare their encoding).
     None where it cannot be imported."""
     try:
         import intl
     except ImportError:
         here = os.path.dirname(os.path.abspath(__file__))
-        if here in sys.path:
-            return None
-        sys.path.append(here)
+        if here not in sys.path:
+            sys.path.append(here)
         try:
             import intl
         except ImportError:
             return None
-    return intl.native_share(text, {"big5": "big5hkscs"}.get(codec, codec))
+    return intl
+
+
+def _common_share(text, codec):
+    """(the share of `text`'s non-ASCII characters that are the common ones of `codec`'s script, how many there
+    are): intl.native_share, the measure a page's encoding is guessed by. None where intl cannot be imported."""
+    intl = _intl()
+    return None if intl is None else intl.native_share(text, {"big5": "big5hkscs"}.get(codec, codec))
 
 
 # Windows' own zipper writes a name with no UTF-8 flag in the machine's OEM code page: CP437 on an American
@@ -761,8 +766,8 @@ def _decode(data):
         re.search(rb"""(?i)<meta\b[^>]*?charset\s*=\s*["']?([A-Za-z0-9._:-]+)""", head)
     label = m.group(1).decode("ascii") if m else ""
     if label:
-        import intl
-        enc = _charset(intl.codec_of(label)) or _charset(label)
+        intl = _intl()
+        enc = (_charset(intl.codec_of(label)) if intl else None) or _charset(label)
         if enc and enc not in ("utf_8", "utf-8"):
             try:
                 return data.decode(enc)
