@@ -39,10 +39,11 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, HERE)
 # The wire is UTF-8 (JSON-RPC's), whatever the locale: a Chinese Windows reads standard input as GBK unless Python
 # was started with -X utf8, and the JSON line of a client's config rarely says so - a Chinese URL or folder
-# arrived as other characters. Before anything is read or written, and not as a side effect of an import.
-for _stream, _kw in ((sys.stdin, {}), (sys.stdout, {"newline": "\n"})):
+# arrived as other characters. Before anything is read or written, and not as a side effect of an import. A
+# UTF-8 BOM before the first line (a file saved with one, piped in) is dropped: that line was no JSON.
+for _stream, _kw in ((sys.stdin, {"encoding": "utf-8-sig"}), (sys.stdout, {"encoding": "utf-8", "newline": "\n"})):
     try:
-        _stream.reconfigure(encoding="utf-8", errors="replace", **_kw)
+        _stream.reconfigure(errors="replace", **_kw)
     except (AttributeError, OSError, ValueError):
         pass
 import ownenv                        # noqa: E402

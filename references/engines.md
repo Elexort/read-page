@@ -261,48 +261,84 @@ below runs on the standard library alone, so a machine that never ran `--setup` 
 - **The bytes of a page.** After the BOM, the header and `<meta>` (a declared `gb2312`, `gbk` or `x-gbk` is read
   as gb18030, `big5` as Big5-HKSCS, `shift_jis` as Windows-31J and `euc-kr` as Windows-949, as a browser does:
   the strict codecs stop at the first character outside their set, and most Chinese pages that say gb2312 hold
-  one) and strict UTF-8 (a character cut in two by the size limit stays UTF-8), a body that says nothing is read
-  as each of GB18030, Big5-HKSCS, Shift_JIS, EUC-JP, EUC-KR, windows-1251 and KOI8-R, and the reading whose
-  non-ASCII characters are most often the common ones of its script wins (about 800 ideographs of both
-  variants, the kana, the 150 Hangul syllables a Korean text is three quarters made of; a Cyrillic reading
-  also needs lower-case words). Ideographs alone cannot tell GBK from Big5 - both decode every pair of bytes
-  into ideographs - the common ones can. Ties go to the codec of the machine's ANSI code page, or its user's
-  language. `charset_normalizer`, when installed, is a second opinion for what this does not recognise (Western
-  text, mostly): on 10 to 20 characters of GBK it answered cp949, cp932 or cp1006.
+  one; a declared label is set aside only when another reading is clearly better, so a true gb2312 over rare
+  characters - a periodic table - is kept) and strict UTF-8 (a character cut in two by the size limit stays
+  UTF-8), a body that says nothing is read as each of GB18030, Big5-HKSCS, Shift_JIS, EUC-JP, EUC-KR,
+  windows-1251, KOI8-R and KOI8-U, and the reading whose non-ASCII characters are most often the common ones of
+  its script wins (about 800 ideographs of both variants, the kana, the 150 Hangul syllables a Korean text is
+  three quarters made of). Ideographs alone cannot tell GBK from Big5 - both decode every pair of bytes into
+  ideographs - the common ones can. A Cyrillic reading must pass three tests, which the bytes of Greek, Hebrew
+  or Thai read as windows-1251 or KOI8 fail: the ten commonest Russian letters are a good share of its letters,
+  its words are lower case, Capitalised or UPPER with no Latin letter inside, a word of three letters has a
+  vowel - and KOI8's box drawing is not in it (Ukrainian's KOI8-U read as KOI8-R is full of it). Ties go to the
+  codec of the machine's ANSI code page, or its user's language. `charset_normalizer`, when installed, reads the
+  rest: the double-byte guess wins over it (on 10 to 20 characters of GBK it answered cp949, cp932 or cp1006), a
+  Cyrillic one when it reads Cyrillic too, it is asked before anything else for the other single-byte scripts
+  (Greek, Hebrew, Thai, Arabic, Turkish, Central European). Measured on Wikipedia prose in ten languages' old
+  code pages (42 cases): with it 30 right (21 before this rule, 30 in 0.4.6) and 3 wrong with no doubt said
+  (13), without it 9 right (6) and none wrong in silence (9). Still wrong: Hebrew with charset_normalizer
+  (it reads it as Cyrillic or Greek; doubtful), ISO-8859-2 taken for windows-1250.
 - **A guess says so.** `url.charset` names the codec. When the page named none, `signals.charset_guess` holds
-  it - with ` (doubtful)` when the reading rests on under ten characters, or two readings are alike, or
-  Cyrillic and Chinese compete - and the answer's first line says `charset gb18030 (guessed)` (`guessed,
-  doubtful`); a doubtful reading also becomes the `advice` when there is none. Nothing is said for a page that
-  named its charset or is UTF-8.
-- **Addresses.** A raw `https://例子.测试/页面?q=中文` is turned from an IRI into a URI - the host to punycode, the
-  rest percent-encoded as UTF-8, what is already escaped untouched - at every place an address leaves the
-  program: curl_cffi, curl (argv: Git's curl, older Windows curls and package-manager builds take the ANSI
-  code page, and sent the path in GBK), urllib, a picture, the archive's snapshot. The address the user gave
-  is what the manifest and the cache key keep.
+  it - with ` (doubtful)` when the reading rests on fewer than six non-ASCII characters, or two readings are
+  alike, or charset_normalizer recognised no language in it, or its Cyrillic reading fails the letters' tests -
+  and the answer's first line says `charset gb18030 (guessed)` (`guessed, doubtful`); `advice` is left to what
+  an agent can do. Nothing is said for a page that named its charset or is UTF-8, except a UTF-8 page cut short
+  that named nothing (`utf-8 (doubtful)`).
+- **Addresses.** A raw `https://例子.测试/页面?q=中文` is turned from an IRI into a URI as a browser asks for it -
+  the host to punycode, the rest percent-encoded as UTF-8 with the few ASCII characters a browser escapes (`"<>`,
+  a quote in the query), a tab or a line break left out, a backslash before the query a slash, what is already
+  escaped untouched - at every place an address leaves the program: curl_cffi, curl (argv: Git's curl, older
+  Windows curls and package-manager builds take the ANSI code page, and sent the path in GBK), urllib, a
+  picture, the archive's snapshot. The address the user gave is what the manifest and the cache key keep. The
+  host goes out as `intl.host_ascii` makes it - escapes in it decoded, as curl, libcurl and urllib all decode
+  them, then UTS 46 non-transitional as browsers convert a name (the standard library's own IDNA 2003 sent
+  `faß.de` to `fass.de`, another site; ß, ς and the joiners are kept, with the bidi and joiner rules: of 41
+  hosts tried, 40 get Chrome's `new URL()` name, and the one with an ideographic space, which Chrome makes
+  `a%20b.com`, is refused) - and the network rule, the cookie jar and the cache folder go by that very name; a
+  host that has none (escapes that are not UTF-8, a name a browser refuses, a character no host name holds) is
+  refused. A redirect's Location goes on as the bytes it
+  came in, as a browser's does: UTF-8 as its own escapes, any other byte percent-encoded as it is (`/caf\xe9`
+  -> `/caf%E9`; never re-read in another encoding).
 - **What is sent in the user's name.** `READ_PAGE_LANG` (`zh-CN`, `zh-TW`, `ja`, `ru`, or a list `zh-CN,en`) is
-  the user's language; unset, it is the operating system's list - the language the machine is set to first (Windows'
-  user locale; elsewhere `LC_ALL`, `LC_MESSAGES`, `LANG`, `LANGUAGE`; a Mac's own setting), then the others the
-  user put in it (`ownenv.system_languages`) - then English. From it: `Accept-Language` on every HTTP channel
-  (`zh-CN,zh;q=0.9,en;q=0.8`, `en-US,en;q=0.9,ru;q=0.8` for an English first language with Russian after it; for an English or unknown user curl and urllib send `en-US,en;q=0.9` and
-  curl_cffi leaves its impersonation's own header, the same), the browser's locale (`zh-CN`, `en-US` for
-  English) with the same header, the subtitle tracks asked of yt-dlp when `READ_PAGE_SUB_LANGS` is not set
-  (`zh-Hans,zh-CN,zh,en`; `ru,en`; `en`; a video with none of them is asked once more for the language its
-  own info names) and the OCR language packs (below). `READ_PAGE_SUB_LANGS` and `READ_PAGE_OCR_LANGS`,
-  when set, are the user's own word and win.
+  the user's language; unset, it is the operating system's list - on Windows the display languages in the
+  user's order (Settings, Language), its user locale only when there are none (the locale is the regional
+  format: an English Windows with German formats is de-DE); elsewhere the language the machine is set to first
+  (`LC_ALL`, `LC_MESSAGES`, `LANG`, `LANGUAGE`: `zh_TW.UTF-8` is zh-TW; a Mac's own setting), then the others
+  the user put in it (`ownenv.system_languages`) - then English. From it: `Accept-Language` on every HTTP
+  channel (`zh-CN,zh;q=0.9,en;q=0.8`; `en-US,en;q=0.9,ru;q=0.8` for English first with Russian after it, the
+  regional format whatever it is; for an English or unknown user curl and urllib send `en-US,en;q=0.9` and
+  curl_cffi leaves its impersonation's own header, the same), the browser's locale (`zh-CN`, `en-US` for English: one tag, which
+  Chromium also sends as its Accept-Language), the subtitle tracks asked of yt-dlp when `READ_PAGE_SUB_LANGS`
+  is not set (`zh-Hans,zh-CN,zh,en`; `ru,en`; `en`; with the track the video speaks in, `<lang>-orig`; a video
+  with none of them is asked once more for the language its own info names) and the OCR language packs
+  (below). `READ_PAGE_SUB_LANGS` and `READ_PAGE_OCR_LANGS`, when set, are the user's own word and win.
+- **Which subtitle track.** YouTube offers a machine translation of a video's captions into every language, and
+  yt-dlp lists it beside the real tracks: a human track in the user's languages is read first, then the words as
+  spoken (speech recognition, the video's own language), a machine translation only when there is nothing else.
+  The answer's first line names the track (`subtitles en`, `subtitles fr, automatic`, `subtitles zh-Hans,
+  machine-translated from en`; `content.track`).
 - **OCR languages.** The packs asked for are `READ_PAGE_OCR_LANGS` (`eng`), the pack of the text's script
-  (`chi_sim` or `chi_tra` by the characters only one of them has, `jpn` where there is kana, `kor` for Hangul,
-  `rus` for Cyrillic) and, unless the variable is set, the packs of the user's languages (at most three) - each only if installed. A
-  pack the text called for and the machine lacks is `signals.ocr_missing_langs` and an `improve` line; the
-  user's own language's pack is named when a scan gives no text, and `--ocr N` names it on its `ocr:` line.
+  (`chi_sim` or `chi_tra` by the characters only one of them has, `jpn` where kana is a real part of the text -
+  a tenth at least - or kanji in Japan's own forms are there, `kor` for Hangul, `rus` for Cyrillic) and, unless
+  the variable is set, the packs of the user's languages (at most three) - each only if installed. A pack the
+  text called for and the machine lacks is `signals.ocr_missing_langs` and an `improve` line that names the
+  command (`READ_PAGE_OCR_LANGS=eng+jpn readpage.py --setup`: `--setup` fetches only English, the user's own
+  languages and what that variable names); the user's own language's pack is named when a scan gives no text,
+  and `--ocr N` names it on its `ocr:` line. tesserocr reads a page by its path when it can open it, so the
+  page keeps its 150 dpi; a page under a path outside ASCII goes as a picture with its resolution given.
 - **Programs with narrow arguments.** On Windows pdftotext, tesseract's command and lynx get their arguments in
   the ANSI code page: a profile folder named in Chinese (a character outside code page 936, an emoji; in Big5
   a name with 許, 功 or 蓋, whose second byte is 0x5C, a backslash to a program that splits on it) or
-  Cyrillic made them fail or read nothing. Such a file is linked (copied) into an ASCII folder under the cache
-  - or its 8.3 name, or the environment's folder when its path is ASCII; never a folder the machine's other users
-  read, such as C:/Users/Public - under a name of ours, and the program's output is
-  moved back. tesserocr reads its picture through Pillow, not through a path.
+  Cyrillic made them fail or read nothing. Such a file is linked - copied when it is read-only, whose link could
+  not be removed - into an ASCII folder under the cache - or its 8.3 name, or with Python 3.13 and later the
+  environment's folder when its path is ASCII (its stage folders are the user's alone: an ASCII `READ_PAGE_HOME`
+  may be a folder every user reads); never a folder the machine's other users read, such as C:/Users/Public -
+  under a name of ours, and the program's output is moved back. A stage nothing has touched for an hour (a read
+  killed while a document was staged) is removed. A Python program the skill runs (yt-dlp, markitdown) is given
+  `PYTHONUTF8=1`: it wrote the ANSI code page, and its output is read as UTF-8.
 - **The MCP server's standard input** is UTF-8 whatever the locale (it was the locale's code page unless
-  Python had `-X utf8`: a Chinese URL or folder arrived as other characters).
+  Python had `-X utf8`: a Chinese URL or folder arrived as other characters), a BOM before the first line
+  dropped.
 
 ## Every timeout, retry and fallback: one deadline, a fuse per step
 

@@ -318,9 +318,9 @@ os-release). Measured by a real install on every runner GitHub gives a public re
 Where the home folder has letters outside ASCII (a local account `Иван`) OCR still starts: by the 8.3 short
 name of its data folder where the volume makes one, else by the folder's own name from its parent.
 
-OCR languages: `--setup` fetches English and the packs of the user's own languages - the one the
-machine is set to (Windows' user locale, else `LC_ALL`/`LANG`) and the others in the user's list (Windows'
-language list, `LANGUAGE`, a Mac's AppleLanguages), at most three; Chinese goes by script - and a read in the
+OCR languages: `--setup` fetches English and the packs of the user's own languages - Windows' display languages
+(its user locale only when there are none), else the one the machine is set to (`LC_ALL`/`LANG`) and the others
+in the user's list (`LANGUAGE`, a Mac's AppleLanguages), at most three; Chinese goes by script - and a read in the
 environment reads with them beside English; the script of the page or the picture decides too - `chi_sim` or `chi_tra`, `jpn`, `kor`, `rus` when the text is Chinese, Japanese, Korean or Russian - and a pack the text needs and the machine lacks is named in `improve`. Any other language: name it in `READ_PAGE_OCR_LANGS`
 (`eng+deu`), then `--setup` again; the variable also decides what a read uses. Without the environment the skill uses whatever the machine
 has, as before. Behind a proxy it uses the machine's (`HTTPS_PROXY`, or Windows' own setting); a
@@ -343,12 +343,13 @@ hashes always decide. An offline machine gets a clear message and nothing change
 
 `READ_PAGE_LANG` (`zh-CN`, `zh-TW`, `ja`, `ru`, or a list `zh-CN,en`; unset: the system's languages in the user's order, then English)
 is what the reader sends in the user's name: `Accept-Language` on every HTTP channel, the browser's locale, the
-subtitle tracks yt-dlp is asked for (`READ_PAGE_SUB_LANGS` still wins) and the OCR language pack. A page, a text
-file or a CSV that names no encoding is read by what its characters are - GBK, Big5, Shift_JIS, EUC-KR, KOI8-R,
-with or without `charset_normalizer` - and such a reading is named a guess in the manifest and the answer's first
-line (`charset gb18030 (guessed)`), a doubtful one too. A raw address with Chinese in it
-(`https://例子.测试/页面`) goes out as UTF-8 through every channel, and the MCP server's standard input is UTF-8
-whatever the code page is. The reader prints UTF-8 whatever the console's code page is: set `PYTHONUTF8=1` (or
+subtitle tracks yt-dlp is asked for (`READ_PAGE_SUB_LANGS` still wins; a human track before YouTube's machine
+translation) and the OCR language pack. A page, a text file or a CSV that names no encoding is read by what its
+characters are - GBK, Big5, Shift_JIS, EUC-KR, windows-1251, KOI8-R and KOI8-U with or without `charset_normalizer`,
+Greek, Hebrew, Thai, Arabic and Central European with it - and such a reading is named a guess in the manifest and
+the answer's first line (`charset gb18030 (guessed)`), a doubtful one too. A raw address with Chinese in it
+(`https://例子.测试/页面`) goes out as UTF-8 through every channel, its host as a browser names it (`faß.de` is
+`xn--fa-hia.de`), and the MCP server's standard input is UTF-8 whatever the code page is. The reader prints UTF-8 whatever the console's code page is: set `PYTHONUTF8=1` (or
 `chcp 65001`) where a program reads its output as the console's code page. Details: `references/engines.md`.
 
 ### Keys, and what they cost
@@ -384,7 +385,9 @@ to a reader at all — a session stays on this machine.
 The reader itself takes only http(s), on every redirect, picture, meta refresh and browser request,
 and a public page never reaches into the local network through it: a redirect to `file://` or to
 `127.0.0.1`, a picture on an internal host, a script that fetches an internal service — refused,
-and `signals.browser_blocked` counts what the browser was stopped from loading. The browser of a
+and `signals.browser_blocked` counts what the browser was stopped from loading. A host is checked as
+the name the request goes to (escapes decoded, a name outside ASCII in punycode), and one that has
+no such name is refused. The browser of a
 public page has one way out, a SOCKS5 proxy of the reader's own on `127.0.0.1` (`netguard`): every
 connection it opens — a redirect hop, a frame, a WebSocket included — is checked once, on the very
 addresses it then goes to, and an internal one never opens. Nothing is sent anywhere else and
@@ -421,7 +424,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | The 226-page check (2026-11-06), pages picked to be hard | **202 ok, 6 blocked, 4 login_required, 5 not_found, 7 error, 2 empty**, each with its reason; p50 2.1 s, max 22.9 s on a fast machine, p50 4.8 s, max 30.9 s on an emulated weak laptop |
 | A set read the way `SKILL.md` says (2026-11-07): `--allow-external` first, advice followed, the outline to jump | a 34-page set **34 of 34**, 37 held-out pages no rule was tuned on **37 of 37** (each fact taken from a real Chrome; walls and paywalls by an honest status or through a reader); **1.10 calls** a question; every answer within 9 911 bytes and 309 lines, no CR; from the cache p50 0.22 s, max 0.26; UTF-8 whole in cmd, PowerShell 5.1 and 7, Git Bash and WSL under five code pages |
 | Contract | every manifest in the suite validated against `references/manifest-schema.json` (17 manifests, 0 errors) |
-| Tests | answer contract **84**, statuses **75**, timeouts **15**, deadline **22**, formats **93** (90 off Windows), reading **19**, sources **42**, blocks **26**, images **53**, speed **8**, MCP parallel **14**, security **42** (38 on Windows), props **82**, fixes **154**, channel **9**, setup audit **39**, environment **175** (168 off Windows), MCP **28**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **126** (125 on macOS), Chinese, Japanese and Korean input **136** (131 off Windows, 107 without curl_cffi and charset_normalizer), browser live **32**; against the real services: sources live **20** |
+| Tests | answer contract **84**, statuses **75**, timeouts **15**, deadline **22**, formats **93** (90 off Windows), reading **19**, sources **42**, blocks **26**, images **53**, speed **8**, MCP parallel **14**, security **53** (49 on Windows), props **82**, fixes **154**, channel **9**, setup audit **39**, environment **175** (168 off Windows), MCP **28**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **126** (125 on macOS), Chinese, Japanese and Korean input **182** (175 off Windows, 147 without curl_cffi and charset_normalizer), browser live **32**; against the real services: sources live **20** |
 | CI | the offline suites on ubuntu (3.9 and 3.12), windows, macOS; a browser job on all three; and a real install - `--setup` from nothing into a folder with a space and Cyrillic in its path, every engine checked, the suites and a scanned PDF read through OCR under the environment's Python, `--setup` again with nothing to fetch - on Linux, Windows and macOS, x64 and arm64, a user's own clone-and-read, a bare Python, and containers of Alpine, Ubuntu 20.04 and 24.04, Debian 11, Rocky Linux 8, Fedora, Arch and openSUSE, a proxy that inspects TLS (Linux, Windows, macOS), a Windows whose Python has the code page 936 or 950 in a profile named in Chinese, README's ZIP, and the suites in a GBK locale on Linux (`install.yml`) |
 | Coverage | 65 % of the engine's statements |
 
@@ -460,7 +463,7 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (191 rows: 147 fixed, 3 planned, 41 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (196 rows: 152 fixed, 3 planned, 41 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License

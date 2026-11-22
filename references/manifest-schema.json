@@ -100,6 +100,10 @@
         "engine": {
           "type": "string"
         },
+        "track": {
+          "type": "string",
+          "description": "a video read through yt-dlp: the subtitle track its text is - `subtitles en` (human), `subtitles fr, automatic` (speech recognition), `subtitles zh-Hans, machine-translated from en` (YouTube's translation, read only when the video has nothing else); the answer's first line names it"
+        },
         "quality": {
           "type": "string",
           "enum": [
@@ -322,7 +326,7 @@
         },
         "charset_guess": {
           "type": "string",
-          "description": "the page said nothing about its encoding, so its text was read by a guess: the codec, with \"(doubtful)\" when the reading may be wrong (little text, or two readings alike). Absent when the page named its encoding or is UTF-8"
+          "description": "the page said nothing about its encoding, so its text was read by a guess: the codec, with \"(doubtful)\" when the reading may be wrong (fewer than six non-ASCII characters, two readings alike, a reading that fits no language well). Absent when the page named its encoding or is whole UTF-8; a UTF-8 page cut short that named nothing is `utf-8 (doubtful)`"
         },
         "env_failed": {
           "type": "string",

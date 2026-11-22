@@ -603,7 +603,9 @@ def _charset(name):
 
 
 def _decode(data):
-    """An XML or HTML part as text: its BOM, its XML declaration, its meta charset, else UTF-8."""
+    """An XML or HTML part as text: its BOM, its XML declaration, its meta charset, else UTF-8. A declared label is
+    read as a browser reads it (intl.codec_of: gb2312 as gb18030, big5 as Big5-HKSCS ...), a character it does not
+    hold replaced, not the whole part: one character outside GB2312 (镕, 〇) made a part U+FFFD throughout."""
     if data[:3] == b"\xef\xbb\xbf":
         return data[3:].decode("utf-8", "replace")
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
@@ -611,10 +613,21 @@ def _decode(data):
     head = data[:2048]
     m = re.match(rb"""\s*<\?xml[^>]*?encoding\s*=\s*["']([A-Za-z0-9._:-]+)""", head) or \
         re.search(rb"""(?i)<meta\b[^>]*?charset\s*=\s*["']?([A-Za-z0-9._:-]+)""", head)
-    enc = _charset(m.group(1).decode("ascii")) if m else None
+    label = m.group(1).decode("ascii") if m else ""
+    if label:
+        import intl
+        enc = _charset(intl.codec_of(label)) or _charset(label)
+        if enc and enc not in ("utf_8", "utf-8"):
+            try:
+                return data.decode(enc)
+            except (LookupError, UnicodeError, ValueError):
+                try:
+                    data.decode("utf-8")                     # a label that lies: the part is UTF-8
+                except UnicodeDecodeError:
+                    return data.decode(enc, "replace")
     try:
-        return data.decode(enc or "utf-8")
-    except (LookupError, UnicodeError, ValueError):
+        return data.decode("utf-8")
+    except UnicodeError:
         return data.decode("utf-8", "replace")
 
 

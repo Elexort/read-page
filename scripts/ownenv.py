@@ -111,16 +111,30 @@ def system_language(env=None):
 
 
 def _os_languages():
-    """The languages the user put in this machine's list, in its order: Windows' (Settings, Language: `['en-US',
-    'ru']`), a Mac's AppleLanguages; [] elsewhere and where the list cannot be read."""
+    """The languages the user put in this machine's list, in its order: Windows' display languages (Settings,
+    Language: `['en-US', 'ru']`; else the UI's own list), a Mac's AppleLanguages; [] elsewhere and where the
+    list cannot be read."""
     if os.name == "nt":
         try:
             import winreg
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\International\User Profile") as k:
                 v = winreg.QueryValueEx(k, "Languages")[0]
-            return [str(x) for x in (v if isinstance(v, list) else [v]) if x]
+            got = [str(x) for x in (v if isinstance(v, list) else [v]) if x]
+            if got:
+                return got
         except (ImportError, OSError, ValueError):
-            return []
+            pass
+        try:
+            import ctypes
+            num, size = ctypes.c_ulong(0), ctypes.c_ulong(0)
+            k32 = ctypes.windll.kernel32
+            if k32.GetUserPreferredUILanguages(8, ctypes.byref(num), None, ctypes.byref(size)) and size.value:
+                buf = ctypes.create_unicode_buffer(size.value)       # MUI_LANGUAGE_NAME: "en-US\0ru-RU\0\0"
+                if k32.GetUserPreferredUILanguages(8, ctypes.byref(num), buf, ctypes.byref(size)):
+                    return [x for x in buf[:size.value].split("\0") if x]
+        except (AttributeError, OSError, ValueError):
+            pass
+        return []
     if sys.platform == "darwin":
         import subprocess
         try:
@@ -133,13 +147,19 @@ def _os_languages():
     return []
 
 
-def system_languages(env=None):
-    """The user's languages without repeats: the one the machine is set to first (system_language), then the others
-    the user set up - LANGUAGE's list (`ru:en`), Windows' language list, a Mac's AppleLanguages."""
+def system_languages(env=None, windows=None):
+    """The user's languages without repeats. On Windows its display languages in the user's order, and the user
+    locale only when there are none: the locale is the regional format (dates, numbers - "English (Europe)" is
+    en-150, an English UI with German formats de-DE), not a language the user reads. Elsewhere the one the
+    machine is set to first (system_language), then the others the user set up - LANGUAGE's list (`ru:en`), a
+    Mac's AppleLanguages."""
     env = os.environ if env is None else env
-    names = [system_language(env)] + (env.get("LANGUAGE") or "").split(":")
-    if env is os.environ:
-        names += _os_languages()
+    windows = os.name == "nt" if windows is None else windows
+    own = _os_languages() if env is os.environ else []
+    if windows and own:
+        names = list(own)
+    else:
+        names = [system_language(env)] + (env.get("LANGUAGE") or "").split(":") + own
     out, seen = [], set()
     for x in names:
         x = str(x or "").strip()

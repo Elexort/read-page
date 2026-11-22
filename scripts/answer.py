@@ -180,6 +180,8 @@ def header(manifest, view, total_lines, text_bytes):
             # the proof the description promises: how much of the visible page the text holds
             engine += ", %d%% of the page" % min(100, int(round(content["cover"] * 100)))
         first.append(engine)
+        if content.get("track"):
+            first.append(str(content["track"]))     # a video's subtitle track: human, automatic or machine-translated
     stamp = str((m.get("archive") or {}).get("timestamp") or "")
     if stamp:
         first.append("archive copy of %s-%s-%s" % (stamp[:4], stamp[4:6], stamp[6:8]) if len(stamp) >= 8

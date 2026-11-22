@@ -72,8 +72,9 @@ to get the rest. `signals.paywall` (and an advice saying so) is a page that says
 while the status stays `ok`: the text is what the server sent, the whole article a script hides or only the part open
 to everyone, and the page cannot tell which; a container named `paywall` is no such word (free pages carry them).
 `charset gb18030 (guessed)` there means the page named no encoding and its text was read by
-what its characters are (`guessed, doubtful` when little text or two readings alike make it a close call: some
-characters may be wrong; the same is `signals.charset_guess`). Status words describe the *text*, not its length: a five-line status page is `ok`,
+what its characters are (`guessed, doubtful` when little text, two readings alike or a reading that fits no language
+well make it a close call: some characters, or the whole alphabet, may be wrong - nothing an option changes; the same
+is `signals.charset_guess`). Status words describe the *text*, not its length: a five-line status page is `ok`,
 a page that quotes "access denied" in prose is `ok`. Any status but `ok` comes with a `reason:` line
 naming the rule that fired (`a challenge page: Just a moment...`), so a status can be checked
 instead of trusted. Content is never hidden, whatever the status.
@@ -238,7 +239,9 @@ on disk, no OCR engine.
 ## Video
 
 Read through **subtitles** only: 30-second blocks, each with a timestamp (`[0:18] …`, citable), raw
-cues kept as `transcript.vtt`. No captions: the page is read as a page (description, comments) and
+cues kept as `transcript.vtt`. The first line names the track (`subtitles en`; `subtitles fr, automatic` for
+speech recognition; `subtitles zh-Hans, machine-translated from en` - YouTube's translation, read only when the
+video has no other track; `content.track`). No captions: the page is read as a page (description, comments) and
 `signals.no_transcript` says why; an `.mp4` URL is `media_only`. Only a video's own address takes
 this path: `vimeo.com/about` is a page. No speech recognition, no frame analysis -
 [video.md](video.md) prices both.

@@ -259,12 +259,12 @@ def real_srcs(html):
 
 
 def folder_prefix(host):
-    """The host part of a page folder's name: neighbours share it."""
+    """The host part of a page folder's name: neighbours share it. The host's ASCII name is the request's own
+    (intl.host_ascii: UTS 46, as the network rule and the cookies have it)."""
+    import intl
     h = (host or "").strip().lower().rstrip(".")
-    try:
-        h = h.encode("idna").decode("ascii")
-    except UnicodeError:
-        h = slug(h, 60)
+    if not h.isascii():
+        h = intl.host_ascii(h) or slug(h, 60)
     return re.sub(r"[^a-z0-9.-]", "-", h)[:80] or "local"
 
 

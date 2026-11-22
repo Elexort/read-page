@@ -7,7 +7,7 @@ not, and why the usual "chunk + embed + ASR + OCR" recipe is not simply adopted.
 
 | Input | Path | Output |
 |---|---|---|
-| YouTube watch / shorts / live, TikTok, Vimeo, VK, RuTube, ... | `yt-dlp --skip-download --write-subs --write-auto-subs --sub-langs $READ_PAGE_SUB_LANGS --sub-format vtt` (the tracks: `READ_PAGE_SUB_LANGS`, else the user's language, then English - `zh-Hans,zh-CN,zh,en` for `READ_PAGE_LANG=zh-CN`, `en` for an English user; none of them: one more call for the language the video's own info names) | `content.md`: transcript in blocks of up to 30 s, each starting with `[0:18] ...`; `transcript.vtt` kept beside it |
+| YouTube watch / shorts / live, TikTok, Vimeo, VK, RuTube, ... | `yt-dlp --skip-download --write-subs --write-auto-subs --sub-langs $READ_PAGE_SUB_LANGS --sub-format vtt` (the tracks: `READ_PAGE_SUB_LANGS`, else the user's language, then English, then the track the video speaks in - `zh-Hans,zh-CN,zh,en,.*-orig` for `READ_PAGE_LANG=zh-CN`, `en,.*-orig` for an English user; none of them: one more call for the language the video's own info names). The track read: a human one in the user's languages first, then the words as spoken (speech recognition), YouTube's machine translation (its address asks for `tlang=`) only when there is nothing else; the answer's first line names it | `content.md`: transcript in blocks of up to 30 s, each starting with `[0:18] ...`; `transcript.vtt` kept beside it |
 | a page with an embedded player | the page text, plus the player iframe is *not* followed | the text of the page, not of the video |
 | a video **file** (`.mp4` URL, `Content-Type: video/*`) | magic/type detection -> `media_only` | the file is saved, no text, no transcription |
 | audio file | `media_only` | the file is saved, no text |
@@ -16,8 +16,9 @@ Why the timestamps matter: they cost nothing (the VTT already has them) and they
 into something a document can cite. A cue every two seconds is noise, so cues are grouped until
 either a 2-second gap or 30 seconds of speech - that is `vtt_to_text(block_seconds=30)`.
 
-Limits today: captions only, one language per read (the first of the user's tracks that exists, then the video's own), no translation, no
-speaker labels, no confidence. A video without captions produces an empty text with an honest note.
+Limits today: captions only, one track per read (a human track in the user's languages, else the words as
+spoken, else - named so - YouTube's machine translation), no translation of our own, no speaker labels, no
+confidence. A video without captions produces an empty text with an honest note.
 
 yt-dlp is the one engine `--setup` does not pin: the sites change under it
 from week to week. `--setup` installs `yt-dlp[default]` - with yt-dlp-ejs, the scripts for
