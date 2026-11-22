@@ -3,7 +3,9 @@
 yt-dlp is asked for VTT, then SRT, then whatever the site has (`--sub-format vtt/srt/best`): RuTube gives SRT only,
 a broadcaster's site TTML, a YouTube track in another client's form srv1-3 or json3, an anime site ASS, a lyrics site
 LRC. `to_vtt(raw, ext)` gives the cues of any of them as one WEBVTT text - `readpage.vtt_to_text` reads that, and it
-is what `transcript.vtt` holds. Nothing here installs or runs anything; the standard library only.
+is what `transcript.vtt` holds. YouTube's automatic VTT rolls (each cue repeats the line before): `rolled_cues(vtt)`
+gives its lines once, and `unrolled(vtt)` is what `transcript.vtt` holds then. Nothing here installs or runs
+anything; the standard library only.
 """
 import json
 import re
@@ -174,6 +176,65 @@ def _lrc(raw):
 
 _READERS = {"srt": _arrow, "sbv": _sbv, "ttml": _ttml, "dfxp": _ttml, "srv1": _srv, "srv2": _srv, "srv3": _srv,
             "json3": _json3, "ass": _ass, "ssa": _ass, "lrc": _lrc}
+
+_WORD_TIME = re.compile(r"<(\d\d:\d\d:\d\d[.,]\d+)>")
+
+
+def rolled_cues(vtt):
+    """YouTube's automatic captions in their rolling form, every line once: [(start, end, text, since)], the times in
+    seconds; None for a track that is not in that form.
+
+    A cue of such a track is a screen of two rows (a broadcaster's, three): the rows above the bottom one are the lines
+    the cues before it showed, carried up, and the bottom row is the new line, whose words carry their own times
+    (`<00:00:13.620>`); a cue of 10 ms shows the new line alone before the next one comes (a row of one space is an
+    empty row). So each line stood in three cues, and in the text three times. Here a row that is not the bottom one
+    and is the line the screen showed last is carried and left out; the bottom row is new whatever it says, so a line
+    that is said twice stands twice. `start` and `end` are those of the cue the line came in; `text` has no tags;
+    `since` is when the line before was last spoken (its last word's time, else its cue's start; None for the first),
+    which is what a pause is told by: a line is shown until the next one comes, so the cues have no gaps.
+
+    A track is in this form when its words carry times and a row is carried up somewhere; a person's roll-up captions,
+    which have no word times, and cues that only carry words are not, and are read as they are."""
+    if not _WORD_TIME.search(vtt or ""):
+        return None
+    cues, rows = [], None
+    for line in vtt.splitlines():
+        if "-->" in line:
+            head, _, tail = line.partition("-->")
+            rows = []
+            cues.append((_seconds(head), _seconds(tail.split()[0] if tail.split() else head), rows))
+        elif rows is not None:
+            if line == "":
+                rows = None                         # the cue ends at an empty line; a row of a space is an empty row
+            else:
+                rows.append(line)
+    out, shown, since, carried = [], [], None, 0
+    for start, end, rows in cues:
+        keys = [" ".join(re.sub(r"<[^>]+>", "", r).replace("&nbsp;", " ").split()) for r in rows]
+        bottom = len(rows) - 1 if rows and keys[-1] else -1
+        above = [i for i, k in enumerate(keys) if k and i != bottom]
+        base = len(shown) - len(above)
+        take = []
+        for n, i in enumerate(above):
+            if base + n >= 0 and shown[base + n] == keys[i]:
+                carried += 1
+            else:
+                take.append(i)                      # a row the screen did not show: it is a line, not lost
+        if bottom >= 0:
+            take.append(bottom)
+        for i in take:
+            times = _WORD_TIME.findall(rows[i])
+            out.append((start, end, re.sub(r"<[^>]+>", "", rows[i]).strip(), since))
+            since = _seconds(times[-1]) if times else start
+            shown.append(keys[i])
+        del shown[:-8]
+    return out if carried else None
+
+
+def unrolled(vtt):
+    """WEBVTT of a rolling track's lines, one cue each, as the other formats' are kept; "" for any other track."""
+    cues = rolled_cues(vtt)
+    return _vtt([(a, b, t) for a, b, t, _since in cues]) if cues else ""
 
 
 def to_vtt(raw, ext):

@@ -6889,9 +6889,14 @@ def vtt_to_text(vtt, block_seconds=30):
     A cue every two seconds is noise in a prompt, and dropping the timestamps entirely made a
     transcript impossible to cite ("at 12:40 he says..."). So cues are grouped: a new block starts
     when the cue gap is longer than 2 s or the block already covers `block_seconds`.
+
+    YouTube's automatic captions roll - each cue holds the line before and the new one - and are read line by line
+    (`subtitles.rolled_cues`): every line once, a line said twice twice, and the gap is the time since the line before
+    was last spoken, the cues of such a track having none.
     """
-    cues = []
-    lines = (vtt or "").splitlines()
+    rolled = subtitles.rolled_cues(vtt)
+    cues = [(start, text, since) for start, _end, text, since in rolled] if rolled is not None else []
+    lines = [] if rolled is not None else (vtt or "").splitlines()
     for i, line in enumerate(lines):
         if "-->" not in line:
             continue
@@ -6907,16 +6912,17 @@ def vtt_to_text(vtt, block_seconds=30):
             if clean:
                 text.append(clean)
         if text:
-            cues.append((_cue_seconds(start), " ".join(text)))
+            cues.append((_cue_seconds(start), " ".join(text), None))
     out, block, block_start, last = [], [], None, None
-    for sec, text in cues:
+    for sec, text, since in cues:
         if block_start is None:
             block_start = sec
-        gap = (sec - last) if last is not None else 0.0
+        ref = last if since is None else since
+        gap = (sec - ref) if ref is not None else 0.0
         if block and (gap > 2.0 or sec - block_start >= block_seconds):
             out.append((block_start, block))
             block, block_start = [], sec
-        if not block or block[-1] != text:
+        if rolled is not None or not block or block[-1] != text:
             block.append(text)
         last = sec
     if block:
@@ -7030,8 +7036,12 @@ def video_text(url, c, workdir):
     with open(os.path.join(workdir, sub), encoding="utf-8-sig", errors="replace") as fh:
         raw = fh.read(SUB_LIMIT)                 # a site's file, whatever its size: the read holds this much at most
     vtt = subtitles.to_vtt(raw, ext)
+    rolled = subtitles.unrolled(vtt)             # YouTube's rolling captions, each line once; "" for any other track
     try:
-        if ext == "vtt":
+        if rolled:
+            with open(os.path.join(workdir, "transcript.vtt"), "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(rolled)
+        elif ext == "vtt":
             shutil.copyfile(os.path.join(workdir, sub), os.path.join(workdir, "transcript.vtt"))
         elif vtt:
             with open(os.path.join(workdir, "transcript.vtt"), "w", encoding="utf-8", newline="\n") as fh:

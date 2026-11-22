@@ -444,8 +444,65 @@ try:
     check("... and when the refusal leaves nothing, the answer says so, not `no subtitles`",
           "refused" in got[2] and "429" in got[2] and getattr(mod8, "_VIDEO", {}).get("kind") == "limit", got[2])
 
+    # YouTube's automatic captions roll: a cue is a screen of two rows (three on a broadcaster's), the line before and the
+    # new line, whose words carry their times; a cue of 10 ms shows the new line alone before the next one; a row of one
+    # space is an empty one. Every phrase stood in three cues, and in the answer three times (x3.07 the words over 48
+    # real tracks, a one-hour talk of 8 700 words reaching the agent as 26 700)
+    def at8(t):
+        ms = int(round(t * 1000))
+        return "%02d:%02d:%02d.%03d" % (ms // 3600000, ms // 60000 % 60, ms // 1000 % 60, ms % 1000)
+
+    def timed8(text, t0):
+        words = text.split()
+        return words[0] + "".join("<%s><c> %s</c>" % (at8(t0 + 0.4 * (k + 1)), w) for k, w in enumerate(words[1:]))
+
+    def rolling8(lines, rows=2):
+        """The VTT YouTube writes for `lines` ([(start, text)]): each one shown from its start to the next one's."""
+        out, above = ["WEBVTT\nKind: captions\nLanguage: en"], []
+        for n, (start, text) in enumerate(lines):
+            end = lines[n + 1][0] - 0.01 if n + 1 < len(lines) else start + 3.0
+            screen = ([" "] * rows + above)[-(rows - 1):] if rows > 1 else []
+            out.append("%s --> %s align:start position:0%%\n%s" % (at8(start), at8(end), "\n".join(screen + [timed8(text, start)])))
+            above = above + [text]
+            screen = ([" "] * rows + above)[-(rows - 1):]
+            out.append("%s --> %s align:start position:0%%\n%s\n " % (at8(end), at8(end + 0.01), "\n".join(screen)))
+        return "\n\n".join(out) + "\n\n"
+    said8 = [(1.0, "so today we talk about captions"), (4.2, "and how they roll up the screen"),
+             (7.4, "no no no that is not what I meant"), (10.6, "when you think in categories you"),
+             (13.8, "underestimate how different two facts are"), (17.0, "when you think in categories you"),
+             (20.2, "overestimate how different they are"), (23.4, "100"), (24.0, "percent of the time"),
+             (45.0, "[Music]"), (46.5, "thank you")]
+    spoken8 = [t for _, t in said8]
+    want_rolled = "[0:01] " + " ".join(spoken8[:9]) + "\n\n[0:45] " + " ".join(spoken8[9:])
+    got8 = [mod8.vtt_to_text(rolling8(said8, rows)) for rows in (2, 3)]
+    check("YouTube's rolling captions: every line is read once, a line said again stays, a line of digits stays, "
+          "and a pause of 20 s starts a block", got8[0] == want_rolled, "%d words, %r" % (len(got8[0].split()), got8[0][:120]))
+    check("... a screen of three rows reads the same", got8[1] == want_rolled, "%d words, %r" % (len(got8[1].split()), got8[1][:120]))
+    rolled_info = {"title": "Talk", "language": "en", "automatic_captions": {"en": [{"url": ASR}], "en-orig": [{"url": ASR}]}}
+    got, calls, folder = yt_video(rolled_info, {"en": {"vtt": rolling8(said8)}, "en-orig": {"vtt": rolling8(said8)}}, lang="en")
+    kept8 = open(os.path.join(folder, "transcript.vtt"), encoding="utf-8").read() if os.path.isfile(
+        os.path.join(folder, "transcript.vtt")) else ""
+    check("... the answer says so and the cues kept as transcript.vtt hold each line once, with the time it came in",
+          got[0] == want_rolled and got[2] == "subtitles en, automatic" and kept8.startswith("WEBVTT")
+          and kept8.count("underestimate") == 1 and kept8.count("when you think in categories you") == 2
+          and "00:00:13.800 --> 00:00:16.990\nunderestimate how different two facts are" in kept8 and "<c>" not in kept8,
+          "%r | %s | %d words kept" % (got[0][:50], got[2], len(kept8.split())))
+    human8 = ("WEBVTT\n\n00:00:01.000 --> 00:00:02.500\nfirst line\n\n00:00:02.500 --> 00:00:04.000\nfirst line\nsecond line\n\n"
+              "00:00:04.000 --> 00:00:05.500\nsecond line\nthird line\n")
+    check("a person's roll-up captions have no word times and are read as they were (this is YouTube's automatic form only)",
+          mod8.vtt_to_text(human8) == "[0:01] first line first line second line second line third line",
+          mod8.vtt_to_text(human8))
+    got, calls, folder = yt_video({"title": "Talk", "language": "en", "subtitles": {"en": [{"ext": "vtt", "name": "English"}]}},
+                                  {"en": {"vtt": human8}}, lang="en")
+    check("... and a track with no rolling in it is kept as transcript.vtt byte for byte",
+          open(os.path.join(folder, "transcript.vtt"), "rb").read() == open(os.path.join(folder, "video.en.vtt"), "rb").read()
+          and got[2] == "subtitles en", got[2])
+    karaoke8 = "WEBVTT\n\n00:00:01.000 --> 00:00:03.000\nsing<00:00:01.500><c> along</c>\n\n00:00:05.000 --> 00:00:07.000\nsing<00:00:05.500><c> along</c>\n"
+    check("a track with word times and no line carried up is not rolling either: a line said twice is read twice",
+          mod8.vtt_to_text(karaoke8) == "[0:01] sing along\n\n[0:05] sing along", mod8.vtt_to_text(karaoke8))
+
     # a video that has not started yet, and a refusal: what happened, and what to do
-    upcoming = b"ERROR: [youtube] 1hEmuJOxNTI: This live event will begin in 38 days.\n"
+    upcoming =b"ERROR: [youtube] 1hEmuJOxNTI: This live event will begin in 38 days.\n"
     got, calls, _ = yt_video(None, {}, rc=1, err=upcoming)
     check("a video that has not premiered: the note says so, with what YouTube said",
           "has not started yet" in got[2] and "38 days" in got[2] and "READ_PAGE_SUB_LANGS" not in got[2]

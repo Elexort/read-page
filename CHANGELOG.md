@@ -91,6 +91,28 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
     stream address's `available_at` is not met - only subtitles are asked. `tests/reading.py` (+32 checks: a stand-in
     for yt-dlp that has the tracks a site lists, in the formats it has, and refuses translations as YouTube does) and
     `tests/timeouts.py` (+3); `references/video.md` has the numbers.
+- **YouTube's automatic subtitles reach the agent once, not three times** (KNOWN-ISSUES 224). Its automatic VTT rolls: a
+  cue holds the line before it and the new line (whose words carry their times), and a cue of 10 ms shows the new line
+  alone, so every phrase stood in three cues and `vtt_to_text()`, which dropped only a cue equal to the one before it,
+  handed over about three times the words (a one-hour talk of 8 800 words as 26 400, a three-row track five times).
+  `subtitles.rolled_cues()` reads such a track line by line: the bottom row of a cue is the new line, a row above it
+  that is the line the screen showed last is carried and left out, so a line the speaker says twice stands twice, and
+  a caption row of digits alone (`100`), where the cue reader stopped, is a line. A track is told by its word times
+  plus a carried row, so a person's track - a roll-up one too - reads as it did. The blocks start at a pause of 2 s
+  counted from when the line before was last spoken (a line is shown until the next one comes: the cues have no
+  gaps, and a block began at nearly every line, 9.5 words of speech each; 59 now), still at most 30 s.
+  `transcript.vtt` holds one cue per line, the time the line came in and the cue's end (the file yt-dlp wrote, with
+  the word times, stays beside it as
+  `video.<lang>.vtt`). Measured on the real subtitle files of 125 videos (309 files): 86 videos have a track in that
+  form; 77 of them read 979 577 -> 329 790 words (x2.97; x2.63-x3.00 apiece, x4.91 for the three-row one) and the 9
+  Japanese ones 286 873 -> 104 421 characters; the 48 clips of the measurement 515 460 -> 174 016 words and
+  18 311 -> 2 961 blocks (Japanese apart). Each of the 169 automatic files in that form has every line of the track
+  once and nothing lost: the measurement's own rule, "a line equal to one of the last three is a repeat", drops 348
+  lines that are said again, which are kept. The 14 "automatic" files that are a person's text, the 25 RuTube tracks
+  and 99 of the 101 human tracks read byte for byte as before; the other 2 are broadcasters' live captions
+  (`es-uYU-mmqFLq8`, `pt-uYU-mmqFLq8`) in YouTube's rolling form, and read once. The largest real track, four times
+  over (6.5 MB), reads in 0.3 s, 15 s before. `tests/reading.py` (+6 checks: a rolling track built as YouTube
+  writes it, with a line said twice, a line of digits, a pause, two and three rows).
 - **Sign-in, subscription and "not found" words in twenty languages, a soft 404 judged on the final page, and a
   paywall named** (KNOWN-ISSUES 13, 191-193). The wall words covered twenty languages; the login and not-found
   words covered seven. `LOGIN_PHRASES` (a wall's sentence: "sign in to continue", "for subscribers only", "войдите,
