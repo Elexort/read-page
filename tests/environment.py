@@ -1435,14 +1435,19 @@ with open(os.path.join(bh, "setup.json"), "w", encoding="utf-8") as fh_:
 bad_note = os.path.join(bh, "note.txt")
 with open(bad_note, "w", encoding="utf-8") as fh_:
     fh_.write("Проверка: текст по-русски и « кавычки », 東京.\n" * 3)
-rc, out, err = run([bad_note], dict(base, READ_PAGE_HOME=bh))
+# a temp folder of these two runs alone: the start-up files of reads that other processes of the machine run at
+# the same time (another suite, an agent) are in the shared one
+start_tmp = tempfile.mkdtemp(prefix="rp-env-starttmp-", dir=ascii_base())
+junk.append(start_tmp)
+own_tmp = {"TEMP": start_tmp, "TMP": start_tmp, "TMPDIR": start_tmp}
+rc, out, err = run([bad_note], dict(base, READ_PAGE_HOME=bh, **own_tmp))
 check("an environment Python that starts and fails: the read goes on in the machine's Python, and says why",
       rc == 0 and "Проверка: текст по-русски" in out and "environment: its Python started and ended" in out
       and "READ_PAGE_SKIP=env" in out, "rc=%s %s" % (rc, [ln for ln in out.splitlines() if "environment" in ln][:1] or (out + err)[-160:]))
-c = caps(dict(base, READ_PAGE_HOME=bh))
+c = caps(dict(base, READ_PAGE_HOME=bh, **own_tmp))
 check("... and --caps says the same, instead of a Python's silence",
       (c.get("env") or {}).get("used") is False and "started and ended" in ((c.get("env") or {}).get("why") or ""), str(c.get("env")))
-leftover = [n_ for n_ in os.listdir(tempfile.gettempdir()) if n_.startswith("read-page-start-")]
+leftover = [n_ for n_ in os.listdir(start_tmp) if n_.startswith("read-page-start-")]
 check("... leaving no start-up file behind", not leftover, str(leftover[:3]))
 if os.name != "nt":
     good_run, _o, _e = run([doc], base)
