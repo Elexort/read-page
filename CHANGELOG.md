@@ -3,10 +3,46 @@
 ## Unreleased (0.5.0)
 
 Two branches: `main` is the skill alone - SKILL.md, README.md, scripts/,
-references/, LICENSE and .gitattributes, 32 files - so a clone, a ZIP or an installer
+references/, LICENSE and .gitattributes, 34 files - so a clone, a ZIP or an installer
 brings an agent nothing else; `dev` carries the code with its tests, CI, notes and this log.
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
+
+- **No source in plain http, for any part** (KNOWN-ISSUES 210). An http index (`UV_DEFAULT_INDEX`, `UV_INDEX_URL`,
+  `PIP_INDEX_URL`, pip's own `index-url`, an entry of `UV_EXTRA_INDEX_URL`, `UV_INDEX` or `UV_FIND_LINKS`), npm's
+  registry (the environment's or an `.npmrc`'s, a scope's too), Playwright's download host and uv's list of Pythons
+  were used as they were - for yt-dlp, the browser and the hashes our Python is checked against, which no other
+  hash protects - while only Node's mirror and the OCR data's, pinned anyway, had to be https. Each is left out now and
+  the default used (registry.npmjs.org in npm's case; a `UV_CONFIG_FILE` that names one is not read), the background
+  yt-dlp update too, and the log says why; pip, the uv fallback, runs `--isolated`. A loopback address stays usable;
+  `READ_PAGE_ALLOW_HTTP=<host>` lets a company's intranet mirror through, and every line that uses it says it goes in
+  plain http.
+- **The lock's hashes decide the set of packages, whatever a settings file says** (KNOWN-ISSUES 211): the install
+  runs with `--require-hashes` (an index whose metadata file named one more package got it installed, unhashed - now
+  refused), the one-at-a-time fallback by each top package's pin under the same flag, yt-dlp's with `--verify-hashes`;
+  a `UV_CONFIG_FILE` with `verify-hashes = false` no longer lets a wrong hash in, and its keys are named in the log.
+- **`UV_LINK_MODE=symlink` is not passed on** (KNOWN-ISSUES 212): the environment's files were links into uv's cache,
+  which `--setup` then cleaned, 7 962 of them, after a check that passed; hard links are used, and an environment such a
+  run left is built anew.
+- **An address shows as its scheme, host and port** (KNOWN-ISSUES 213) in the setup's log, `setup.json` and the
+  report: a password with an `@` or a `/` in it, a token in a path (Gemfury, Cloudsmith) or a query showed whole.
+- **Every download is held to a hash but yt-dlp's and the browser's** (KNOWN-ISSUES 214): every OCR pack of
+  tessdata_fast 4.1.0 by its SHA256 (`scripts/tessdata-lock.txt`, 125 packs: any pack beyond `eng` and `rus` was kept
+  by its size), PyPI's Node for musl by the SHA256 of its wheels, defuddle and its 26 packages by `npm ci` of
+  `scripts/defuddle-lock.json` (each tarball by its SHA512, the same tree as before; `tools/setup_lock.py --npm` and
+  `--tessdata` write the two). README names what has none: yt-dlp with the five packages that float with it, and the
+  browser.
+- **OCR packs named once stay named** (KNOWN-ISSUES 215): the next plain `--setup` dropped them, and reads went back to
+  English. `readpage.py --setup --ocr-langs eng+jpn` names them in any shell (the fix line was a POSIX `VAR=x cmd`);
+  `READ_PAGE_LANG` decides the packs `--setup` fetches, as it does a read's.
+- Smaller findings of the same review (KNOWN-ISSUES 216): a Windows home outside the profile (`C:\read-page`), which
+  every signed-in user could modify, is made the user's alone; the environment's bytecode folder on a mount with no
+  Unix modes gives way to the temp folder's (reads had none, 0.25 s more each); `tidy()` sees a process that names the
+  environment by another path to it; npm's tarball falls back to registry.npmjs.org (a registry that wants a token
+  ended the step); pip's configuration is read in pip's order; the `--setup` command compiles nothing into the temp
+  folder; README, engines.md and this log say what the code does.
+- tests: `environment.py` 213 (175 before); the checks of a source in plain http, of the lock's set against a local
+  index with the real uv, and of the pins against GitHub's listing, PyPI and the npm registry.
 
 - **Sign-in, subscription and "not found" words in twenty languages, a soft 404 judged on the final page, and a
   paywall named** (KNOWN-ISSUES 13, 191-193). The wall words covered twenty languages; the login and not-found
@@ -261,7 +297,7 @@ while the rows below stood)
   Windows device's name (`CON.png`, `COM1.pdf`, `LPT².png`) gets `file-` before it.
 - **OCR asks for the pack of the text's script and of the user's language** (`chi_sim` or `chi_tra`, `jpn`, `kor`,
   `rus`; the user's own unless `READ_PAGE_OCR_LANGS` is set) when it is installed, and names a missing one in
-  `improve` with the command that fetches it (`READ_PAGE_OCR_LANGS=eng+jpn readpage.py --setup`;
+  `improve` with the command that fetches it (`readpage.py --setup --ocr-langs eng+jpn`: a flag since 2026-11-22;
   `signals.ocr_missing_langs`; on the `ocr:` line of `--ocr N`). Kana counts as Japanese when it is a real part of the
   text (five の on a Chinese shop's page made it Japanese), and so do kanji in Japan's own forms (経, 発, 駅: a
   headline of kanji alone was Chinese). tesserocr reads a page by its path when it can open it: given as a
@@ -296,13 +332,14 @@ while the rows below stood)
   `scripts/setup-lock.txt` (curl_cffi, trafilatura, readability, html2text, PyMuPDF and
   pymupdf4llm, youtube-transcript-api, Playwright, tesserocr with tesseract 5.5.4, Pillow,
   psutil, the Office readers; pandoc 3.9 in pypandoc_binary until 2026-11-21, below), yt-dlp
-  (alone not pinned, below), Node 24.22.3 from nodejs.org checked against SHASUMS256.txt
-  (nodejs-wheel-binaries from PyPI when nodejs.org cannot be reached), defuddle 0.19.4 through
-  that npm with its own 26 packages as of one day (`--before`), Playwright's
-  `chromium-headless-shell`, and English and Russian OCR data from tessdata_fast 4.1.0 with pinned
-  SHA256. Then every engine is checked on a sample. Its first line names the download (about 390 MB
-  on Windows, 445 on Linux, 355 on macOS - 430, 480 and 380 with pandoc) and what it keeps (about
-  0.95 GB on Windows, 1.2 with pandoc), or says the folder is up to date. From nothing 65-70 s on
+  (alone not pinned, below), Node (since 2026-11-21 the one Playwright's wheel carries; first nodejs.org's
+  24.22.3, its SHA256 now pinned in the skill, or nodejs-wheel-binaries from PyPI - both the fallback, above),
+  defuddle 0.19.4 through that npm with its own 26 packages (as of one day, `--before`; their lock since
+  2026-11-22, above), Playwright's `chromium-headless-shell`, and OCR data from tessdata_fast 4.1.0 (first English
+  and Russian for everyone; since 2026-11-21 English and the user's own languages, every pack SHA256 pinned since
+  2026-11-22, above). Then every engine is checked on a sample. Its first line names the download (about 360 MB
+  on Windows, 390 on Linux, 350 on macOS; 430, 480 and 380 while pandoc and nodejs.org's Node were in it) and what
+  it keeps (about 0.9 GB on Windows), or says the folder is up to date. From nothing 65-70 s on
   a 9 MB/s link (~48 of them downloads), an up-to-date check 8 s; the steps side by side were
   built and measured (62/68 s against 68/65, WSL 83 against 79: the branches only shared the link)
   and not kept. (The first run, still with markitdown, took

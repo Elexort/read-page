@@ -11,6 +11,7 @@ follows that one instead of starting another. The real install is minutes and ha
 not here (a CI job of its own later).
 """
 import contextlib
+import glob
 import importlib.machinery
 import importlib.util
 import io
@@ -193,9 +194,10 @@ check("... and ends when its client closes stdin", p.returncode is not None, "rc
 
 # ---------------------------------------------------------------- --setup with no network
 off = tempfile.mkdtemp(prefix="rp-env-offline-")
+off_tmp = tempfile.mkdtemp(prefix="rp-env-offtmp-", dir=ascii_base())       # a temp folder of this run alone
 dead = dict(base, READ_PAGE_HOME=off, READ_PAGE_SETUP_WAIT="90", HTTPS_PROXY="http://127.0.0.1:9",
             HTTP_PROXY="http://127.0.0.1:9", https_proxy="http://127.0.0.1:9", http_proxy="http://127.0.0.1:9",
-            NO_PROXY="", no_proxy="")
+            NO_PROXY="", no_proxy="", TEMP=off_tmp, TMP=off_tmp, TMPDIR=off_tmp)
 for k in ("UV_DEFAULT_INDEX", "UV_INDEX_URL", "PIP_INDEX_URL"):
     dead.pop(k, None)
 t0 = time.time()
@@ -204,6 +206,10 @@ check("offline: --setup says it needs the internet and installs nothing",
       rc == 1 and "needs the internet" in out and not os.path.exists(os.path.join(off, "setup.json"))
       and not os.path.isdir(os.path.join(off, "envs")),
       "rc=%s %.0f s %s" % (rc, time.time() - t0, [ln for ln in out.splitlines() if "network" in ln][:1]))
+off_pyc = [os.path.join(dp, n) for dp, _dn, fn in os.walk(off_tmp) for n in fn if n.endswith(".pyc")]
+check("... and the --setup command compiles nothing into the temp folder (it served nothing, outside the folder it names)",
+      not off_pyc, str(off_pyc[:2]))
+shutil.rmtree(off_tmp, ignore_errors=True)
 check("--setup's first line names the download and the disk it takes, before anything is fetched",
       re.match(r"read-page --setup: .* - downloads about \d+ MB, takes (about )?[\d.]+ GB on disk", out) is not None,
       out.splitlines()[0][:140] if out else "")
@@ -276,12 +282,17 @@ with open(envsetup.LOCK_FILE, encoding="utf-8") as fh:
 missing = [t for t in envsetup.TOP if t.split("[")[0].lower().replace("_", "-") + "==" not in lock]
 check("every engine --setup promises is pinned in setup-lock.txt", not missing, str(missing))
 # defuddle's own packages have ranges (linkedom ^0.18.12, turndown ^7.2.0...): npm would take the
-# newest of the day of each install, so the day is fixed too
-dcmd = envsetup.defuddle_command("node", "npm-cli.js", "PREFIX")
-check("defuddle's own packages are pinned too: npm resolves them as of one fixed day",
-      "defuddle@" + envsetup.DEFUDDLE_VERSION in dcmd and "--before=" + envsetup.DEFUDDLE_BEFORE in dcmd
-      and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", envsetup.DEFUDDLE_BEFORE)
-      and dcmd[:3] == ["node", "npm-cli.js", "install"] and "--ignore-scripts" in dcmd, " ".join(dcmd))
+# newest of the day of each install, so the tree is a lock of its own, every tarball held to its SHA512
+dcmd = envsetup.defuddle_command("node", "npm-cli.js", "ROOT")
+npm_lock = json.load(open(envsetup.NPM_LOCK, encoding="utf-8"))
+npm_pkgs = dict((k, v) for k, v in npm_lock["packages"].items() if k)
+check("defuddle's own packages are pinned too: `npm ci` of the skill's lock, each tarball by its SHA512",
+      dcmd[:4] == ["node", "npm-cli.js", "ci", "--prefix"] and "--ignore-scripts" in dcmd and "--include=optional" in dcmd
+      and npm_lock["packages"][""]["dependencies"] == envsetup.npm_package()["dependencies"]
+      and npm_pkgs["node_modules/defuddle"]["version"] == envsetup.DEFUDDLE_VERSION and len(npm_pkgs) == 27
+      and all(re.fullmatch(r"sha512-[A-Za-z0-9+/]{86}==", v.get("integrity", ""))
+              and v.get("resolved", "").startswith("https://registry.npmjs.org/") for v in npm_pkgs.values())
+      and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", envsetup.DEFUDDLE_BEFORE), " ".join(dcmd))
 try:                                   # the pinned version must exist by the instant its tree is resolved as of
     published = envsetup.fetch_json("https://registry.npmjs.org/defuddle", timeout=20)["time"][envsetup.DEFUDDLE_VERSION]
 except Exception as e:                                         # noqa: BLE001
@@ -291,6 +302,26 @@ if published:
     check("defuddle %s was published before --before's instant (npm would not find it otherwise)" % envsetup.DEFUDDLE_VERSION,
           published.replace(".000Z", "Z") <= envsetup.DEFUDDLE_BEFORE or published < envsetup.DEFUDDLE_BEFORE,
           "%s, before %s" % (published, envsetup.DEFUDDLE_BEFORE))
+    # the lock's SHA512 of each of its 27 tarballs is the one the registry publishes (a typo would refuse every machine)
+    import concurrent.futures                            # noqa: E402
+
+    def published_integrity(key):
+        name = key[key.rindex("node_modules/") + len("node_modules/"):]
+        try:
+            return key, envsetup.fetch_json("https://registry.npmjs.org/%s/%s" % (name.replace("/", "%2f"),
+                                                                                  npm_pkgs[key]["version"]),
+                                            timeout=20)["dist"]["integrity"]
+        except Exception as e:                                 # noqa: BLE001
+            return key, "?%s" % str(e)[:40]
+    with concurrent.futures.ThreadPoolExecutor(8) as pool:
+        live_npm = dict(pool.map(published_integrity, sorted(npm_pkgs)))
+    if any(v.startswith("?") for v in live_npm.values()):
+        print("SKIP the lock's SHA512 against the registry (it did not answer for each: %s)"
+              % [k for k, v in live_npm.items() if v.startswith("?")][:2])
+    else:
+        check("... and every SHA512 of the lock is the one the registry publishes for that version",
+              all(live_npm[k] == v["integrity"] for k, v in npm_pkgs.items()),
+              str([k for k, v in npm_pkgs.items() if live_npm[k] != v["integrity"]][:3]))
 # ---------------------------------------------------------------- yt-dlp: the one engine not pinned
 cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1795000000 - 3 * 86400))
 cmd = envsetup.ytdlp_command("uv", "py", now=1795000000, floor="2026.10.26", lock="ENV-LOCK")
@@ -536,21 +567,19 @@ if has_tesserocr and os.path.isfile(real_eng):             # (Windows on ARM: an
     check("... and on a volume that makes no short names (a runner's D:): the same, from the folder's parent",
           p_ns.returncode == 0 and said_ns.startswith("True ") and said_ns.endswith("True tesserocr"),
           (said_ns or p_ns.stderr.decode("utf-8", "replace"))[-200:])
-    # a pack that lists fine and does not start (cut short) is found by starting it, here and in the check
+    # a pack on disk that lists fine and does not start (cut short, put there by hand) is found by the check, which
+    # starts every pack (a download is held to its SHA256, and one cut short never stays)
     with open(real_eng, "rb") as fh_:
         cut_pack = fh_.read()[:5000]
     with open(os.path.join(cyr_td, "xyz.traineddata"), "wb") as fh_:
         fh_.write(cut_pack)
-    w3 = envsetup.Work(cyr, "r3", "test")
-    w3.env_py = real_py
-    bad3 = w3._packs_start(cyr_td, ["eng", "xyz"])
     p3 = subprocess.run([real_py, "-E", "-B", "-X", "utf8", "-c",
                          "import sys; sys.path.insert(0, %r); import envsetup; r = envsetup._check_ocr(%r, "
                          "{'tessdata': 'tessdata'}); print(r['ok'], r['why'])" % (SCRIPTS, cyr)],
                         capture_output=True, timeout=120)
     said3 = p3.stdout.decode("utf-8", "replace").strip()
-    check("a pack tesseract does not start with is found by starting it (a pack cut short), when fetched and in the check",
-          list(bad3) == ["xyz"] and said3.startswith("False ") and "xyz" in said3, "%s | %s" % (bad3, said3[:120]))
+    check("a pack tesseract does not start with (a pack cut short) is found by the check, which starts each",
+          said3.startswith("False ") and "xyz" in said3, said3[:120])
     os.unlink(os.path.join(cyr_td, "xyz.traineddata"))
 else:
     print("SKIP the real tesserocr under a Cyrillic folder (no environment here)")
@@ -899,17 +928,17 @@ def fake_fetch(url, dest, sha=None, timeout=60):
 
 real_fetch = envsetup.fetch
 envsetup.fetch = fake_fetch
-os.environ["READ_PAGE_OCR_LANGS"] = "eng+chi_sim + deu_latf+Bad Name+srp_latn"
+os.environ["READ_PAGE_OCR_LANGS"] = "eng+chi_sim + chi_sim_vert+Bad Name+srp_latn+deu_latf"
 try:
     w = envsetup.Work(od, "r2", "test")
     got_ok, got_note = w.ocr_data()
 finally:
     envsetup.fetch = real_fetch
     os.environ.pop("READ_PAGE_OCR_LANGS", None)
-check("a language named with an underscore (chi_sim, deu_latf, srp_latn) is fetched like any other",
-      {"chi_sim.traineddata", "deu_latf.traineddata", "srp_latn.traineddata"} <= set(asked), str(asked))
-check("... and a name that is no pack's is said, not dropped in silence",
-      "Bad Name" in got_note, got_note)
+check("a language named with an underscore (chi_sim, chi_sim_vert, srp_latn) is fetched like any other",
+      {"chi_sim.traineddata", "chi_sim_vert.traineddata", "srp_latn.traineddata"} <= set(asked), str(asked))
+check("... and a name that is no pack's of tessdata_fast 4.1.0 is said, not dropped in silence (nor fetched)",
+      "Bad Name" in got_note and "deu_latf" in got_note and "deu_latf.traineddata" not in asked, got_note)
 
 # ---------------------------------------------------------------- tar on a Python without filters
 import tarfile as _tar                                   # noqa: E402
@@ -1515,7 +1544,7 @@ def over():
     named = all(any(ln.startswith(n + "=") for ln in lines142) for n in (
         "UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL", "UV_INSECURE_HOST", "NODEJS_ORG_MIRROR", "NODE_TLS_REJECT_UNAUTHORIZED",
         "PIP_INDEX_URL", "npm_config_registry"))
-    return named and "mirror.example/simple" in text, "%d lines" % len(lines142)
+    return named and "UV_DEFAULT_INDEX=https://mirror.example - " in text, "%d lines" % len(lines142)
 
 
 attempt("every setting that redirects an installer is named, with its value", over)
@@ -1523,7 +1552,7 @@ attempt("... and no address gives away its user name or password, nor a token of
         lambda: (not any(x in "\n".join(lines142) for x in ("hunter2", "regsecret", "uvsecret", "npmsecret", "pipsecret",
                                                           "TOKEN-NOT-FOR-THE-LOG")) and bool(lines142), ""))
 attempt("an http:// mirror for Node is named as not used, an https:// one as used",
-        lambda: (any("NODEJS_ORG_MIRROR=http://nodes.example/dist - not used" in x for x in lines142)
+        lambda: (any("NODEJS_ORG_MIRROR=http://nodes.example - not used" in x for x in lines142)
                  and any("Node comes from it" in x for x in envsetup.source_overrides(
                      {"NODEJS_ORG_MIRROR": "https://nodes.example/dist"}, user142, folder142, system=False)), ""))
 attempt("a setting that would switch off the lock's hash check is named as not passed on",
@@ -1535,10 +1564,10 @@ attempt("uv's configuration files (the user's, and a uv.toml in a parent of the 
                  and any(os.path.join("projects", "uv.toml") in x and "[[index]]" in x and "exclude-newer" in x
                          for x in lines142), [x[:90] for x in lines142 if "uv.toml" in x]))
 attempt("the user's .npmrc and pip's configuration are named by their registry, index and TLS setting",
-        lambda: (any(".npmrc: registry=https://npm.example/" in x for x in lines142)
+        lambda: (any(".npmrc: registry=https://npm.example - " in x for x in lines142)
                  and any(".npmrc: strict-ssl=false" in x for x in lines142)
                  and any(x.startswith(os.path.join(user142, ".config", "pip", "pip.conf") if os.name != "nt" else
-                                      os.path.join(user142, "pip", "pip.ini")) and "index-url=https://pip.example/simple" in x
+                                      os.path.join(user142, "pip", "pip.ini")) and "index-url=https://pip.example - " in x
                          for x in lines142), [x[:100] for x in lines142 if "npmrc" in x or "pip." in x]))
 attempt("nothing set, nothing said",
         lambda: (envsetup.source_overrides({}, user142 + "-none", tempfile.mkdtemp(prefix="rp-env-bare-"),
@@ -1598,7 +1627,7 @@ finally:
     os.environ.pop("UV_DEFAULT_INDEX", None)
 log142 = open(os.path.join(d142, "setup.log"), encoding="utf-8").read()
 attempt("with a mirror set, the log names it before any step, and the state keeps the lines for the report",
-        lambda: ("sources set here" in log142 and "UV_DEFAULT_INDEX=https://corp.example/simple" in log142
+        lambda: ("sources set here" in log142 and "UV_DEFAULT_INDEX=https://corp.example - " in log142
                  and "s3cret" not in log142 and any("corp.example" in x for x in w142.info.get("sources") or []), log142[:160]))
 rep_home = tempfile.mkdtemp(prefix="rp-env-rep-")
 junk.append(rep_home)
@@ -1608,7 +1637,7 @@ with open(os.path.join(rep_home, "setup.json"), "w", encoding="utf-8") as fh_:
                    disk={"folder": 1100 * 1048576, "cache": 450 * 1048576, "cache_alone": 20 * 1048576}), fh_)
 rc, out, err = run([], dict(base, READ_PAGE_HOME=rep_home))
 attempt("the setup report names the sources of the last --setup, and the disk it takes with uv's cache",
-        lambda: ("UV_DEFAULT_INDEX=https://corp.example/simple" in out and "sources" in out
+        lambda: ("UV_DEFAULT_INDEX=https://corp.example - " in out and "sources" in out
                  and "uv's cache is 450 MB, 20 MB of it in no environment" in out and "1.1 GB in the folder" in out,
                  [ln for ln in out.splitlines() if "sources" in ln or "disk" in ln][:3] or (out + err)[-200:]))
 
@@ -1674,6 +1703,19 @@ attempt("a process that runs from an environment's folder is found; a sibling wh
                  and not envsetup.uses_folder(os.path.join(proc_root, "home dir", "envs", "py3.13.18-aaaaaaaaaa"),
                                               [c_ for c_ in got_cmds if c_[0] != os.path.join(env_a, "bin", "python")
                                                and c_[0] != "/bin/sleep" and c_[0] != "/usr/bin/python3"]), ""))
+os.makedirs(os.path.join(env_a, "bin"))
+alias_root = os.path.join(proc_root, "alias")
+try:
+    os.symlink(os.path.join(proc_root, "home dir"), alias_root, target_is_directory=True)
+    alias_ok = True
+except (OSError, NotImplementedError):
+    alias_ok = False
+odd_a = os.path.join(proc_root, "home dir") + os.sep + os.sep + "envs" + os.sep + "." + os.sep + os.path.basename(env_a)
+attempt("a process that names the folder another way - `//` or `/./` in the path, a second link to it - is found too",
+        lambda: (envsetup.uses_folder(env_a, [[os.path.join(odd_a, "bin", "python"), "-c", "pass"]])
+                 and (not alias_ok or envsetup.uses_folder(env_a, [[os.path.join(alias_root, "envs", os.path.basename(env_a),
+                                                                                 "bin", "python")]]))
+                 and not envsetup.uses_folder(env_a, [[os.path.join(env_b, "bin", "python")]]), "a link: %s" % alias_ok))
 attempt("a line of `ps` (macOS) is judged the same way: the whole line, a space in the path included",
         lambda: (envsetup.uses_folder(env_a, ["%s -E -X utf8 /skill/scripts/mcp_server.py" % os.path.join(env_a, "bin", "python"),
                                               "/usr/bin/python3 /skill/scripts/readpage.py"])
@@ -1774,8 +1816,11 @@ try:
     e_mac = envsetup.net_env()
     os.environ["UV_LINK_MODE"] = "copy"
     e_mac_user = envsetup.net_env()
-    os.environ.pop("UV_LINK_MODE")
+    os.environ["UV_LINK_MODE"] = "symlink"
+    e_mac_link = envsetup.net_env()
     sys.platform = "linux"
+    e_linux_link = envsetup.net_env()
+    os.environ.pop("UV_LINK_MODE")
     e_linux = envsetup.net_env()
 finally:
     sys.platform = real_platform
@@ -1783,9 +1828,13 @@ finally:
         os.environ["UV_LINK_MODE"] = saved_link
     else:
         os.environ.pop("UV_LINK_MODE", None)
-attempt("on macOS uv links instead of cloning, so the cache costs what it does elsewhere; a link mode the user set stays",
+attempt("on macOS uv links instead of cloning, so the cache costs what it does elsewhere; a link mode the user set stays "
+        "- but symlink, which leaves the environment empty when --setup cleans uv's cache: hard links then",
         lambda: (e_mac.get("UV_LINK_MODE") == "hardlink" and e_mac_user.get("UV_LINK_MODE") == "copy"
-                 and "UV_LINK_MODE" not in e_linux, str((e_mac.get("UV_LINK_MODE"), e_mac_user.get("UV_LINK_MODE")))))
+                 and e_mac_link.get("UV_LINK_MODE") == "hardlink" and e_linux_link.get("UV_LINK_MODE") == "hardlink"
+                 and "UV_LINK_MODE" not in e_linux,
+                 str((e_mac.get("UV_LINK_MODE"), e_mac_user.get("UV_LINK_MODE"), e_mac_link.get("UV_LINK_MODE"),
+                      e_linux_link.get("UV_LINK_MODE")))))
 cache_dir = tempfile.mkdtemp(prefix="rp-env-cachesz-")
 junk.append(cache_dir)
 for n_, size_ in (("only.whl", 3000), ("shared.whl", 5000)):
@@ -1835,6 +1884,41 @@ attempt("in the environment Python's bytecode goes to its folder (cache/pycache)
         lambda: (inside == os.path.join(py_home, "cache", "pycache") and os.path.isdir(inside)
                  and outside and not outside.startswith(py_home) and outside.startswith(tempfile.gettempdir()),
                  "%s | %s" % (inside, outside)))
+if os.name == "posix":
+    loose = tempfile.mkdtemp(prefix="rp-env-loose-")
+    junk.append(loose)
+    os.makedirs(os.path.join(loose, "cache", "pycache"))
+    os.chmod(os.path.join(loose, "cache"), 0o777)            # a mount with no Unix modes shows every folder so
+    try:
+        ownenv._STATUS.update(used=True, home=loose)
+        loose_pyc = rp151._pycache_home()
+    finally:
+        ownenv._STATUS.clear()
+        ownenv._STATUS.update(saved_status)
+    attempt("POSIX: where the environment's folder looks writable by all (WSL's /mnt/c, exFAT), the bytecode goes to the "
+            "temp folder's - not nowhere, which cost every read 0.25 s",
+            lambda: (bool(loose_pyc) and not loose_pyc.startswith(loose) and loose_pyc.startswith(tempfile.gettempdir()),
+                     str(loose_pyc)))
+else:
+    # a folder under C:\ (C:\read-page) inherits Authenticated Users' Modify: every signed-in user could replace the
+    # environment's python.exe, its site-packages, the bytecode a read runs
+    acl_dir, acl_other = tempfile.mkdtemp(prefix="rp-env-acl-"), tempfile.mkdtemp(prefix="rp-env-acl2-")
+    junk += [acl_dir, acl_other]
+    acl_before = envsetup.others_write(acl_dir)
+    for d_ in (acl_dir, acl_other):
+        subprocess.run(["icacls", d_, "/grant", "*S-1-5-11:(OI)(CI)M", "/Q"], capture_output=True, timeout=60)
+    acl_opened = envsetup.others_write(acl_dir)
+    open(os.path.join(acl_dir, "setup.json"), "w").close()                  # the skill's own folder
+    open(os.path.join(acl_other, "notes.txt"), "w").close()                 # a folder of the user's, with more in it
+    nowhere = os.path.join(acl_dir, "not-the-profile")
+    acl_said, acl_warn = envsetup.secure_home(acl_dir, profile=nowhere), envsetup.secure_home(acl_other, profile=nowhere)
+    attempt("Windows: a home outside the profile that the machine's other users may write in is made the user's alone "
+            "where it is the skill's own, and named with the command that would where it holds more; one under the "
+            "profile is left as it is",
+            lambda: (acl_before is False and acl_opened is True and "yours alone now" in acl_said
+                     and envsetup.others_write(acl_dir) is False and acl_warn.startswith("warning") and "icacls" in acl_warn
+                     and envsetup.others_write(acl_other) is True and envsetup.secure_home(acl_other) == "",
+                     "%s %s | %s | %s" % (acl_before, acl_opened, acl_said[:60], acl_warn[:60])))
 yt_home = tempfile.mkdtemp(prefix="rp-env-ytc-")
 junk.append(yt_home)
 rp151b = load_rp("ytcache")
@@ -1975,6 +2059,11 @@ envsetup.NPM_INTEGRITY, envsetup.NPM_VERSION = sri(tgz), "11.1.1"
 envsetup.fetch = serve_tgz
 node_wheel_dir = os.path.join(dn, "driver")
 os.makedirs(node_wheel_dir)
+npmrc_l5 = os.path.join(dn, "user.npmrc")
+open(npmrc_l5, "w").close()
+for k_ in [k_ for k_ in wn.env if k_.lower().startswith("npm_config_")]:
+    wn.env.pop(k_)
+wn.env["npm_config_userconfig"] = npmrc_l5                  # this machine's own .npmrc stays out
 try:
     cli_a = wn._npm_cli(os.path.join(node_wheel_dir, "node"))
     first = list(asked2)
@@ -1987,9 +2076,28 @@ try:
     shutil.rmtree(os.path.join(dn, "node"))
     wn._npm_cli(os.path.join(node_wheel_dir, "node"))
     http_url = asked2[-1]
+    # the registry of the user's .npmrc, which wants a token: it answers 401, and registry.npmjs.org serves the tarball
+    wn.env.pop("npm_config_registry")
+    with open(npmrc_l5, "w", encoding="utf-8") as fh_:
+        fh_.write("registry=https://npm.private.example/\n")
+    del asked2[:]
+
+    def token_wanted(url, dest, sha=None, timeout=60):
+        if "npm.private.example" in url:
+            asked2.append(url)
+            raise urllib.error.HTTPError(url, 401, "Unauthorized", {}, None)
+        return serve_tgz(url, dest, sha, timeout)
+    envsetup.fetch = token_wanted
+    shutil.rmtree(os.path.join(dn, "node"))
+    l5_cli = wn._npm_cli(os.path.join(node_wheel_dir, "node"))
+    l5_asked = list(asked2)
 finally:
     envsetup.fetch = real_fetch3
     envsetup.NPM_INTEGRITY, envsetup.NPM_VERSION = saved_pins
+attempt("npm's tarball comes from the user's registry, the one their .npmrc names too - and where that one fails (it "
+        "wants a token: 401) from registry.npmjs.org, the hash being pinned (it was 'no npm' for good)",
+        lambda: (l5_asked == ["https://npm.private.example/npm/-/npm-11.1.1.tgz",
+                              "https://registry.npmjs.org/npm/-/npm-11.1.1.tgz"] and os.path.isfile(l5_cli), str(l5_asked)))
 attempt("a Node with no npm gets npm from the registry's tarball: its address, unpacked in the folder, used again next time",
         lambda: (first == ["https://registry.npmjs.org/npm/-/npm-11.1.1.tgz"]
                  and cli_a == os.path.join(dn, "node", "npm-11.1.1", "package", "bin", "npm-cli.js") and os.path.isfile(cli_a)
@@ -2063,8 +2171,8 @@ attempt("a tessdata mirror: a folder or a template, https only; without one GitH
 over3 = envsetup.source_overrides({"READ_PAGE_TESSDATA_URL": "https://carol:pw@m.example/fast"}, user142, folder142, system=False) + \
     envsetup.source_overrides({"READ_PAGE_TESSDATA_URL": "http://m.example/fast"}, user142, folder142, system=False)
 attempt("... and it is named in the log and the report: used when https, not used otherwise, credentials left out",
-        lambda: (any(x.startswith("READ_PAGE_TESSDATA_URL=https://m.example/fast - the OCR language data comes from it") for x in over3)
-                 and any(x.startswith("READ_PAGE_TESSDATA_URL=http://m.example/fast - not used") for x in over3)
+        lambda: (any(x.startswith("READ_PAGE_TESSDATA_URL=https://m.example - the OCR language data comes from it") for x in over3)
+                 and any(x.startswith("READ_PAGE_TESSDATA_URL=http://m.example - not used") for x in over3)
                  and not any("pw@" in x for x in over3), str(over3)[:200]))
 pipdir = tempfile.mkdtemp(prefix="rp-env-pipcfg-")
 junk.append(pipdir)
@@ -2091,10 +2199,47 @@ finally:
 attempt("pip's own configuration names the index when no variable does (uv reads none of it): taken for uv, named in the log "
         "with its credentials left out, and a variable of uv's still wins",
         lambda: (e_pipcfg.get("UV_DEFAULT_INDEX") == "https://pipuser:pipsecret@mirrors.example/pypi/simple"
-                 and any("taken as UV_DEFAULT_INDEX" in x and "pip.ini: index-url=https://mirrors.example/pypi/simple" in x for x in over_pip)
+                 and any("taken as UV_DEFAULT_INDEX" in x and "pip.ini: index-url=https://mirrors.example - " in x for x in over_pip)
                  and not any("pipsecret" in x for x in over_pip)
                  and e_explicit.get("UV_DEFAULT_INDEX") == "https://explicit.example/simple"
                  and "UV_DEFAULT_INDEX" not in e_noidx, str(over_pip)[:240]))
+po = tempfile.mkdtemp(prefix="rp-env-piporder-")
+junk.append(po)
+po_sys, po_app, po_home = (os.path.join(po, n_) for n_ in ("system", "user-new", "home"))
+po_files = {"sys": os.path.join(po_sys, "pip", "pip.conf" if os.name != "nt" else "pip.ini"),
+            "new": os.path.join(po_app, "pip", "pip.conf" if os.name != "nt" else "pip.ini"),
+            "old": os.path.join(po_home, ".pip" if os.name != "nt" else "pip", "pip.conf" if os.name != "nt" else "pip.ini"),
+            "own": os.path.join(po, "own.ini")}
+po_env = {"PROGRAMDATA": po_sys, "APPDATA": po_app} if os.name == "nt" else {"XDG_CONFIG_DIRS": po_sys, "XDG_CONFIG_HOME": po_app}
+# the system's files are the machine's own on macOS, and /etc/pip.conf is one wherever it is there: left out then
+po_system = os.name == "nt" or (sys.platform != "darwin" and not os.path.exists("/etc/pip.conf"))
+
+
+def pip_order(texts, own=None):
+    """The index-url pip_config_index finds with these files ({which: text}) and PIP_CONFIG_FILE=own."""
+    for which, path in po_files.items():
+        if os.path.exists(path):
+            os.unlink(path)
+        if which in texts:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh2:
+                fh2.write(texts[which])
+    got_ = envsetup.pip_config_index(dict(po_env, **({"PIP_CONFIG_FILE": own} if own else {})), po_home, system=po_system)
+    return got_[1] if got_ else None
+
+
+order = [pip_order({"old": "[global]\nindex-url = https://old.example/\n", "new": "[global]\nindex-url = https://new.example/\n"}),
+         pip_order({"old": "[install]\nindex-url = https://old.example/\n", "new": "[global]\nindex-url = https://new.example/\n"}),
+         pip_order({"new": "[global]\nindex-url = https://new.example/\n", "own": "[global]\nindex-url = https://own.example/\n"},
+                   own=po_files["own"]),
+         pip_order({"new": "[global]\nindex-url = https://new.example/\n"}, own=os.devnull)]
+if po_system:
+    order.append(pip_order({"sys": "[install]\nindex-url = https://sys.example/\n",
+                            "own": "[global]\nindex-url = https://own.example/\n"}, own=po_files["own"]))
+attempt("pip's configuration is read as pip reads it: the newer user file over the older, [install] over [global] in "
+        "any file, PIP_CONFIG_FILE in place of the user's and over the system's, os.devnull for none",
+        lambda: (order == ["https://new.example/", "https://old.example/", "https://own.example/", None]
+                 + (["https://sys.example/"] if po_system else []), str(order)))
 attempt("the language's OCR pack: Chinese by script, the others by language, English and C need none",
         lambda: ([ownenv.ocr_pack_for(x) for x in ("zh_CN", "zh-CN", "zh_Hans_CN", "zh-TW", "zh_Hant_HK", "zh_MO.UTF-8", "ja_JP.UTF-8",
                                                   "ko-KR", "ru_RU", "de_DE@euro", "sr_Latn_RS", "nb_NO", "en_US", "C", "", "xx_YY")]
@@ -2172,9 +2317,9 @@ attempt("--setup fetches English and the pack of the user's own language, not Ru
         lambda: (results3["zh"][0] == ["eng.traineddata", "chi_sim.traineddata"] and results3["zh"][1] == ["eng", "chi_sim"]
                  and results3["en"][0] == ["eng.traineddata"] and results3["en"][1] == ["eng"]
                  and results3["ru"][0] == ["eng.traineddata", "rus.traineddata"], str(results3)[:200]))
-attempt("... READ_PAGE_OCR_LANGS adds to it, and the step says which language it took and which variable names others",
+attempt("... READ_PAGE_OCR_LANGS adds to it, and the step says which language it took and which flag names others",
         lambda: (results3["zh+deu"][1] == ["eng", "chi_tra", "deu"] and "the user's languages (zh-TW)" in results3["zh+deu"][2]
-                 and "READ_PAGE_OCR_LANGS names others" in results3["zh+deu"][2], results3["zh+deu"][2]))
+                 and "--setup --ocr-langs eng+deu names others" in results3["zh+deu"][2], results3["zh+deu"][2]))
 attempt("... from the mirror when one is named",
         lambda: (mirror_asked == ["https://m.example/fast/eng.traineddata", "https://m.example/fast/chi_sim.traineddata"], str(mirror_asked)))
 tools_home = tempfile.mkdtemp(prefix="rp-env-ocrtools-")
@@ -2202,6 +2347,574 @@ finally:
 attempt("a read in the environment reads with the pack --setup fetched for the machine's language beside English; "
         "Russian keeps its own rule (a Cyrillic page) and a variable the user set wins",
         lambda: (default_langs == "eng+chi_sim" and only_rus is None and named_wins == "eng+deu", "%s %s %s" % (default_langs, only_rus, named_wins)))
+
+# ---------------------------------------------------------------- no source in plain http (KNOWN-ISSUES 210)
+# An http index, registry or download host was used as it was - for the very parts no hash protects (yt-dlp and what
+# floats with it, the browser, uv's list of Pythons with their hashes) - while only Node's mirror and the OCR data's,
+# pinned by hash anyway, had to be https. One check a source.
+h_user = tempfile.mkdtemp(prefix="rp-env-http-")
+junk.append(h_user)
+h_npmrc = os.path.join(h_user, ".npmrc")
+SOURCE_PREFIXES = ("UV_", "PIP_", "NPM_CONFIG_", "NPM_PACKAGE_CONFIG_", "PLAYWRIGHT_")
+SOURCE_NAMES = ("NODEJS_ORG_MIRROR", "READ_PAGE_TESSDATA_URL", "READ_PAGE_ALLOW_HTTP")
+
+
+def as_user(npmrc="", files=None, **variables):
+    """(net_env(), source_overrides()) for a user with these variables alone, this .npmrc and these files of their own
+    (name: text, in h_user) - none of this machine's settings."""
+    saved = dict(os.environ)
+    try:
+        for k in list(os.environ):
+            if k.upper().startswith(SOURCE_PREFIXES) or k.upper() in SOURCE_NAMES:
+                del os.environ[k]
+        with open(h_npmrc, "w", encoding="utf-8") as fh2:
+            fh2.write(npmrc)
+        for name, text in (files or {}).items():
+            with open(os.path.join(h_user, name), "w", encoding="utf-8") as fh2:
+                fh2.write(text)
+        os.environ.update(PIP_CONFIG_FILE=os.devnull, npm_config_userconfig=h_npmrc)
+        os.environ.update(variables)
+        return (envsetup.net_env(user_home=h_user, folder=h_user),
+                envsetup.source_overrides(dict(os.environ), h_user, h_user, system=False))
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+        for name in (files or {}):
+            os.unlink(os.path.join(h_user, name))
+
+
+def got(env, name):
+    """A variable of net_env's environment, in any case (Windows keeps them in upper case)."""
+    return next((v for k, v in env.items() if k.lower() == name.lower()), None)
+
+
+def said(lines, start, *words):
+    return any(x.startswith(start) and all(w in x for w in words) for x in lines)
+
+
+e1, l1 = as_user(UV_DEFAULT_INDEX="http://mirror.example/simple")
+e2, l2 = as_user(UV_INDEX_URL="http://mirror.example/simple")
+e3, l3 = as_user(PIP_INDEX_URL="http://pipmirror.example/simple")
+e4, l4 = as_user(files={"pip.ini": "[global]\nindex-url = http://pipconf.example/simple\ntrusted-host = pipconf.example\n"},
+                 PIP_CONFIG_FILE=os.path.join(h_user, "pip.ini"))
+attempt("an http:// index is not used, whatever names it - UV_DEFAULT_INDEX, UV_INDEX_URL, PIP_INDEX_URL, pip's own "
+        "configuration (its trusted-host notwithstanding): pypi.org is, and the log says why",
+        lambda: (got(e1, "UV_DEFAULT_INDEX") is None and got(e2, "UV_INDEX_URL") is None and got(e2, "UV_DEFAULT_INDEX") is None
+                 and got(e3, "UV_DEFAULT_INDEX") is None and got(e3, "PIP_INDEX_URL") is None
+                 and got(e4, "UV_DEFAULT_INDEX") is None
+                 and said(l1, "UV_DEFAULT_INDEX=http://mirror.example - not used: a source must be https://", "pypi.org is used")
+                 and said(l3, "PIP_INDEX_URL=http://pipmirror.example - not used")
+                 and any("pip.ini: index-url=http://pipconf.example - not used" in x for x in l4),
+                 str([l1[:1], l3[:1], [x for x in l4 if "index-url" in x]])[:300]))
+e5, l5 = as_user(UV_EXTRA_INDEX_URL="https://a.example/simple http://b.example/simple",
+                 UV_INDEX="corp=http://c.example/simple ok=https://d.example/simple",
+                 UV_FIND_LINKS="http://e.example/wheels,/opt/wheels,https://f.example/wheels",
+                 PIP_EXTRA_INDEX_URL="http://g.example/simple")
+attempt("a list of sources keeps its https entries and loses its http ones (UV_EXTRA_INDEX_URL, UV_INDEX, UV_FIND_LINKS, "
+        "pip's), and the log says which",
+        lambda: (got(e5, "UV_EXTRA_INDEX_URL") == "https://a.example/simple" and got(e5, "UV_INDEX") == "ok=https://d.example/simple"
+                 and got(e5, "UV_FIND_LINKS") == "/opt/wheels,https://f.example/wheels" and got(e5, "PIP_EXTRA_INDEX_URL") is None
+                 and said(l5, "UV_EXTRA_INDEX_URL=https://a.example http://b.example", "not used of it: http://b.example")
+                 and said(l5, "UV_FIND_LINKS=http://e.example,/opt/wheels,https://f.example", "not used of it: http://e.example"),
+                 str([got(e5, k) for k in ("UV_EXTRA_INDEX_URL", "UV_INDEX", "UV_FIND_LINKS")] + l5)[:300]))
+e6, l6 = as_user(UV_PYTHON_INSTALL_MIRROR="http://py.example/releases", UV_PYTHON_DOWNLOADS_JSON_URL="http://py.example/l.json")
+attempt("our Python's mirror, and uv's list of Pythons - the hashes uv checks our Python against -, in plain http are not used",
+        lambda: (got(e6, "UV_PYTHON_INSTALL_MIRROR") is None and got(e6, "UV_PYTHON_DOWNLOADS_JSON_URL") is None
+                 and said(l6, "UV_PYTHON_DOWNLOADS_JSON_URL=http://py.example - not used", "uv's own list is used"), str(l6)[:200]))
+e7, l7 = as_user(PLAYWRIGHT_DOWNLOAD_HOST="http://cdn.example", npm_config_playwright_download_host="http://cdn2.example")
+e7b, _l7b = as_user(PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST="http://cdn.example", PLAYWRIGHT_DOWNLOAD_HOST="https://cdn.example")
+attempt("the browser's download host in plain http is not used - Playwright's variable, its Chromium one, npm's form of "
+        "it: Playwright's CDN is",
+        lambda: (got(e7, "PLAYWRIGHT_DOWNLOAD_HOST") is None and got(e7, "npm_config_playwright_download_host") is None
+                 and got(e7b, "PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST") is None and got(e7b, "PLAYWRIGHT_DOWNLOAD_HOST") == "https://cdn.example"
+                 and said(l7, "PLAYWRIGHT_DOWNLOAD_HOST=http://cdn.example - not used", "Playwright's CDN is used"), str(l7)[:200]))
+e8, _l8 = as_user(npm_config_registry="http://npm.example/")
+e9, l9 = as_user(npmrc="registry=http://npmrc.example/\n@acme:registry=http://acme.example/\n@ok:registry=https://ok.example/\n")
+e10, _l10 = as_user(npmrc="registry=https://npmrc.example/\n")
+attempt("npm's registry in plain http - the variable, the .npmrc's, a scope's - gives way to registry.npmjs.org for the "
+        "install; an https one stays the user's",
+        lambda: (got(e8, "npm_config_registry") == envsetup.NPM_REGISTRY and got(e9, "npm_config_registry") == envsetup.NPM_REGISTRY
+                 and got(e9, "npm_config_@acme:registry") == envsetup.NPM_REGISTRY and got(e9, "npm_config_@ok:registry") is None
+                 and got(e10, "npm_config_registry") is None
+                 and any(".npmrc: @acme:registry=http://acme.example - not used" in x for x in l9),
+                 str([x for x in l9 if "npmrc" in x])[:200]))
+e11, l11 = as_user(files={"plain.toml": '[pip]\nindex-url = "http://cfg.example/simple"\n'},
+                   UV_CONFIG_FILE=os.path.join(h_user, "plain.toml"))
+e12, _l12 = as_user(files={"tls.toml": '[pip]\nindex-url = "https://cfg.example/simple"\n'},
+                    UV_CONFIG_FILE=os.path.join(h_user, "tls.toml"))
+e12b, l12b = as_user(files={"uv.toml": '[[index]]\nurl = "http://idx.example/simple"\n'}, UV_NO_CONFIG="0")
+attempt("a UV_CONFIG_FILE that names a source in plain http is not read (one of https sources is); where UV_NO_CONFIG=0 "
+        "lets uv read its own settings files, one that names such a source keeps them all unread",
+        lambda: (got(e11, "UV_CONFIG_FILE") is None and got(e12, "UV_CONFIG_FILE") == os.path.join(h_user, "tls.toml")
+                 and said(l11, "UV_CONFIG_FILE=", "not read: it names a source in plain http (http://cfg.example)")
+                 and got(e12b, "UV_NO_CONFIG") == "1" and any("uv.toml sets [[index]]" in x and "not read" in x for x in l12b),
+                 str(l11 + l12b)[:300]))
+e13, l13 = as_user(UV_DEFAULT_INDEX="http://mirror.corp.example/simple", READ_PAGE_ALLOW_HTTP="mirror.corp.example",
+                   npm_config_registry="http://mirror.corp.example/npm/")
+e14, l14 = as_user(UV_DEFAULT_INDEX="http://127.0.0.1:3141/root/pypi/+simple/")
+attempt("READ_PAGE_ALLOW_HTTP=<host> lets an intranet mirror through, and the log says each time that it goes in plain "
+        "http; a mirror on this machine's loopback goes as it is",
+        lambda: (got(e13, "UV_DEFAULT_INDEX") == "http://mirror.corp.example/simple"
+                 and got(e13, "npm_config_registry") == "http://mirror.corp.example/npm/"
+                 and said(l13, "UV_DEFAULT_INDEX=http://mirror.corp.example - the Python packages come from it",
+                          "in plain http, which READ_PAGE_ALLOW_HTTP lets through")
+                 and said([x.lower() for x in l13], "npm_config_registry=http://mirror.corp.example - ", "in plain http")
+                 and said(l13, "READ_PAGE_ALLOW_HTTP=mirror.corp.example")
+                 and got(e14, "UV_DEFAULT_INDEX") == "http://127.0.0.1:3141/root/pypi/+simple/"
+                 and said(l14, "UV_DEFAULT_INDEX=http://127.0.0.1:3141 - ", "on this machine"), str(l13)[:300]))
+attempt("... and so it does for Node's mirror and the OCR data's (each held to its pinned hash either way)",
+        lambda: (envsetup.tessdata_url("deu", {"READ_PAGE_TESSDATA_URL": "http://m.corp.example/fast",
+                                               "READ_PAGE_ALLOW_HTTP": "m.corp.example"}) == "http://m.corp.example/fast/deu.traineddata"
+                 and envsetup.tessdata_url("deu", {"READ_PAGE_TESSDATA_URL": "http://m.corp.example/fast"}) == envsetup.TESSDATA_URL % "deu"
+                 and envsetup.usable_source("http://nodes.corp.example/dist", {"READ_PAGE_ALLOW_HTTP": "nodes.corp.example"})
+                 and not envsetup.usable_source("http://nodes.corp.example/dist", {}), ""))
+yt_envs = []
+real_update2, real_pyok2 = envsetup.ytdlp_update, envsetup._python_ok
+envsetup.ytdlp_update = lambda d, uv, py, env, sh, now=None, lock=None: (yt_envs.append(dict(env)) or (True, "2026.11.2"))
+envsetup._python_ok = lambda py: True
+saved_idx = os.environ.get("UV_DEFAULT_INDEX")
+os.environ["UV_DEFAULT_INDEX"] = "http://mirror.example/simple"
+try:
+    envsetup._ytdlp_worker(wd)
+finally:
+    envsetup.ytdlp_update, envsetup._python_ok = real_update2, real_pyok2
+    if saved_idx is None:
+        os.environ.pop("UV_DEFAULT_INDEX", None)
+    else:
+        os.environ["UV_DEFAULT_INDEX"] = saved_idx
+attempt("the background yt-dlp update - every three days, by itself - takes no http index either",
+        lambda: (len(yt_envs) == 1 and got(yt_envs[0], "UV_DEFAULT_INDEX") is None, str(len(yt_envs))))
+d_pip, w_pip = work_in("rp-env-pipiso-")
+pip_cmds = []
+w_pip.sh = lambda cmd, timeout=900, env=None, cwd=None: (pip_cmds.append(list(cmd)) or (1, "no pip here"))
+real_fj3 = envsetup.fetch_json
+envsetup.fetch_json = lambda url, timeout=30: (_ for _ in ()).throw(OSError("no answer"))
+try:
+    try:
+        w_pip._uv_wheel(d_pip)
+    except ValueError:
+        pass
+finally:
+    envsetup.fetch_json = real_fj3
+attempt("pip, where pypi.org's JSON gives no uv, reads none of its own settings (--isolated) and takes the index uv uses",
+        lambda: (len(pip_cmds) == 1 and "--isolated" in pip_cmds[0] and pip_cmds[0][pip_cmds[0].index("--index-url") + 1]
+                 in ("https://pypi.org/simple", w_pip.env.get("UV_DEFAULT_INDEX")), str(pip_cmds)[:200]))
+d_net, w_net = work_in("rp-env-nethint-")
+real_fj4 = envsetup.fetch_json
+envsetup.fetch_json = lambda url, timeout=30: (_ for _ in ()).throw(urllib.error.URLError(ConnectionRefusedError(10061, "no")))
+saved_idx = os.environ.get("UV_DEFAULT_INDEX")
+os.environ["UV_DEFAULT_INDEX"] = "http://mirror.corp.example/simple"
+try:
+    w_net.env.pop("UV_DEFAULT_INDEX", None)                   # as net_env leaves it
+    ok_net, note_net = w_net.network()
+finally:
+    envsetup.fetch_json = real_fj4
+    if saved_idx is None:
+        os.environ.pop("UV_DEFAULT_INDEX", None)
+    else:
+        os.environ["UV_DEFAULT_INDEX"] = saved_idx
+attempt("a machine that reaches PyPI only through its mirror in plain http is told how to let it through",
+        lambda: (not ok_net and "READ_PAGE_ALLOW_HTTP=mirror.corp.example" in note_net, note_net))
+
+# ---------------------------------------------------------------- the lock's hashes decide what is installed (KNOWN-ISSUES 211)
+attempt("the whole set installs with --require-hashes (no package beside the lock's), the fallback by each top package's "
+        "pin under the same rule, yt-dlp with --verify-hashes - which no settings file turns off",
+        lambda: ("--require-hashes" in envsetup.lock_command("UV", "PY")
+                 and envsetup.lock_command("UV", "PY")[envsetup.lock_command("UV", "PY").index("-r") + 1] == envsetup.LOCK_FILE
+                 and envsetup.top_command("UV", "PY", "curl_cffi", "0.17.0")[5] == "curl_cffi==0.17.0"
+                 and "--require-hashes" in envsetup.top_command("UV", "PY", "curl_cffi", "0.17.0")
+                 and "--verify-hashes" in envsetup.ytdlp_command("UV", "PY", floor="2026.10.26", lock="L"), ""))
+d_eng, w_eng = work_in("rp-env-engines-")
+w_eng.uv_exe, w_eng.base_python = "UV", sys.executable
+eng_cmds = []
+
+
+def eng_sh(cmd, timeout=900, env=None, cwd=None):
+    eng_cmds.append([str(c) for c in cmd])
+    if cmd[0] == sys.executable:
+        return 0, "3.13.18"                                   # _py_version
+    if cmd[1:3] == ["pip", "install"] and "-r" in cmd:
+        return 1, "error: no wheel for this machine"           # the whole set fails: one at a time
+    return 0, "ok"
+
+
+w_eng.sh = eng_sh
+real_pyok3 = envsetup._python_ok
+envsetup._python_ok = lambda py: True
+try:
+    w_eng.engines()
+finally:
+    envsetup._python_ok = real_pyok3
+tops_eng = [c for c in eng_cmds if c[1:3] == ["pip", "install"] and "-r" not in c]
+attempt("... and the engines step runs exactly those: the lock with --require-hashes, then each top package by its pin",
+        lambda: (any("--require-hashes" in c and "-r" in c for c in eng_cmds) and len(tops_eng) == len(envsetup.TOP)
+                 and all(re.fullmatch(r"[A-Za-z0-9_.-]+==[0-9][^ ]*", c[5]) and "--require-hashes" in c for c in tops_eng),
+                 str(tops_eng[:2])[:200]))
+
+
+def uv_here():
+    """A uv for the checks that run one: --setup's, else one on PATH (CI's offline jobs have none)."""
+    mine = os.path.join(ownenv.home(), "uv", "uv-" + envsetup.UV_VERSION, "uv.exe" if os.name == "nt" else "uv")
+    return mine if os.path.isfile(mine) else shutil.which("uv")
+
+
+def probe_wheel(folder, name, requires=()):
+    """A wheel of a package of nothing (name-1.0, py3-none-any), and the METADATA it may be served with."""
+    dist = name.replace("-", "_")
+    info_ = "%s-1.0.dist-info" % dist
+    meta = "Metadata-Version: 2.1\nName: %s\nVersion: 1.0\n%s" % (name, "".join("Requires-Dist: %s\n" % r for r in requires))
+    path = os.path.join(folder, "%s-1.0-py3-none-any.whl" % dist)
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("%s/__init__.py" % dist, "")
+        z.writestr(info_ + "/METADATA", "Metadata-Version: 2.1\nName: %s\nVersion: 1.0\n" % name)
+        z.writestr(info_ + "/WHEEL", "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+        z.writestr(info_ + "/RECORD", "%s/__init__.py,,\n%s/METADATA,,\n%s/WHEEL,,\n%s/RECORD,,\n" % (dist, info_, info_, info_))
+    with open(path, "rb") as fh2:
+        return os.path.basename(path), fh2.read(), meta.encode("utf-8")
+
+
+uvx = uv_here()
+if uvx:
+    # an index that serves the lock's own wheel (its hash matches) with a metadata file (PEP 658) naming one more
+    # package: the lock's install took that one too, with no hash at all
+    pidx = tempfile.mkdtemp(prefix="rp-env-index-")
+    junk.append(pidx)
+    a_name, a_bytes, a_meta = probe_wheel(pidx, "rp-probe-a", requires=("rp-probe-b",))
+    b_name, b_bytes, _b_meta = probe_wheel(pidx, "rp-probe-b")
+    sha_a, sha_m = hashlib.sha256(a_bytes).hexdigest(), hashlib.sha256(a_meta).hexdigest()
+
+    class Index(http.server.BaseHTTPRequestHandler):
+        pages = {"/simple/rp-probe-a/": ('<a href="/files/%s#sha256=%s" data-dist-info-metadata="sha256=%s" '
+                                         'data-core-metadata="sha256=%s">%s</a>' % (a_name, sha_a, sha_m, sha_m, a_name)).encode(),
+                 "/simple/rp-probe-b/": ('<a href="/files/%s#sha256=%s">%s</a>'
+                                         % (b_name, hashlib.sha256(b_bytes).hexdigest(), b_name)).encode(),
+                 "/files/" + a_name: a_bytes, "/files/" + a_name + ".metadata": a_meta, "/files/" + b_name: b_bytes}
+
+        def do_GET(self, head=False):
+            body = self.pages.get(self.path.split("?")[0].split("#")[0])
+            self.send_response(200 if body is not None else 404)
+            self.send_header("Content-Type", "text/html" if self.path.endswith("/") else "application/octet-stream")
+            self.send_header("Content-Length", str(len(body or b"")))
+            self.end_headers()
+            if not head:
+                self.wfile.write(body or b"")
+
+        def do_HEAD(self):                         # uv asks a wheel's size first (to read its metadata by ranges)
+            self.do_GET(head=True)
+
+        def log_message(self, *a):
+            pass
+
+    isrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Index)
+    threading.Thread(target=isrv.serve_forever, daemon=True).start()
+    lock_ok, lock_bad = os.path.join(pidx, "lock-ok.txt"), os.path.join(pidx, "lock-bad.txt")
+    with open(lock_ok, "w", encoding="utf-8") as fh_:
+        fh_.write("rp-probe-a==1.0 \\\n    --hash=sha256:%s\n" % sha_a)
+    with open(lock_bad, "w", encoding="utf-8") as fh_:
+        fh_.write("rp-probe-a==1.0 \\\n    --hash=sha256:%s\n" % ("0" * 64))
+    cfg_off = os.path.join(pidx, "uv.toml")
+    with open(cfg_off, "w", encoding="utf-8") as fh_:
+        fh_.write("[pip]\nverify-hashes = false\n")
+    uv_env = dict((k, v) for k, v in envsetup.net_env().items()
+                  if not k.upper().startswith(("UV_INDEX", "UV_EXTRA_INDEX", "UV_FIND_LINKS", "UV_CONFIG_FILE")))
+    uv_env.update(UV_DEFAULT_INDEX="http://127.0.0.1:%d/simple" % isrv.server_address[1], UV_NO_CONFIG="1",
+                  UV_CACHE_DIR=os.path.join(pidx, "cache"), UV_PYTHON_DOWNLOADS="never")
+
+    def probe_install(cmd, venv, **more):
+        """Run cmd into a new venv: (exit code, the probe packages it holds after)."""
+        subprocess.run([uvx, "venv", venv, "--python", sys.executable, "-q"], env=uv_env, capture_output=True, timeout=120)
+        vpy = os.path.join(venv, "Scripts", "python.exe") if os.name == "nt" else os.path.join(venv, "bin", "python")
+        p = subprocess.run([vpy if c == "PY" else c for c in cmd], env=dict(uv_env, **more), capture_output=True, timeout=300)
+        site = glob.glob(os.path.join(venv, "Lib" if os.name == "nt" else "lib*", *([] if os.name == "nt" else ["python3*"]),
+                                      "site-packages", "rp_probe_*"))
+        return p.returncode, sorted(set(os.path.basename(s) for s in site                    # (lib64 is a link to lib)
+                                        if os.path.isdir(s) and "-" not in os.path.basename(s)))
+
+    try:
+        new_cmd = envsetup.lock_command(uvx, "PY", lock_ok)
+        old_cmd = [c for c in new_cmd if c != "--require-hashes"]                    # the command before
+        rc_old, have_old = probe_install(old_cmd, os.path.join(pidx, "v1"))
+        rc_new, have_new = probe_install(new_cmd, os.path.join(pidx, "v2"))
+        rc_off_old, have_off_old = probe_install([c for c in envsetup.lock_command(uvx, "PY", lock_bad) if c != "--require-hashes"],
+                                                 os.path.join(pidx, "v3"), UV_CONFIG_FILE=cfg_off)
+        rc_off, have_off = probe_install(envsetup.lock_command(uvx, "PY", lock_bad), os.path.join(pidx, "v4"),
+                                         UV_CONFIG_FILE=cfg_off)
+    finally:
+        isrv.shutdown()
+    attempt("the lock's install refuses a package the lock does not name: an index that adds one by a metadata file got it "
+            "installed with no hash (the command before this did; it now ends with nothing installed)",
+            lambda: (rc_old == 0 and have_old == ["rp_probe_a", "rp_probe_b"] and rc_new != 0 and have_new == [],
+                     "before: %s %s, now: %s %s" % (rc_old, have_old, rc_new, have_new)))
+    attempt("... and a UV_CONFIG_FILE with verify-hashes = false lets no file through that the lock's hash refuses",
+            lambda: (rc_off_old == 0 and have_off_old and rc_off != 0 and have_off == [],
+                     "before: %s %s, now: %s %s" % (rc_off_old, have_off_old, rc_off, have_off)))
+else:
+    print("SKIP the lock's install against a local index (no uv here: --setup's, or one on PATH)")
+e19, l19 = as_user(files={"hashes.toml": "[pip]\nverify-hashes = false\n"}, UV_CONFIG_FILE=os.path.join(h_user, "hashes.toml"),
+                   UV_INDEX_STRATEGY="unsafe-best-match", UV_PRERELEASE="allow", UV_RESOLUTION="lowest")
+attempt("the UV_CONFIG_FILE's keys are named like a uv.toml's (verify-hashes too, which the command line overrides), and so "
+        "are uv's variables that change what is picked",
+        lambda: (said(l19, "UV_CONFIG_FILE=", "sets verify-hashes", "no file can switch off")
+                 and all(said(l19, k + "=") for k in ("UV_INDEX_STRATEGY", "UV_PRERELEASE", "UV_RESOLUTION")), str(l19)[:300]))
+
+# ---------------------------------------------------------------- a link mode that empties the environment (KNOWN-ISSUES 212)
+e15, l15 = as_user(UV_LINK_MODE="symlink")
+e16, _l16 = as_user(files={"links.toml": '[pip]\nlink-mode = "symlink"\n'}, UV_CONFIG_FILE=os.path.join(h_user, "links.toml"))
+e17, _l17 = as_user(UV_LINK_MODE="copy")
+attempt("UV_LINK_MODE=symlink, or a UV_CONFIG_FILE's link-mode = \"symlink\", is not passed on: hard links are (uv's own "
+        "default), and the log says why; copy stays",
+        lambda: (got(e15, "UV_LINK_MODE") == "hardlink" and got(e16, "UV_LINK_MODE") == "hardlink"
+                 and got(e17, "UV_LINK_MODE") == "copy" and said(l15, "UV_LINK_MODE=symlink - not passed on"), str(l15)[:200]))
+d_ln = tempfile.mkdtemp(prefix="rp-env-linked-")
+junk.append(d_ln)
+rel_ln = envsetup.env_id("3.13.18")
+env_ln = ownenv.at(d_ln, rel_ln)
+site_ln = os.path.join(env_ln, "Lib", "site-packages") if os.name == "nt" else os.path.join(env_ln, "lib", "python3.13",
+                                                                                            "site-packages")
+os.makedirs(os.path.join(site_ln, "pkg"))
+with open(os.path.join(site_ln, "pkg", "real.py"), "w") as fh_:
+    fh_.write("")
+plain_found = envsetup.linked_env(env_ln)
+try:
+    os.symlink(os.path.join(d_ln, "cache", "uv", "gone.py"), os.path.join(site_ln, "pkg", "__init__.py"))
+    can_link = True
+except (OSError, NotImplementedError):
+    can_link = False
+if can_link:
+    w_ln = envsetup.Work(d_ln, "rln", "test")
+    w_ln.uv_exe, w_ln.base_python = "UV", sys.executable
+    del eng_cmds[:]
+    w_ln.sh = eng_sh
+    envsetup._python_ok = lambda py: True
+    try:
+        found_ln = envsetup.linked_env(env_ln)
+        w_ln.engines()
+    finally:
+        envsetup._python_ok = real_pyok3
+    attempt("an environment a --setup with symlink left - its files links into uv's cache, which that run cleaned - is "
+            "found, and built anew (it read 'not here: all 16' for good)",
+            lambda: (plain_found == "" and found_ln.endswith("__init__.py") and any(c[1] == "venv" for c in eng_cmds)
+                     and not os.path.lexists(os.path.join(site_ln, "pkg", "__init__.py")), "%r %r" % (plain_found, found_ln)))
+else:
+    print("SKIP an environment of links (this account cannot make one)")
+
+# ---------------------------------------------------------------- an address shows its scheme, host and port (KNOWN-ISSUES 213)
+forms = {"https://user:p@ssw0rd@pypi.example.com/simple/": "https://pypi.example.com",
+         "https://user:pa/ss@extra.example/simple": "https://extra.example",
+         "http://proxyuser:pr/oxy@proxy.example:8080": "http://proxy.example:8080",
+         "https://pypi.fury.io/TOKEN-IN-PATH/acme/": "https://pypi.fury.io",
+         "https://npm.fury.io/TOKEN2/": "https://npm.fury.io",
+         "https://dl.cloudsmith.io/TOKEN3/acme/repo/python/simple/": "https://dl.cloudsmith.io",
+         "https://h.example/wheels/?token=SECRET-Q": "https://h.example",
+         "https://h.example/npm/?apikey=KEY-Q": "https://h.example",
+         "https://host.example/simple?apikey=abc@def": "https://(not shown)",
+         "http://[::1]:3141/root/pypi": "http://[::1]:3141",
+         "file:///opt/wheels": "file:///opt/wheels"}
+secret_words = ("p@ssw0rd", "ssw0rd", "pa/ss", "pr/oxy", "proxyuser", "TOKEN-IN-PATH", "TOKEN2", "TOKEN3", "SECRET-Q",
+                "KEY-Q", "abc@def", "@def")
+attempt("an address shows as its scheme, host and port: a password with @ or / in it, a token in its path (Gemfury, "
+        "Cloudsmith) or in its query never shows - and what is shown once shows the same again",
+        lambda: (all(envsetup.redact(k) == v for k, v in forms.items())
+                 and envsetup.redact("a https://u:p@h.example/x b") == "a https://h.example b"
+                 and all(envsetup.redact(envsetup.redact(k)) == envsetup.redact(k) for k in forms),
+                 str([(k, envsetup.redact(k)) for k, v in forms.items() if envsetup.redact(k) != v])[:240]))
+e18, l18 = as_user(npmrc="registry=https://npm.fury.io/TOKEN2/\n@acme:registry=https://h.example/npm/?apikey=KEY-Q\n"
+                         "https-proxy=http://proxyuser:pr/oxy@proxy.example:8080\n",
+                   files={"pip.ini": "[global]\nindex-url = https://dl.cloudsmith.io/TOKEN3/acme/repo/python/simple/\n"},
+                   PIP_CONFIG_FILE=os.path.join(h_user, "pip.ini"), UV_INDEX_URL="https://user:p@ssw0rd@pypi.example.com/simple/",
+                   UV_EXTRA_INDEX_URL="https://user:pa/ss@extra.example/simple", UV_FIND_LINKS="https://h.example/wheels/?token=SECRET-Q",
+                   UV_INDEX="fury=https://pypi.fury.io/TOKEN-IN-PATH/acme/")
+attempt("... from variables, the .npmrc and pip's configuration alike: no line of the log or of the report holds a secret",
+        lambda: (len(l18) >= 7 and not any(s in x for s in secret_words for x in l18) and said(l18, "UV_INDEX=fury=https://pypi.fury.io - "),
+                 str([x for x in l18 if any(s in x for s in secret_words)] or l18)[:300]))
+d_say, w_say = work_in("rp-env-say-")
+w_say.say("  4/10 engines   FAILED: https://user:tok1@pypi.example.com/simple/abc/ answered 401")
+w_say.lack("engines", "https://user:tok2@pypi.example.com/x answered 401", "")
+w_say.step("uv", lambda: (False, "no uv: https://user:tok3@files.example/uv.whl answered 401"))
+log_say = open(os.path.join(d_say, "setup.log"), encoding="utf-8").read()
+attempt("a line of the log (an installer's last words in a step's note), a problem and a step's note kept for the report "
+        "show an address the same way",
+        lambda: (not any(t in log_say + json.dumps(w_say.problems) + json.dumps(w_say.parts) for t in ("tok1", "tok2", "tok3"))
+                 and "https://pypi.example.com answered" in log_say, log_say[-200:]))
+
+# ---------------------------------------------------------------- every download held to a hash but yt-dlp's and the browser's (KNOWN-ISSUES 214)
+pins_t = envsetup.tessdata_pins()
+mapped = set(ownenv._OCR_PACK.values()) | {"eng", "chi_sim", "chi_tra", "srp_latn"}
+attempt("every OCR pack of tessdata_fast 4.1.0 is pinned by SHA256 - 125, among them each the language map can fetch, "
+        "eng's and rus's as before",
+        lambda: (len(pins_t) == 125 and mapped <= set(pins_t)
+                 and pins_t["eng"][0] == "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+                 and pins_t["rus"][0] == "e16e5e036cce1d9ec2b00063cf8b54472625b9e14d893a169e2b0dedeb4df225"
+                 and all(n > 0 for _s, n in pins_t.values()), str(sorted(mapped - set(pins_t)))))
+try:
+    tree_ = envsetup.fetch_json("https://api.github.com/repos/tesseract-ocr/tessdata_fast/git/trees/4.1.0", timeout=20)
+except Exception as e:                                         # noqa: BLE001
+    tree_ = None
+    print("SKIP the OCR pins against GitHub's listing of tessdata_fast 4.1.0 (no answer: %s)" % str(e)[:60])
+if tree_:
+    listed = dict((x["path"][:-len(".traineddata")], x["size"]) for x in tree_.get("tree") or []
+                  if x.get("path", "").endswith(".traineddata"))
+    small = min(pins_t, key=lambda k: pins_t[k][1])
+    small_dir = tempfile.mkdtemp(prefix="rp-env-pack-")
+    junk.append(small_dir)
+    try:
+        envsetup.fetch(envsetup.TESSDATA_URL % small, os.path.join(small_dir, small + ".traineddata"), pins_t[small][0])
+        small_ok = True
+    except Exception as e:                                     # noqa: BLE001
+        small_ok = "%s: %s" % (small, e)
+    attempt("... and they are the release's own: each name and size as GitHub lists the tag, the smallest pack's bytes "
+            "as pinned",
+            lambda: (listed == dict((k, v[1]) for k, v in pins_t.items()) and small_ok is True,
+                     "%s; %s" % (sorted(set(listed) ^ set(pins_t))[:4], small_ok)))
+od2 = tempfile.mkdtemp(prefix="rp-env-ocrpin-")
+junk.append(od2)
+asked_pin = []
+
+
+def pin_fetch(url, dest, sha=None, timeout=60):
+    asked_pin.append((url.rsplit("/", 1)[-1], sha))
+    raise RuntimeError("stop")
+
+
+real_fetch5 = envsetup.fetch
+envsetup.fetch = pin_fetch
+os.environ["READ_PAGE_OCR_LANGS"] = "eng+jpn+kor_vert"
+try:
+    envsetup.Work(od2, "rpin", "test").ocr_data()
+finally:
+    envsetup.fetch = real_fetch5
+    os.environ.pop("READ_PAGE_OCR_LANGS", None)
+attempt("... and --setup fetches every pack against its pin, not eng and rus alone (any other was kept by its size)",
+        lambda: (("jpn.traineddata", pins_t["jpn"][0]) in asked_pin and ("kor_vert.traineddata", pins_t["kor_vert"][0]) in asked_pin
+                 and all(s for _n, s in asked_pin), str(asked_pin)[:200]))
+d_nw, w_nw = work_in("rp-env-nodewheel-")
+nw_cmds = []
+w_nw.uv_exe = "UV"
+w_nw.sh = lambda cmd, timeout=900, env=None, cwd=None: (nw_cmds.append(list(cmd)) or (1, "stop"))
+try:
+    w_nw._node_wheel()
+except ValueError:
+    pass
+nw_req = open(os.path.join(d_nw, "cache", "dl", "nodejs-wheel-binaries.txt"), encoding="utf-8").read()
+attempt("musl's Node from PyPI is installed with --require-hashes, against the SHA256 pinned for each of its wheels",
+        lambda: (len(nw_cmds) == 1 and "--require-hashes" in nw_cmds[0] and "-r" in nw_cmds[0]
+                 and nw_req.startswith("nodejs-wheel-binaries==%s " % envsetup.NODE_WHEEL)
+                 and all(h in nw_req for h in envsetup.NODE_WHEEL_SHA256.values())
+                 and any("musllinux" in k for k in envsetup.NODE_WHEEL_SHA256), str(nw_cmds)[:200]))
+try:
+    pypi_nw = envsetup.fetch_json("https://pypi.org/pypi/nodejs-wheel-binaries/%s/json" % envsetup.NODE_WHEEL, timeout=20)
+except Exception as e:                                         # noqa: BLE001
+    pypi_nw = None
+    print("SKIP nodejs-wheel-binaries' pins against PyPI (no answer: %s)" % str(e)[:60])
+if pypi_nw:
+    attempt("... and they are the ones PyPI publishes for every wheel of that version",
+            lambda: (dict((f["filename"], f["digests"]["sha256"]) for f in pypi_nw["urls"] if f["packagetype"] == "bdist_wheel")
+                     == envsetup.NODE_WHEEL_SHA256, ""))
+d_dd, w_dd = work_in("rp-env-npmci-")
+w_dd.node_bin = os.path.join(d_dd, "node.exe" if os.name == "nt" else "node")
+w_dd._npm_cli = lambda node: "npm-cli.js"
+left_out = ["linkedom"]
+
+
+def ci_sh(cmd, timeout=900, env=None, cwd=None):
+    """npm ci as it went where a tarball of an optional package did not match the lock: the rest installed, exit 0."""
+    root = cmd[cmd.index("--prefix") + 1]
+    lock_ = json.load(open(os.path.join(root, "package-lock.json"), encoding="utf-8"))
+    have_ = dict((k, v) for k, v in lock_["packages"].items() if k and k.rsplit("node_modules/", 1)[-1] not in left_out)
+    for k, v in have_.items():
+        os.makedirs(os.path.join(root, *k.split("/")), exist_ok=True)
+        with open(os.path.join(root, *k.split("/") + ["package.json"]), "w", encoding="utf-8") as fh2:
+            json.dump({"version": v["version"]}, fh2)
+    os.makedirs(os.path.join(root, "node_modules", ".bin"), exist_ok=True)
+    open(os.path.join(root, "node_modules", ".bin", "defuddle.cmd" if os.name == "nt" else "defuddle"), "w").close()
+    with open(os.path.join(root, "node_modules", ".package-lock.json"), "w", encoding="utf-8") as fh2:
+        json.dump({"packages": have_}, fh2)
+    return 0, "added %d packages" % len(have_)
+
+
+w_dd.sh = ci_sh
+ok_dd, note_dd = w_dd.defuddle()
+left_out[:] = []
+w_dd2 = envsetup.Work(d_dd, "rdd2", "test")
+w_dd2.node_bin, w_dd2._npm_cli, w_dd2.sh = w_dd.node_bin, w_dd._npm_cli, ci_sh
+ok_dd2, note_dd2 = w_dd2.defuddle()
+ran_again = []
+w_dd2.sh = lambda *a, **k: ran_again.append(1) or (1, "")
+ok_dd3, _note_dd3 = w_dd2.defuddle()
+attempt("defuddle's tree is the lock's, held to it after `npm ci`: an optional package npm left out (its tarball did not "
+        "match) fails the step by name; a whole tree passes, and the next --setup leaves it as it is",
+        lambda: (not ok_dd and "linkedom" in note_dd and any(p["part"] == "defuddle" for p in w_dd.problems)
+                 and ok_dd2 and "npm ci" in note_dd2 and w_dd2.info.get("npm_bin", "").endswith("node_modules/.bin")
+                 and ok_dd3 and not ran_again, "%s | %s" % (note_dd, note_dd2)))
+dd_home = tempfile.mkdtemp(prefix="rp-env-ddbin-")
+junk.append(dd_home)
+dd_dist = os.path.join(dd_home, "npm", "node_modules", "defuddle", "dist")
+os.makedirs(os.path.join(dd_dist, "utils"))
+for n_ in ("node.js", os.path.join("utils", "linkedom-compat.js"), "cli.js"):
+    open(os.path.join(dd_dist, n_), "w").close()
+dd_bin = os.path.join(dd_home, "npm", "node_modules", ".bin")
+os.makedirs(dd_bin)
+with open(os.path.join(dd_bin, "defuddle.cmd"), "w") as fh_:
+    fh_.write('@"%~dp0\\..\\defuddle\\dist\\cli.js" %*\r\n')
+import ddworker                                          # noqa: E402
+attempt("a read finds defuddle's files from npm ci's node_modules/.bin, as it did from npm's global shim",
+        lambda: (ddworker.locate(os.path.join(dd_bin, "defuddle.cmd"), "NODE") == (os.path.normpath(dd_dist), "NODE"), ""))
+
+# ---------------------------------------------------------------- OCR packs named once stay named (KNOWN-ISSUES 215)
+od3 = tempfile.mkdtemp(prefix="rp-env-named-")
+junk.append(od3)
+os.makedirs(os.path.join(od3, "tessdata"))
+for n_ in ("jpn", "deu", "chi_sim", "rus"):
+    open(os.path.join(od3, "tessdata", n_ + ".traineddata"), "w").close()
+named_runs = {}
+real_fetch6, real_lang6, real_os6 = envsetup.fetch, ownenv.system_language, ownenv._os_languages
+envsetup.fetch = fake_fetch
+ownenv.system_language, ownenv._os_languages = (lambda env=None: "en-US"), (lambda: [])
+saved_lang6 = dict((k_, os.environ.pop(k_)) for k_ in ("LANGUAGE", "READ_PAGE_LANG", "READ_PAGE_OCR_LANGS") if k_ in os.environ)
+try:
+    for label_, prev_, named_ in (("kept", {"ocr_named": ["jpn", "deu", "fra"]}, ""),          # fra: not on disk any more
+                                  ("older", {"ocr_langs": ["eng", "rus", "chi_sim", "jpn"]}, ""),  # before ocr_named
+                                  ("now", {"ocr_named": ["jpn", "deu"]}, "eng+kor")):
+        w_ = envsetup.Work(od3, "rn", "test")
+        w_.prev = prev_
+        if named_:
+            os.environ["READ_PAGE_OCR_LANGS"] = named_
+        try:
+            named_runs[label_] = (w_.ocr_data(), w_.info.get("ocr_langs"), w_.info.get("ocr_named"))
+        finally:
+            os.environ.pop("READ_PAGE_OCR_LANGS", None)
+    os.environ["READ_PAGE_LANG"] = "zh-TW,en"
+    lang_packs = ownenv.ocr_default_packs(os.environ)
+finally:
+    envsetup.fetch, ownenv.system_language, ownenv._os_languages = real_fetch6, real_lang6, real_os6
+    os.environ.pop("READ_PAGE_LANG", None)
+    os.environ.update(saved_lang6)
+attempt("a pack named once stays named: the next plain --setup keeps it (it was dropped, and reads went back to English), "
+        "one the user deleted goes, and a setup.json of before keeps what it had beyond today's own",
+        lambda: (named_runs["kept"][1] == ["eng", "jpn", "deu"] and named_runs["kept"][2] == ["jpn", "deu"]
+                 and "named at an earlier --setup, kept for the next --setup: jpn+deu" in named_runs["kept"][0][1]
+                 and named_runs["older"][1] == ["eng", "rus", "chi_sim", "jpn"], str(named_runs)[:300]))
+attempt("... and what is named now replaces it (the user's own word)",
+        lambda: (named_runs["now"][1] == ["eng", "kor"] and named_runs["now"][2] == ["eng", "kor"], str(named_runs["now"])))
+attempt("READ_PAGE_LANG decides what --setup fetches, as it decides what a read asks for",
+        lambda: (lang_packs == ["eng", "chi_tra"], str(lang_packs)))
+rp_flag = load_rp("ocrflag")
+seen_flag = []
+real_setup = ownenv.setup
+ownenv.setup = lambda script, ver: seen_flag.append(os.environ.get("READ_PAGE_OCR_LANGS")) or 0
+saved_ocr7 = os.environ.pop("READ_PAGE_OCR_LANGS", None)
+try:
+    rp_flag.main(["--setup", "--ocr-langs", "eng+jpn"])
+finally:
+    ownenv.setup = real_setup
+    os.environ.pop("READ_PAGE_OCR_LANGS", None)
+    if saved_ocr7 is not None:
+        os.environ["READ_PAGE_OCR_LANGS"] = saved_ocr7
+attempt("`--setup --ocr-langs eng+jpn` names the packs in any shell (a POSIX `VAR=x cmd` is no command in PowerShell or "
+        "cmd), and the line that names a missing pack says it so",
+        lambda: (seen_flag == ["eng+jpn"] and (not ownenv.gives("ocr-langs") or rp_flag.ocr_pack_fix(["jpn"]) ==
+                                              "jpn.traineddata: readpage.py --setup --ocr-langs eng+jpn"),
+                 "%s %s" % (seen_flag, rp_flag.ocr_pack_fix(["jpn"]))))
 
 for d in junk:
     shutil.rmtree(d, ignore_errors=True)

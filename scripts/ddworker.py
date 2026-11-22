@@ -31,6 +31,8 @@ def locate(cli, node_on_path):
         return None, None
     here = os.path.dirname(cli)
     cands = [os.path.join(here, "node_modules", "defuddle", "dist")]      # npm on Windows: a .cmd shim
+    if os.path.basename(here) == ".bin":                                   # `npm ci`'s node_modules/.bin (--setup)
+        cands.append(os.path.join(os.path.dirname(here), "defuddle", "dist"))
     try:
         real = os.path.realpath(cli)
         if real.endswith(".js"):

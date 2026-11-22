@@ -73,12 +73,16 @@ git-ignored, so a contributor may keep a file of their own under that name.
   on top of an agent test the maintainer said is running.
 - `--setup`'s versions are pinned: `scripts/envsetup.py` (uv, Python, Node, defuddle, tessdata),
   `tools/setup_lock.py` (the Python packages; it writes `scripts/setup-lock.txt` with the SHA256 of
-  every file - the versions stay what the lock has until `PINS` moves them). uv's wheel and Node's
-  archive are pinned by SHA256 too (`UV_WHEEL_SHA256`, `NODE_SHA256`): they move with `UV_VERSION`
-  and `NODE_VERSION`, copied from PyPI's JSON and nodejs.org's `SHASUMS256.txt` (`tests/environment.py`
-  compares them with both when online). A pin moves only after the suites ran green with it. yt-dlp
+  every file - the versions stay what the lock has until `PINS` moves them; `--npm` writes
+  `scripts/defuddle-lock.json`, npm's lock of defuddle's tree as of `DEFUDDLE_BEFORE`, after
+  `DEFUDDLE_VERSION` moves; `--tessdata` wrote `scripts/tessdata-lock.txt`, every pack of the fixed release).
+  uv's wheel, Node's archive and PyPI's Node wheel are pinned by SHA256 too (`UV_WHEEL_SHA256`,
+  `NODE_SHA256`, `NODE_WHEEL_SHA256`): they move with `UV_VERSION`, `NODE_VERSION` and `NODE_WHEEL`, copied from
+  PyPI's JSON and nodejs.org's `SHASUMS256.txt` (`tests/environment.py` compares every pin with its source when
+  online). A pin moves only after the suites ran green with it. yt-dlp
   alone is not pinned: the newest release that has been out three days, never older than the one
-  installed (`YTDLP_FLOATS` is what floats with it).
+  installed (`YTDLP_FLOATS` is what floats with it). No source of `--setup` is used in plain http
+  (`READ_PAGE_ALLOW_HTTP` names an intranet host that may be).
 - A packaged Windows app (MSIX; Claude's desktop app is one) gets a private copy of whatever its
   processes write under `AppData\Local` or `AppData\Roaming`
   (`AppData\Local\Packages\<app>\LocalCache\`): no other program sees it. `AppData\Local\Temp`

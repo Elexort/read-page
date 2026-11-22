@@ -52,7 +52,7 @@ def home():
         base = os.environ.get("XDG_DATA_HOME") or ""
         if not os.path.isabs(base):
             base = os.path.expanduser("~/.local/share")
-    return os.path.join(base, "read-page")
+    return os.path.abspath(os.path.join(base, "read-page"))      # (an XDG_DATA_HOME of /a//b or /a/./b: one name)
 
 
 # tessdata_fast's pack for a language (ISO 639-1 -> tesseract's three letters): what --setup fetches besides English
@@ -172,12 +172,20 @@ def system_languages(env=None, windows=None):
 OCR_MORE_PACKS = 3          # the packs beyond English that --setup fetches for the user's languages (a few MB each)
 
 
+def ocr_languages(env=None):
+    """The languages --setup fetches OCR packs for: READ_PAGE_LANG's (`zh-TW`, `ja,en`) when it is set - the user's
+    own word, as a read takes it (intl.user_langs) -, else the machine's (system_languages)."""
+    env = os.environ if env is None else env
+    named = [x.strip() for x in (env.get("READ_PAGE_LANG") or "").split(",") if x.strip()]
+    return named or system_languages(env)
+
+
 def ocr_default_packs(env=None):
     """The OCR packs --setup fetches whatever the user names: English, and the packs of the user's own languages -
-    the one the machine is set to and the others in the user's list (an English Windows with Russian in it gets
-    rus), at most OCR_MORE_PACKS of them. READ_PAGE_OCR_LANGS names more."""
+    READ_PAGE_LANG's, else the one the machine is set to and the others in the user's list (an English Windows with
+    Russian in it gets rus), at most OCR_MORE_PACKS of them. `--setup --ocr-langs` (READ_PAGE_OCR_LANGS) names more."""
     packs = ["eng"]
-    for name in system_languages(env):
+    for name in ocr_languages(env):
         pack = ocr_pack_for(name)
         if pack and pack not in packs and len(packs) <= OCR_MORE_PACKS:
             packs.append(pack)
@@ -263,8 +271,8 @@ class tess_dir(object):
 
 # what to say when OCR cannot start for a path (the one fix that works: --setup would meet the same wall)
 NONASCII_WHY = "its language data is in %s, a folder whose name has characters outside ASCII that OCR cannot open"
-NONASCII_FIX = ("set READ_PAGE_HOME to a folder with an ASCII-only path (C:\\read-page, say), then run "
-                "readpage.py --setup there")
+NONASCII_FIX = ("set READ_PAGE_HOME to a folder with an ASCII-only path (C:\\read-page, say: --setup makes a new one "
+                "yours alone), then run readpage.py --setup there")
 
 
 def ocr_fix(why):
@@ -615,7 +623,9 @@ def _tools(d, info):
     add = [os.path.join(env, "Scripts" if os.name == "nt" else "bin")]
     if info.get("node_bin"):                     # (an environment of before 2026-11-21 named a pandoc too)
         add.append(os.path.dirname(at(d, info["node_bin"])))
-    if info.get("npm"):
+    if info.get("npm_bin"):                      # defuddle's command, as `npm ci` of the skill's lock puts it
+        add.append(at(d, info["npm_bin"]))
+    if info.get("npm"):                          # ... and as `npm install -g` did, before that lock
         npm = at(d, info["npm"])
         add.append(npm if os.name == "nt" else os.path.join(npm, "bin"))
     have = os.environ.get("PATH", "").split(os.pathsep) if os.environ.get("PATH") else []

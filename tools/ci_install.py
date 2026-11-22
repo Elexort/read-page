@@ -703,6 +703,8 @@ def cmd_nodecheck(a):
         print("note: this setup's Node is not Playwright's (%s): no wheel here, nothing to compare" % (info.get("node_bin") or "none"))
         return 0
     cli = os.path.join(ownenv.at(d, info.get("npm") or "npm"), "defuddle.cmd" if os.name == "nt" else os.path.join("bin", "defuddle"))
+    if info.get("npm_bin"):                                    # `npm ci` of the skill's lock: node_modules/.bin
+        cli = os.path.join(ownenv.at(d, info["npm_bin"]), "defuddle.cmd" if os.name == "nt" else "defuddle")
     work = tempfile.mkdtemp(prefix="rp-nodecheck-")
     w = envsetup.Work(work, "nodecheck", "ci")
     try:

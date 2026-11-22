@@ -260,7 +260,7 @@ tess_only = caps_of(langs=("eng", "osd"))
 tess_only["cli"] = {"tesseract": "/usr/bin/tesseract"}
 ocr_row = [r for r in mod.setup_rows(tess_only) if r[0] == "ocr-langs"]
 check("with tesseract and English alone the report offers another language pack",
-      ocr_row and not ocr_row[0][1] and ("traineddata" in ocr_row[0][2] or "READ_PAGE_OCR_LANGS" in ocr_row[0][2])
+      ocr_row and not ocr_row[0][1] and ("traineddata" in ocr_row[0][2] or "--ocr-langs" in ocr_row[0][2])
       and "ocr-langs" in mod.setup_report(tess_only), str(ocr_row)[:120])
 check("no language-pack row where there is no tesseract",
       not [r for r in mod.setup_rows(empty) if r[0] == "ocr-langs"], "")

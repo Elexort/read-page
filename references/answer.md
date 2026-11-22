@@ -111,7 +111,8 @@ A PDF's tables come as Markdown tables where the layout model is installed (`--s
 | `--clear-cookies` | forget this site's stored cookies first (they otherwise live 6 hours; `--refresh` keeps them) |
 | `--screenshots [N]` | also capture the page as images: the first N screens of a 1280x784 window (default 2, 0 = none), two glued into one 1280x1568 picture, never scaled; needs a browser, works for PDFs too |
 | `--caps` | print what this machine has (libs, CLIs, browsers, keys, OCR languages, the environment in use) and exit |
-| `--setup` | install every engine into the skill's own environment, a folder of the user's that every agent sees (no admin rights; it first says the download, about 430-480 MB, and the 1.2-1.3 GB it keeps), or bring it up to date and check it; asks nothing - running it is the consent |
+| `--setup` | install every engine into the skill's own environment, a folder of the user's that every agent sees (no admin rights; it first says the download, about 360-390 MB, and the 0.85-1.0 GB it keeps), or bring it up to date and check it; asks nothing - running it is the consent |
+| `--ocr-langs eng+jpn` | with `--setup`: the OCR language packs to fetch besides English and the user's own; kept for the next `--setup`, and read with in the environment (the `ocr:` line and `improve` name this command for a pack a scan needs) |
 | `--version` | print the skill version, schema and cache build |
 
 **No URL is a command too**: `readpage.py` with nothing else prints the *setup report* - the

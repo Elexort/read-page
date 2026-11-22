@@ -63,30 +63,34 @@ def _pycache_home():
     harnesses show the agent file by file, and in a folder only this user can write - a .pyc planted by someone else would run as our
     code. In the environment (readpage.py --setup) it is the environment's own folder, with everything else the
     skill keeps there, so that deleting that one folder removes it; without one, the user's temp folder.
-    None when there is no such folder: then nothing is cached."""
+    None when there is no such folder: then nothing is cached. The environment's folder on a mount with no Unix modes
+    (WSL's /mnt/c, exFAT: every folder looks writable by all) is not one: the temp folder's is, then - reads ran with
+    no bytecode at all there, 0.25 s more each."""
     mod = sys.modules.get("ownenv")              # imported (and use() run) before this by the CLI and the MCP server
     env = mod.status() if mod is not None else {}
-    if env.get("used") and env.get("home"):
-        base = os.path.join(env["home"], "cache")
-    else:
-        base = tempfile.gettempdir()             # a user's own folder on Windows and macOS
-        if os.name == "posix":
-            base = os.path.join(base, "read-page-%d" % os.getuid())     # cache_root()'s folder
-    path = os.path.join(base, "pycache")
-    try:
-        os.makedirs(base, mode=0o700, exist_ok=True)
-        os.makedirs(path, mode=0o700, exist_ok=True)
-        if os.name == "posix":
-            for p in (base, path):
-                st = os.lstat(p)
-                if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
-                    return None
-        return path
-    except OSError:
-        return None
+    bases = [os.path.join(env["home"], "cache")] if env.get("used") and env.get("home") else []
+    temp = tempfile.gettempdir()                 # a user's own folder on Windows and macOS
+    bases.append(os.path.join(temp, "read-page-%d" % os.getuid()) if os.name == "posix" else temp)   # cache_root()'s
+    for base in bases:
+        path = os.path.join(base, "pycache")
+        try:
+            os.makedirs(base, mode=0o700, exist_ok=True)
+            os.makedirs(path, mode=0o700, exist_ok=True)
+            if os.name == "posix" and any(not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022
+                                          for st in (os.lstat(p) for p in (base, path))):
+                continue
+            return path
+        except OSError:
+            continue
+    return None
 
 
-if not sys.pycache_prefix:
+if __name__ == "__main__" and any(ownenv.meant_setup(a) for a in sys.argv[1:]):
+    # --setup runs from outside the environment, once: what it compiled (the skill's modules, into the temp folder)
+    # served nothing, and stayed outside the folder it names
+    sys.dont_write_bytecode = True
+    os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
+elif not sys.pycache_prefix:
     _PYC = _pycache_home()
     if _PYC:
         sys.pycache_prefix = _PYC
@@ -1207,7 +1211,8 @@ def setup_rows(c):
         packs = fix("ocr-langs", "download a language's .traineddata (rus, deu, jpn...) into tessdata - "
                                  "github.com/tesseract-ocr/tessdata_fast - and name it in READ_PAGE_OCR_LANGS")
         if packs == SETUP:
-            packs += (" (English and the packs of the user's languages; READ_PAGE_OCR_LANGS=eng+deu names others)")
+            packs += (" --ocr-langs eng+deu (English and the packs of the user's languages come by themselves; the "
+                      "flag names others)")
         # after --setup the choice is made (English and the user's languages): the row is not a nag then
         rows.insert(at, ("ocr-langs", True if any(x != "eng" for x in langs) else (
             None if (ownenv.status().get("used") and ownenv.load().get("ocr_langs")) else False), packs,
@@ -1255,8 +1260,9 @@ def setup_report(c):
                                            if isinstance(disk.get("cache_alone"), int) else "")) if disk.get("cache") else ""
         lines.append("disk      : %s in the folder%s" % (size(disk["folder"]), cache))
     if info.get("python") and info.get("sources"):
+        import envsetup                          # its redact: a setup.json of an older --setup showed more of an address
         lines.append("sources   : set on this machine when --setup last ran - they send it elsewhere than its defaults, or skip a check:")
-        lines += ["  " + str(x) for x in info["sources"]]
+        lines += ["  " + envsetup.redact(x) for x in info["sources"]]
     lines.append("")
     lines.append("works now : %s" % (", ".join(have) or "nothing beyond the standard library"))
     if brs:
@@ -5047,13 +5053,14 @@ def ocr_picture(path, page_text=""):
 
 def ocr_pack_fix(packs):
     """The line that gives these OCR packs: --setup fetches English and the user's own languages, and what
-    READ_PAGE_OCR_LANGS names - so the command names them (`READ_PAGE_OCR_LANGS=eng+jpn readpage.py --setup`)."""
+    --ocr-langs names - so the command names them (`readpage.py --setup --ocr-langs eng+jpn`: a flag, which every
+    shell runs as it is; a POSIX shell's `READ_PAGE_OCR_LANGS=... cmd` is no command in PowerShell or cmd)."""
     packs = [p for p in packs if p][:3]
     files = ", ".join("%s.traineddata" % p for p in packs)
     if ownenv.problem("ocr-langs"):
         return "%s: %s" % (files, ownenv.problem("ocr-langs"))
     if ownenv.gives("ocr-langs"):
-        return "%s: READ_PAGE_OCR_LANGS=%s %s" % (files, "+".join(["eng"] + [p for p in packs if p != "eng"]), SETUP)
+        return "%s: %s --ocr-langs %s" % (files, SETUP, "+".join(["eng"] + [p for p in packs if p != "eng"]))
     return "%s into tessdata (github.com/tesseract-ocr/tessdata_fast), or READ_PAGE_OCR_LANGS" % files
 
 
@@ -8568,6 +8575,9 @@ def main(argv=None):
     ap.add_argument("--setup", action="store_true",
                     help="install every engine into the skill's own environment, a folder of the user's "
                          "(no admin rights; asks nothing - running it is the consent), or bring it up to date")
+    ap.add_argument("--ocr-langs", dest="ocr_langs", default="", metavar="eng+jpn",
+                    help="with --setup: the OCR language packs to fetch besides English and the user's own "
+                         "(kept for the next --setup; reads in the environment use them)")
     ap.add_argument("--allow-external", dest="allow_external", action="store_true",
                     help="allow egress: public readers and archives may be used")
     ap.add_argument("--force-external", dest="force_external", action="store_true",
@@ -8624,7 +8634,13 @@ def main(argv=None):
         args.ignored.append("--ocr %d (a picture's number, 1 or more)" % args.ocr)
         args.ocr = 0
     if args.setup:
+        if args.ocr_langs.strip():
+            # the packs named for this --setup, the way READ_PAGE_OCR_LANGS names them - in every shell alike
+            # (`READ_PAGE_OCR_LANGS=eng+jpn readpage.py --setup` is a POSIX shell's line, not PowerShell's or cmd's)
+            os.environ["READ_PAGE_OCR_LANGS"] = "+".join(x for x in re.split(r"[+,\s]+", args.ocr_langs) if x)
         return ownenv.setup(os.path.abspath(__file__), VERSION)
+    if args.ocr_langs.strip():
+        args.ignored.append("--ocr-langs %s (for --setup: the OCR packs it fetches)" % args.ocr_langs)
     # files of a read (pages, cookies, pictures, the stderr log) are this user's only: 0600,
     # folders 0700
     mask = os.umask(0o077) if os.name == "posix" else None
