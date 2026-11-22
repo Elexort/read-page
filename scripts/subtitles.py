@@ -50,7 +50,7 @@ def _stamp(sec):
 def _clean(text):
     """One line of cue text: tags, ASS overrides and entities out, the break between lines a space."""
     s = re.sub(r"<br\s*/?>", " ", text or "", flags=re.I)
-    s = re.sub(r"<[^>]*>", "", s)
+    s = re.sub(r"<[^<>]*>", "", s)
     s = re.sub(r"\{\\[^}]*\}", "", s)                        # {\an8}, {\i1}: an override, never a word
     s = unescape(s)
     if re.search(r"&(#\d+|#x[0-9a-fA-F]+|amp|lt|gt|quot|apos);", s):
@@ -96,7 +96,9 @@ def _ttml(raw):
     m = re.search(r'tickRate="(\d+)"', raw)
     tick = float(m.group(1)) if m else 10000000.0
     cues = []
-    for p in re.finditer(r"<p\b([^>]*)>(.*?)</p>", raw, re.S):
+    # a paragraph's text holds no other <p>: one that no </p> closes is not scanned to the end of the file from
+    # each of a run of them (8 000 took 5 s), and an opening's attributes stop at the next tag
+    for p in re.finditer(r"<p\b([^<>]*)>((?:(?!</?p\b).)*)</p>", raw, re.S):
         attrs = p.group(1)
         b, e, d = (re.search(r'\b%s="([^"]+)"' % k, attrs) for k in ("begin", "end", "dur"))
         if not b:
@@ -110,7 +112,7 @@ def _ttml(raw):
 def _srv(raw):
     """YouTube's own XML: srv1 `<text start="1.2" dur="2.3">`, srv2 `<text t="1200" d="2300">`, srv3 `<p t= d=>`."""
     cues = []
-    for p in re.finditer(r"<(text|p)\b([^>]*)>(.*?)</\1>", raw, re.S):
+    for p in re.finditer(r"<(text|p)\b([^<>]*)>((?:(?!</?(?:text|p)\b).)*)</\1>", raw, re.S):     # linear, as _ttml's
         attrs = p.group(2)
         s1, s2 = re.search(r'\bstart="([\d.]+)"', attrs), re.search(r'\bt="(\d+)"', attrs)
         if s1:
@@ -178,7 +180,7 @@ def to_vtt(raw, ext):
     """The cues of a subtitle file of format `ext` (without the dot) as a WEBVTT text; a VTT is returned as it is.
     "" when it holds no cue - an empty file, or a format that is not one of EXTS."""
     ext = (ext or "").lower().lstrip(".")
-    raw = (raw or "").lstrip("﻿")
+    raw = (raw or "").lstrip("\ufeff")
     if ext == "vtt":
         return raw
     reader = _READERS.get(ext)

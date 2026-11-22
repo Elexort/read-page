@@ -6931,6 +6931,7 @@ def vtt_to_text(vtt, block_seconds=30):
 
 
 SUB_FORMATS = "vtt/srt/best"      # a site without VTT gives SRT (RuTube), else the best it has: subtitles.py reads them
+SUB_LIMIT = 16 * 1024 * 1024      # characters of a subtitle file read: a ten-hour video's track is a few MB
 _VIDEO = {"kind": "", "advice": "", "fix": ""}     # what video_text() learned about a failure, for the answer's advice
 
 
@@ -7027,7 +7028,7 @@ def video_text(url, c, workdir):
         return "", title, "no subtitles in %s (set READ_PAGE_SUB_LANGS to change)" % langs
     lang, ext = subtitles.track_of(sub)
     with open(os.path.join(workdir, sub), encoding="utf-8-sig", errors="replace") as fh:
-        raw = fh.read()
+        raw = fh.read(SUB_LIMIT)                 # a site's file, whatever its size: the read holds this much at most
     vtt = subtitles.to_vtt(raw, ext)
     try:
         if ext == "vtt":

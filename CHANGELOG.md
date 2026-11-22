@@ -65,6 +65,8 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
     vtt/srt/best`, and `scripts/subtitles.py` turns SRT, SBV, TTML, DFXP, YouTube's srv1-3 and json3, ASS and LRC into the
     same WEBVTT cues, so the blocks and `transcript.vtt` do not depend on the site. 13 of 13 RuTube videos that
     have a track read for real (2 100 to 17 400 words); a track whose own name says automatic (`Русский • Авто`) is named so.
+    A site's track is read up to 16 MB, in linear time: a TTML or srv1-3 file of paragraphs that no `</p>` closes was
+    scanned to its end from each of them (8 000 took 5.4 s, 32 000 would take about 90; now 0.002 and 0.008 s).
   - **YouTube refuses its machine translations with HTTP 429, and yt-dlp then stopped with nothing written** - found
     by this measurement, not asked for: the user's `en` is a translation for any video not in English, so 16 of the 41
     videos an English reader read for real were `no subtitles`, 5 of 6 for a Chinese reader. The call carries

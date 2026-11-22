@@ -15,6 +15,7 @@ import os
 import sys
 import tempfile
 import threading
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -249,7 +250,7 @@ try:
     # each format, the same two cues (a 40 s gap: two blocks)
     want8 = "[0:01] Hello, it's world\n\n[0:41] Second block"
     formats8 = {
-        "srt": "﻿1\n00:00:01,000 --> 00:00:03,500\n{\\an8}<i>Hello</i>, it's world\n\n2\n00:00:41,000 --> 00:00:43,500\nSecond block\n",
+        "srt": "\ufeff1\n00:00:01,000 --> 00:00:03,500\n{\\an8}<i>Hello</i>, it's world\n\n2\n00:00:41,000 --> 00:00:43,500\nSecond block\n",
         "sbv": "0:00:01.000,0:00:03.500\nHello, it's world\n\n0:00:41.000,0:00:43.500\nSecond block\n",
         "ttml": ('<?xml version="1.0"?><tt xmlns="http://www.w3.org/ns/ttml"><body><div>'
                  '<p begin="00:00:01.000" end="00:00:03.500">Hello,<br/>it&apos;s <span>world</span></p>'
@@ -286,6 +287,37 @@ try:
               and sub8.track_of("video.zh-Hans.vtt") == ("zh-Hans", "vtt") and sub8.track_of("video.info.json") == ("", "")
               and sub8.track_of("transcript.vtt") == ("", "") and sub8.track_of("video.en.json3") == ("en", "json3"),
               str([sub8.track_of(n) for n in ("video.zh-Hans.vtt", "video.info.json", "transcript.vtt")]))
+
+        # a hostile track (a site yt-dlp reads serves it): paragraphs that no "</p>" closes, and openings with no
+        # ">", were scanned to the end of the file from each one. Linear means 4 times the size takes about 4
+        # times as long; a ratio over 8 fails (the best of two, a time under 0.05 s counted as 0.05 s)
+        def hostile_ratio(make, ext):
+            best = None
+            for _try in range(2):
+                times = []
+                for n_ in (2000, 8000):
+                    raw_ = make(n_)
+                    t0_ = time.time()
+                    sub8.to_vtt(raw_, ext)
+                    times.append(time.time() - t0_)
+                r_ = times[1] / max(times[0], 0.05)
+                best = r_ if best is None else min(best, r_)
+                if best <= 8:
+                    break
+            return best, times
+        hostile8 = {
+            "TTML, <p> never closed": (lambda n_: "<tt><body>" + '<p begin="1s" end="2s">x' * n_ + "</body></tt>", "ttml"),
+            "srv3, <p> never closed": (lambda n_: "<timedtext><body>" + '<p t="1000" d="500">x' * n_ + "</body></timedtext>", "srv3"),
+            "srv1, <text> never closed": (lambda n_: "<transcript>" + '<text start="1" dur="2">x' * n_ + "</transcript>", "srv1"),
+            "TTML, <p with no >": (lambda n_: "<tt><body>" + "<p" * n_ + "</p></body></tt>", "ttml"),
+        }
+        slow8 = []
+        for label_, (make_, ext_) in sorted(hostile8.items()):
+            ratio_, times_ = hostile_ratio(make_, ext_)
+            if ratio_ > 8:
+                slow8.append("%s: %.2f s -> %.2f s" % (label_, times_[0], times_[1]))
+        check("a hostile subtitle file (paragraphs never closed, openings with no >) is read in linear time",
+              not slow8, "; ".join(slow8))
     names8 = ["video.ru.srt", "video.ru.vtt", "video.en.ttml", "video.info.json", "transcript.vtt", "page.md"]
     check("a language with a VTT and an SRT is read in the VTT; a folder's other files are no tracks",
           getattr(mod8, "pick_subtitle", lambda *a: "")(names8, ["ru"]) == "video.ru.vtt"
