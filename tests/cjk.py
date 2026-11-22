@@ -689,11 +689,12 @@ def plan_of(have, text, lang=""):
 if plan is None:
     check("OCR: the language of the text and of the user is chosen (_ocr_plan)", False, "readpage has no _ocr_plan")
 else:
+    # the pack of the text's script first: English before it read Korean at 34-38 % CER, after it at 5-8 (2026-11-22)
     for label, text, lang, want_use, want_missing in (
-            ("simplified Chinese text", ZH_S * 3, "", ["eng", "chi_sim"], []),
-            ("traditional Chinese text", ZH_T * 3, "", ["eng", "chi_tra"], []),
-            ("Japanese text", JA * 3, "", ["eng", "jpn"], []),
-            ("Korean text", KO * 3, "", ["eng", "kor"], []),
+            ("simplified Chinese text", ZH_S * 3, "", ["chi_sim", "eng"], []),
+            ("traditional Chinese text", ZH_T * 3, "", ["chi_tra", "eng"], []),
+            ("Japanese text", JA * 3, "", ["jpn", "eng"], []),
+            ("Korean text", KO * 3, "", ["kor", "eng"], []),
             ("English text for an English user", "A plain English page about reading. " * 10, "", ["eng"], []),
             ("English text for a Chinese user (zh-CN)", "A plain English page about reading. " * 10, "zh-CN", ["eng", "chi_sim"], []),
             ("no text for a Taiwanese user (zh-TW)", "", "zh-TW", ["eng", "chi_tra"], []),
@@ -709,7 +710,7 @@ else:
     heads = "経済産業省発表　東京駅前再開発計画　県立図書館新設　大阪市営地下鉄延伸　国際関係研究所報告"
     got = (attempt(plan_of, packs, shop, ""), attempt(plan_of, packs, heads, ""))
     check("OCR packs: a few kana in a Chinese text do not make it Japanese; kanji in Japan's own forms do",
-          got == ((["eng", "chi_sim"], []), (["eng", "jpn"], [])), str(got))
+          got == ((["chi_sim", "eng"], []), (["jpn", "eng"], [])), str(got))
     got = attempt(plan_of, ["eng", "osd"], "", "zh-CN")
     check("OCR packs: a Chinese user's missing pack is a maybe, not a gap of this page",
           isinstance(got, tuple) and got[0] == ["eng"] and got[1] == [], str(got))
@@ -809,6 +810,231 @@ if "wide" not in seen_ocr or importlib.util.find_spec("PIL") is None:
 else:
     check("tesserocr: a page under a path outside ASCII goes as a picture and keeps its 150 dpi",
           seen_ocr["wide"][1][:2] == [("image",), ("dpi", 150)], str(seen_ocr["wide"][1]))
+
+# ---------------------------------------------------------------- 6b. the packs chosen for each page
+# The same six sentences in six languages: the language of a Latin-script text by its function words
+# (intl.latin_pack), with its accents and as tesseract's English pack reads it, without them
+LATIN = {
+    "eng": "The town lies on the bank of a wide river, and in summer many visitors come to walk through its old "
+           "streets. The market is open every morning, and the farmers from the villages around it sell their fruit "
+           "and vegetables there. In the evening people sit in their gardens and talk about the weather, their work "
+           "and the children who no longer live at home.",
+    "deu": "Die Stadt liegt an einem breiten Fluss, und im Sommer kommen viele Besucher, die durch die alten Gassen "
+           "gehen. Der Markt ist jeden Morgen geöffnet, und die Bauern aus dem Umland verkaufen dort ihr Obst und "
+           "Gemüse. Am Abend sitzen die Leute in den Gärten und sprechen über das Wetter, die Arbeit und die Kinder, "
+           "die nicht mehr zu Hause wohnen.",
+    "fra": "La ville se trouve au bord d'un grand fleuve, et en été les visiteurs sont nombreux dans les vieilles "
+           "rues. Le marché est ouvert tous les matins, et les paysans des environs y vendent leurs fruits et leurs "
+           "légumes. Le soir, les habitants restent dans les jardins et parlent du temps, du travail et des enfants "
+           "qui ne vivent plus avec eux.",
+    "spa": "La ciudad está a orillas de un gran río, y en verano llegan muchos visitantes que pasean por las calles "
+           "antiguas. El mercado abre todas las mañanas, y los campesinos de los pueblos cercanos venden allí sus "
+           "frutas y verduras. Por la tarde, la gente se sienta en los jardines y habla del tiempo, del trabajo y de "
+           "los hijos que ya no viven en casa.",
+    "por": "A cidade fica à beira de um grande rio, e no verão chegam muitos visitantes que passeiam pelas ruas "
+           "antigas. O mercado abre todas as manhãs, e os agricultores das aldeias próximas vendem ali as suas frutas "
+           "e os seus legumes. À tarde, as pessoas sentam-se nos jardins e falam do tempo, do trabalho e dos filhos "
+           "que já não vivem em casa.",
+    "ita": "La città si trova sulla riva di un grande fiume, e d'estate arrivano molti visitatori che passeggiano per "
+           "le strade antiche. Il mercato è aperto ogni mattina, e i contadini dei paesi vicini vendono lì la loro "
+           "frutta e la loro verdura. La sera la gente si siede nei giardini e parla del tempo, del lavoro e dei figli "
+           "che non vivono più a casa.",
+}
+
+
+def unaccented(s):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+
+latin_pack = getattr(intl, "latin_pack", None) if not isinstance(intl, str) else None
+if latin_pack is None:
+    check("OCR: the language of a Latin-script text is told by its words (intl.latin_pack)", False,
+          "intl has no latin_pack")
+else:
+    got = dict((k, (attempt(latin_pack, v), attempt(latin_pack, unaccented(v)))) for k, v in LATIN.items())
+    check("OCR: the language of a Latin-script text is told by its words, with its accents and without them "
+          "(as the English pack reads it)", all(g == (k, k) for k, g in got.items()), str(got))
+    got = [attempt(latin_pack, t) for t in (RU * 4, ZH_S * 4, JA * 4, KO * 4, AR * 3, EL * 3,
+                                            "Total 42 units, order A-17/23. " * 3, LATIN["deu"][:80], "")]
+    check("... and a text in another script, a short one or none names no Latin language",
+          got == [""] * len(got), str(got))
+    # what tesseract's English pack makes of a Cyrillic page: Latin letters that are no language's words
+    garbage = ("Bce mon aeTu Bsipocnu, 4 Tenepb OHM paGotatoT B ropoge. Kaxgplii [eHb A xoxky Ha paGoTy nemkom, "
+               "noTomy UTO aTO nonesHo AnA 3goposba. Ha ynuye Bcerga mHoro Mmawy4H u jopeii. ") * 3
+    check("... nor does the English pack's reading of a Cyrillic page", attempt(latin_pack, garbage) == "",
+          str(attempt(latin_pack, garbage)))
+
+if plan is not None:
+    # a page's text in a Latin-script language: its pack beside English when it is here, a wish when it is not
+    got = (attempt(plan_of, packs + ["deu"], LATIN["deu"] * 2, ""), attempt(plan_of, packs, LATIN["deu"] * 2, ""))
+    check("OCR packs: a German page's picture is read with deu beside English; without deu, English, and nothing is "
+          "named missing", got == ((["deu", "eng"], []), (["eng"], [])), str(got))
+
+    # a scan: the script tesseract's OSD saw on the page, and its confidence
+    every = packs + ["deu", "fra", "spa", "por", "ukr"]
+
+    def plan_scan(have, script, lang=""):
+        os.environ["READ_PAGE_LANG"] = lang or "en"
+        try:
+            return plan(have, "", script)
+        finally:
+            os.environ.pop("READ_PAGE_LANG", None)
+
+    cases = (
+        ("a Cyrillic scan", every, ("Cyrillic", 12.0), "", (["rus", "eng"], [])),
+        ("... for a Ukrainian user, whose own pack reads it", every, ("Cyrillic", 12.0), "uk-UA", (["ukr", "eng"], [])),
+        ("a Chinese scan (OSD's Han, sure at 1.2 by its own rule): chi_sim alone", every, ("Han", 1.2), "",
+         (["chi_sim"], [])),
+        ("... for a Taiwanese user: chi_tra", every, ("Han", 1.2), "zh-TW", (["chi_tra"], [])),
+        ("a Japanese scan: jpn alone", every, ("Japanese", 2.0), "", (["jpn"], [])),
+        ("a Korean scan: kor, English beside it (alone it read no English word)", every, ("Korean", 0.8), "",
+         (["kor", "eng"], [])),
+        ("an Arabic scan without ara: English, and ara named", every, ("Arabic", 70.0), "", (["eng"], ["ara"])),
+        ("... and for a Chinese user, the user's pack beside English", every, ("Arabic", 70.0), "zh-CN",
+         (["eng", "chi_sim"], ["ara"])),
+        ("a Latin page OSD half took for Cyrillic (0.5): English", every, ("Cyrillic", 0.5), "", (["eng"], [])),
+        ("a Latin scan for a Japanese user: English alone, no jpn", every, ("Latin", 4.0), "ja-JP", (["eng"], [])),
+        ("... for a German user: English and deu", every, ("Latin", 4.0), "de-DE", (["eng", "deu"], [])),
+        ("a scan OSD cannot tell, for a Japanese user: English and jpn", every, ("Latin", 0.8), "ja-JP",
+         (["eng", "jpn"], [])),
+        ("no OSD at all (an environment built before): as before", ["eng", "chi_sim"], None, "zh-CN",
+         (["eng", "chi_sim"], [])))
+    wrong = [(label, attempt(plan_scan, have, script, lang)) for label, have, script, lang, want in cases
+             if attempt(plan_scan, have, script, lang) != want]
+    check("OCR packs: a scan is read with the pack of the script OSD saw, %d cases" % len(cases), not wrong, str(wrong))
+    os.environ["READ_PAGE_OCR_LANGS"] = "eng"
+    try:
+        got = attempt(plan_scan, every, ("Cyrillic", 12.0), "")
+    finally:
+        os.environ.pop("READ_PAGE_OCR_LANGS", None)
+    check("OCR packs: READ_PAGE_OCR_LANGS set by the user decides a scan's packs too", got == (["eng"], []), str(got))
+
+osd_text = getattr(mod, "_osd_text", None)
+check("OCR: the tesseract command's OSD report is read (`--psm 0`: Script, Script confidence)",
+      osd_text is not None and attempt(osd_text, "Page number: 0\nOrientation in degrees: 0\nRotate: 0\n"
+                                                 "Orientation confidence: 2.5\nScript: Cyrillic\nScript confidence: 15.25\n")
+      == ("Cyrillic", 15.25) and attempt(osd_text, "Too few characters. Skipping this page") == ("", 0.0),
+      str(osd_text and attempt(osd_text, "Script: Cyrillic\nScript confidence: 15.25")))
+
+# a scan read through tesserocr: OSD first, the page's packs, and a Latin page read again with its language's pack
+osd_calls = []
+
+
+class FakeOsd(object):
+    """tesserocr with osd: OSD answers SCRIPT; a reading gives READS[the packs], or an English reading, with the mean
+    confidence CONF[the packs] (90)."""
+    SCRIPT = {}
+    READS = {}
+    CONF = {}
+
+    def __init__(self, path=None, lang="eng", psm=3):
+        self.lang, self.psm = lang, psm
+        osd_calls.append(lang if psm != 0 else "osd:%s" % lang)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def End(self):
+        pass
+
+    def SetImageFile(self, p):
+        pass
+
+    def SetImage(self, img):
+        pass
+
+    def SetSourceResolution(self, n):
+        pass
+
+    def Recognize(self, ms=0):
+        pass
+
+    def DetectOrientationScript(self):
+        return dict(FakeOsd.SCRIPT)
+
+    def GetUTF8Text(self):
+        return FakeOsd.READS.get(self.lang, LATIN["eng"])
+
+    def MeanTextConf(self):
+        return FakeOsd.CONF.get(self.lang, 90)
+
+
+mod4 = module()
+osd_png = os.path.join(next((d for d in (ROOT, tempfile.gettempdir()) if d.isascii()), ROOT), "rp-osd-%d.png" % os.getpid())
+with open(osd_png, "wb") as f:
+    f.write(png(40, 40))
+ocr_runs = {}
+os.environ["READ_PAGE_LANG"] = "en"
+try:
+    han = {"script_name": "Han", "script_conf": 1.2}
+    chinese = ["eng", "osd", "chi_sim", "chi_tra"]
+    for label, have, script, reads, conf in (
+            ("cyrillic", ["eng", "osd", "rus"], {"script_name": "Cyrillic", "script_conf": 12.0}, {"rus+eng": RU}, {}),
+            ("french", ["eng", "osd", "fra"], {"script_name": "Latin", "script_conf": 4.0},
+             {"eng": unaccented(LATIN["fra"]), "fra+eng": LATIN["fra"]}, {}),
+            ("no osd", ["eng", "rus"], {"script_name": "Cyrillic", "script_conf": 12.0}, {}, {}),
+            ("traditional", chinese, han, {"chi_sim": ZH_S, "chi_tra": ZH_T}, {"chi_sim": 80, "chi_tra": 90}),
+            ("simplified", chinese, han, {"chi_sim": ZH_S, "chi_tra": ZH_T}, {"chi_sim": 91, "chi_tra": 89}),
+            ("unsure", chinese + ["jpn"], han, {"chi_sim": ZH_S, "chi_tra": ZH_T}, {"chi_sim": 80, "chi_tra": 81}),
+            ("kanji", chinese + ["jpn"], han, {"chi_sim": ZH_S, "chi_tra": ZH_T, "jpn": JA},
+             {"chi_sim": 52, "chi_tra": 46, "jpn": 91})):
+        mod4._tesserocr = lambda have=have: (types.SimpleNamespace(PyTessBaseAPI=FakeOsd), ROOT, have)
+        FakeOsd.SCRIPT, FakeOsd.READS, FakeOsd.CONF = script, reads, conf
+        del osd_calls[:]
+        res = attempt(mod4.ocr_pages, [osd_png])
+        text, info = res if isinstance(res, tuple) else ("", {"used": res})
+        ocr_runs[label] = (list(osd_calls), text, info.get("used"))
+finally:
+    os.environ.pop("READ_PAGE_LANG", None)
+    os.unlink(osd_png)
+check("OCR of a scan: OSD first, then the pack of the page's script with English (a Cyrillic page: rus+eng)",
+      ocr_runs["cyrillic"][0] == ["osd:osd", "rus+eng"] and ocr_runs["cyrillic"][1] == RU
+      and ocr_runs["cyrillic"][2] == ["rus", "eng"], str(ocr_runs["cyrillic"])[:200])
+check("... a Latin page whose words are French is read again with fra, and that reading is the text",
+      ocr_runs["french"][0] == ["osd:osd", "eng", "fra+eng"] and ocr_runs["french"][1] == LATIN["fra"]
+      and ocr_runs["french"][2] == ["fra", "eng"], str(ocr_runs["french"])[:200])
+check("... and with no osd here, no OSD: the page is read as before",
+      ocr_runs["no osd"][0] == ["eng"] and ocr_runs["no osd"][2] == ["eng"], str(ocr_runs["no osd"])[:200])
+check("... a Han page: chi_sim first; unsure of it (80), chi_tra reads it too and its more confident reading is kept",
+      ocr_runs["traditional"][0] == ["osd:osd", "chi_sim", "chi_tra"] and ocr_runs["traditional"][1] == ZH_T
+      and ocr_runs["traditional"][2] == ["chi_tra"], str(ocr_runs["traditional"])[:200])
+check("... sure of it (91), chi_sim's reading alone; and chi_tra no more confident leaves chi_sim's (jpn is not asked "
+      "of a page that sure to be Chinese)",
+      ocr_runs["simplified"][0] == ["osd:osd", "chi_sim"] and ocr_runs["simplified"][2] == ["chi_sim"]
+      and ocr_runs["unsure"][0] == ["osd:osd", "chi_sim", "chi_tra"] and ocr_runs["unsure"][1] == ZH_S
+      and ocr_runs["unsure"][2] == ["chi_sim"], str((ocr_runs["simplified"], ocr_runs["unsure"]))[:300])
+check("... and a Japanese page OSD took for Han (kanji-heavy), unsure with both Chinese packs, is jpn's",
+      ocr_runs["kanji"][0] == ["osd:osd", "chi_sim", "chi_tra", "jpn"] and ocr_runs["kanji"][1] == JA
+      and ocr_runs["kanji"][2] == ["jpn"], str(ocr_runs["kanji"])[:200])
+
+# the tesseract command: its OSD report, then the page's packs
+mod5 = module()
+mod5.which = lambda name: "tesseract" if name == "tesseract" else None
+mod5.tesseract_langs = lambda exe=None: ["eng", "osd", "rus"]
+mod5._tesserocr = lambda: None
+asked5 = []
+
+
+def cli_tool(cmd, timeout=120):
+    asked5.append(cmd)
+    if "--psm" in cmd and cmd[cmd.index("--psm") + 1] == "0":
+        return 0, b"Page number: 0\nOrientation in degrees: 0\nScript: Cyrillic\nScript confidence: 15.25\n", b""
+    return 0, RU.encode("utf-8"), b""
+
+
+mod5.run_tool = cli_tool
+os.environ["READ_PAGE_LANG"] = "en"
+try:
+    attempt(lambda: mod5.ocr_pages([os.path.join(ROOT, "p1.png")]))
+finally:
+    os.environ.pop("READ_PAGE_LANG", None)
+check("OCR with the tesseract command: its OSD (--psm 0), then the Cyrillic page with rus+eng",
+      len(asked5) == 2 and "--psm" in asked5[0] and "-l" in asked5[1] and asked5[1][asked5[1].index("-l") + 1] == "rus+eng",
+      str(asked5)[:200])
 
 # ---------------------------------------------------------------- 7. tools with narrow arguments
 # a Python program the skill runs (yt-dlp, markitdown) writes its output in the ANSI code page on Windows, a

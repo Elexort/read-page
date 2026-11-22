@@ -1137,11 +1137,11 @@ def main():
                        if k.startswith("ocr")}))
             check("OCR: the text is not marked as a missing text layer",
                   "OCR" in json.dumps(m20.get("missing") or []), "")
-            env20 = {"READ_PAGE_OCR_LANGS": "deu"}
+            env20 = {"READ_PAGE_OCR_LANGS": "kat"}        # Georgian: none of the packs --setup fetches by itself
             m21, _ = run([f"http://127.0.0.1:{port20}/scan.pdf", "--refresh"], env=env20)
             check("OCR: a missing language pack is named, not silent",
-                  (m21.get("signals") or {}).get("ocr_missing_langs") == ["deu"]
-                  and "deu.traineddata" in json.dumps(m21.get("improve") or []),
+                  (m21.get("signals") or {}).get("ocr_missing_langs") == ["kat"]
+                  and "kat.traineddata" in json.dumps(m21.get("improve") or []),
                   str((m21.get("signals") or {}).get("ocr_missing_langs")))
         else:
             print("SKIP OCR checks (tesseract is not installed)")

@@ -21,12 +21,13 @@ def _size_note():
     """What --setup downloads and keeps (no markitdown, no pandoc, and Node is Playwright's own: nothing of
     nodejs.org): measured by real installs on GitHub's runners (2026-11-21, the bytes the network adapter received and
     the folder's size without uv's cache, which is hard-linked into it): Windows x64 359 MB and 0.9 GB, Linux x64
-    393 MB and 0.96 GB (arm64 370 MB, 0.92 GB), macOS arm64 348 MB and 0.82 GB."""
+    393 MB and 0.96 GB (arm64 370 MB, 0.92 GB), macOS arm64 348 MB and 0.82 GB - with English's OCR pack alone; the ten
+    packs and osd of 2026-11-22 are 30 MB more (34.5 MB in all, by the lock's sizes)."""
     if os.name == "nt":
-        return "downloads about 360 MB, takes about 0.9 GB on disk, no admin rights"
+        return "downloads about 390 MB, takes about 0.9 GB on disk, no admin rights"
     if sys.platform == "darwin":
-        return "downloads about 350 MB, takes about 0.85 GB on disk, no admin rights"
-    return "downloads about 390 MB, takes about 1.0 GB on disk, no admin rights"
+        return "downloads about 380 MB, takes about 0.85 GB on disk, no admin rights"
+    return "downloads about 420 MB, takes about 1.0 GB on disk, no admin rights"
 
 
 SIZE_NOTE = _size_note()
@@ -170,6 +171,14 @@ def system_languages(env=None, windows=None):
 
 
 OCR_MORE_PACKS = 3          # the packs beyond English that --setup fetches for the user's languages (a few MB each)
+# The packs --setup fetches for everyone (2026-11-22): the languages with the most web text by Common Crawl's
+# CC-MAIN-2026-43 (pages by their main language: eng 42.6 %, rus 6.3, deu 5.8, jpn 4.9, fra 4.8, spa 4.7, zho 4.4 -
+# both of its scripts -, ita 2.6, por 2.5, ..., kor 0.9), Korean before Italian: English reads Italian at 1.3 % CER
+# (0.5 with its pack) and Korean not at all. 22.8 MiB; osd.traineddata (10.1 MiB) tells a scanned page's script, and
+# each page is read with its script's pack - never with all of them at once (5.2 s a page against 2.15 on the ten
+# languages, and never better than the page's own pack: references/engines.md).
+OCR_DEFAULT_PACKS = ("eng", "rus", "chi_sim", "chi_tra", "jpn", "kor", "deu", "fra", "spa", "por")
+OCR_SCRIPT_PACK = "osd"
 
 
 def ocr_languages(env=None):
@@ -181,15 +190,16 @@ def ocr_languages(env=None):
 
 
 def ocr_default_packs(env=None):
-    """The OCR packs --setup fetches whatever the user names: English, and the packs of the user's own languages -
+    """The OCR packs --setup fetches whatever the user names: English, the packs of the user's own languages -
     READ_PAGE_LANG's, else the one the machine is set to and the others in the user's list (an English Windows with
-    Russian in it gets rus), at most OCR_MORE_PACKS of them. `--setup --ocr-langs` (READ_PAGE_OCR_LANGS) names more."""
+    Russian in it gets rus), at most OCR_MORE_PACKS of them -, the rest of OCR_DEFAULT_PACKS, and osd for the script
+    of a scan. `--setup --ocr-langs` (READ_PAGE_OCR_LANGS) names more."""
     packs = ["eng"]
     for name in ocr_languages(env):
         pack = ocr_pack_for(name)
         if pack and pack not in packs and len(packs) <= OCR_MORE_PACKS:
             packs.append(pack)
-    return packs
+    return packs + [p for p in OCR_DEFAULT_PACKS if p not in packs] + [OCR_SCRIPT_PACK]
 
 
 def ascii_path(p):
@@ -637,12 +647,8 @@ def _tools(d, info):
     td = at(d, info.get("tessdata") or "tessdata")
     if not os.environ.get("READ_PAGE_TESSDATA") and os.path.isdir(td):
         os.environ["READ_PAGE_TESSDATA"] = td
-    if not os.environ.get("READ_PAGE_OCR_LANGS"):
-        # the packs --setup fetched for the user's languages (or the languages it was asked for) are read with, beside
-        # English; Russian keeps its own rule (a Cyrillic page), as before
-        more = [x for x in (info.get("ocr_langs") or []) if x not in ("eng", "rus", "osd")]
-        if more:
-            os.environ["READ_PAGE_OCR_LANGS"] = "+".join(["eng"] + more)
+    # READ_PAGE_OCR_LANGS stays the user's: the packs --setup fetched are what each page's own are chosen from
+    # (readpage._ocr_plan), and named in it they would read every page with all of them at once
     os.environ["READ_PAGE_ENV"] = d
 
 

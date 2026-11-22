@@ -104,14 +104,30 @@ does not). Pictures are downloaded either way; only their positions in the text 
 
 Detecting a missing text layer takes 14 ms and rendering a page 33 ms; both always happen, and the
 PNGs land in `files.pages` for a model that can look. With OCR - `tesserocr` in-process, which
-`readpage.py --setup` installs with English and the packs of the user's own languages from tessdata_fast, or the `tesseract`
+`readpage.py --setup` installs with ten language packs from tessdata_fast, or the `tesseract`
 command - the same pages are OCR'd side by side and the result becomes the text (`engine:
 document:ocr`, `signals.ocr_pages`), so a text-only pipeline gets words instead of a picture.
-Measured on a synthetic scan: "SCANNED REPORT / Total 42 units" read back correctly. Languages
-follow `READ_PAGE_OCR_LANGS` (`eng` by default, and in the environment English plus the packs `--setup` fetched for the user's languages - `eng+chi_sim` on a Chinese Windows; with `eng+deu` the next
-`--setup` fetches German; outside the environment the packs of the user's own languages (`READ_PAGE_LANG`, else the system's list) are added when installed and `READ_PAGE_OCR_LANGS` is not set; `--ocr N` adds the pack of a page's script - `rus`, `chi_sim`/`chi_tra`, `jpn`, `kor` - by itself, and a pack a scan or a page needs and the machine lacks is named in `improve`),
-`READ_PAGE_TESSDATA` points at a data folder outside the install (the environment sets its own). Without OCR nothing changes: the answer names the fix, and
-a vision model can still read `files.pages` more accurately than OCR.
+Measured on a synthetic scan: "SCANNED REPORT / Total 42 units" read back correctly.
+
+**Languages, page by page.** `--setup` fetches the ten languages with the most web text by Common Crawl's
+CC-MAIN-2026-43 - `eng rus chi_sim chi_tra jpn kor deu fra spa por`, 22.8 MiB - the packs of the user's own languages
+beside them (`READ_PAGE_LANG`, else the system's list; at most three), and `osd`, tesseract's own script detection
+(10.1 MiB). A scanned page is never read with all of them at once (on 52 pages in 13 languages that took 2.2-16 s a
+page, 5.2 on average for the ten languages, against 1.2-3.5 and 2.15 chosen per page, and read Korean at 35 % CER -
+English before Korean -, Arabic and Hindi at 81-84 %). OSD names the page's script first (0.25-0.6 s), and the page is
+read with that script's pack - `chi_sim`, `chi_tra` and `jpn` alone
+(they read the English words in their text themselves, and English beside them made the rest worse), every other one
+with English beside it; a Han page is read with `chi_sim`, then with `chi_tra` and `jpn` while the best reading is
+unsure of itself (OSD does not tell simplified from traditional, and it is a page's kana that make it Japanese to OSD:
+a kanji-heavy one can come out as Han); a
+Latin page with English and the user's own Latin-script packs, then again with the pack of the language its words are
+in (`intl.latin_pack`: the commonest words of 15 languages) when that pack is here; a page whose script OSD is not sure
+of, with English and the user's own packs. A script whose pack is not here - an Arabic scan on a machine of the ten -
+is read with English and named in `improve` (`readpage.py --setup --ocr-langs eng+ara`). `READ_PAGE_OCR_LANGS`, when
+set, decides every page; a picture (`--ocr N`) is read with the pack of its page's text - its script, or its Latin
+language - and English beside it. The measurement is in [engines.md](engines.md#ocr-languages-measured).
+`READ_PAGE_TESSDATA` points at a data folder outside the install (the environment sets its own). Without OCR nothing
+changes: the answer names the fix, and a vision model can still read `files.pages` more accurately than OCR.
 
 OCR counts as working only once tesseract has started on a pack (`caps()`, the setup report and the
 read all ask it, not a listing of the folder). Where it is installed and does not start - on Windows a

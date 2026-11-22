@@ -592,6 +592,48 @@ if has_tesserocr and os.path.isfile(real_eng):             # (Windows on ARM: an
     check("a pack tesseract does not start with (a pack cut short) is found by the check, which starts each",
           said3.startswith("False ") and "xyz" in said3, said3[:120])
     os.unlink(os.path.join(cyr_td, "xyz.traineddata"))
+    # the environment's own packs: OSD (the legacy engine, which a wheel may be built without) tells a Russian scan's
+    # script, and the page is read with rus beside English - for an English user, whose own packs have none
+    real_td = ownenv.at(ownenv.home(), real_info.get("tessdata") or "tessdata")
+    if all(os.path.isfile(os.path.join(real_td, p_ + ".traineddata")) for p_ in ("osd", "rus", "eng")):
+        lines_ru = ["Москва - столица России и самый большой город страны.", "Город стоит на реке Москве, в нём много",
+                    "старых церквей, музеев, театров и парков.", "Каждый год сюда приезжают миллионы туристов,",
+                    "чтобы увидеть Красную площадь и Кремль.", "Летом на улицах много людей, а зимой идёт снег.",
+                    "Съешь же ещё этих мягких французских булок,", "да выпей чаю: широкая электрификация южных",
+                    "губерний даст мощный толчок подъёму хозяйства."]
+        probe_osd = ("import os, sys\n"
+                     "sys.path.insert(0, %r)\n"
+                     "import readpage\n"
+                     "from PIL import Image, ImageDraw, ImageFont\n"
+                     "font = None\n"
+                     "for f in ('C:/Windows/Fonts/arial.ttf', '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',\n"
+                     "          '/System/Library/Fonts/Supplemental/Arial.ttf', '/Library/Fonts/Arial Unicode.ttf'):\n"
+                     "    try:\n"
+                     "        font = ImageFont.truetype(f, 30)\n"
+                     "        break\n"
+                     "    except OSError:\n"
+                     "        pass\n"
+                     "if font is None:\n"
+                     "    print('SKIP no font with Cyrillic')\n"
+                     "    sys.exit(0)\n"
+                     "img = Image.new('L', (1240, 700), 255)\n"
+                     "for i, ln in enumerate(%r):\n"
+                     "    ImageDraw.Draw(img).text((60, 60 + 60 * i), ln, fill=0, font=font)\n"
+                     "png = os.path.join(os.environ['RP_PROBE_TMP'], 'ru.png')\n"
+                     "img.save(png, dpi=(150, 150))\n"
+                     "text, info = readpage.ocr_pages([png])\n"
+                     "print('+'.join(info.get('used') or []), 'Москва' in text)\n") % (SCRIPTS, lines_ru)
+        p4 = subprocess.run([real_py, "-E", "-B", "-X", "utf8", "-c", probe_osd], capture_output=True, timeout=120,
+                            env=dict(os.environ, READ_PAGE_TESSDATA=real_td, READ_PAGE_LANG="en", RP_PROBE_TMP=probe_tmp,
+                                     READ_PAGE_ENV_CHILD="1", READ_PAGE_CACHE=os.path.join(cyr, "cache4")))
+        said4 = p4.stdout.decode("utf-8", "replace").strip()
+        if said4.startswith("SKIP"):
+            print("SKIP a Russian scan through OSD (%s)" % said4[5:])
+        else:
+            check("the environment's tesserocr and osd: a Russian scan is told Cyrillic and read with rus+eng",
+                  p4.returncode == 0 and said4 == "rus+eng True", (said4 or p4.stderr.decode("utf-8", "replace"))[-200:])
+    else:
+        print("SKIP a Russian scan through OSD (the environment has no osd or rus: set up before 2026-11-22)")
 else:
     print("SKIP the real tesserocr under a Cyrillic folder (no environment here)")
 
@@ -2262,12 +2304,26 @@ attempt("the language's OCR pack: Chinese by script, the others by language, Eng
                                                   "ko-KR", "ru_RU", "de_DE@euro", "sr_Latn_RS", "nb_NO", "en_US", "C", "", "xx_YY")]
                  == ["chi_sim", "chi_sim", "chi_sim", "chi_tra", "chi_tra", "chi_tra", "jpn", "kor", "rus", "deu", "srp_latn", "nor",
                      "", "", "", ""], ""))
+# the OCR packs --setup fetches for everyone: the ten with the most web text (Common Crawl), and osd, which tells the
+# script of a scanned page so that each page is read with its own pack (2026-11-22)
+TEN = ["eng", "rus", "chi_sim", "chi_tra", "jpn", "kor", "deu", "fra", "spa", "por"]
+
+
+def ocr_set(*own):
+    """English, the user's own packs, the rest of the ten, osd."""
+    return ["eng"] + list(own) + [p for p in TEN[1:] if p not in own] + ["osd"]
+
+
 attempt("the machine's language is read from the environment where the OS has no word (LC_ALL first, C and POSIX skipped)",
         lambda: (ownenv.system_language({"LC_ALL": "zh_CN.GBK", "LANG": "en_US.UTF-8"}) == "zh_CN.GBK"
                  and ownenv.system_language({"LC_ALL": "C", "LANG": "ja_JP.eucJP"}) == "ja_JP.eucJP"
-                 and ownenv.system_language({"LANGUAGE": "ko:en"}) == "ko" and ownenv.system_language({"LANG": "POSIX"}) == ""
-                 and ownenv.ocr_default_packs({"LANG": "zh_CN.UTF-8"}) == ["eng", "chi_sim"]
-                 and ownenv.ocr_default_packs({"LANG": "en_US.UTF-8"}) == ["eng"], ""))
+                 and ownenv.system_language({"LANGUAGE": "ko:en"}) == "ko" and ownenv.system_language({"LANG": "POSIX"}) == "", ""))
+attempt("--setup's OCR packs: the ten with the most web text and osd for everyone, the user's own language's first "
+        "(a Polish user's beside them)",
+        lambda: (ownenv.ocr_default_packs({"LANG": "en_US.UTF-8"}) == ocr_set()
+                 and ownenv.ocr_default_packs({"LANG": "zh_CN.UTF-8"}) == ocr_set("chi_sim")
+                 and ownenv.ocr_default_packs({"LANG": "pl_PL.UTF-8"}) == ocr_set("pol"),
+                 str((ownenv.ocr_default_packs({"LANG": "en_US.UTF-8"}), ownenv.ocr_default_packs({"LANG": "pl_PL.UTF-8"})))))
 real_lang4, real_os4 = ownenv.system_language, getattr(ownenv, "_os_languages", None)
 saved_language4 = os.environ.pop("LANGUAGE", None)
 try:
@@ -2283,10 +2339,11 @@ finally:
         ownenv._os_languages = real_os4
     if saved_language4 is not None:
         os.environ["LANGUAGE"] = saved_language4
-attempt("... and the user's other languages count: an English Windows with Russian in its language list gets rus too "
-        "(at most three packs beyond English), and so does LANGUAGE's list on POSIX",
-        lambda: (packs_en_ru == ["eng", "rus"] and packs_many == ["eng", "chi_sim", "jpn", "kor"]
-                 and ownenv.ocr_default_packs({"LANG": "ru_RU.UTF-8", "LANGUAGE": "ru:en:de"}) == ["eng", "rus", "deu"],
+attempt("... and the user's other languages count: an English Windows with Russian in its language list gets rus first "
+        "(at most three of the user's packs beyond English), and so does LANGUAGE's list on POSIX",
+        lambda: (packs_en_ru == ocr_set("rus") and packs_many == ocr_set("chi_sim", "jpn", "kor")
+                 and ownenv.ocr_default_packs({"LANG": "ru_RU.UTF-8", "LANGUAGE": "ru:en:de"}) == ocr_set("rus", "deu")
+                 and ownenv.ocr_default_packs({"LANG": "pl_PL.UTF-8", "LANGUAGE": "pl:uk:el:tr"}) == ocr_set("pol", "ukr", "ell"),
                  str((packs_en_ru, packs_many))))
 asked3 = []
 
@@ -2305,7 +2362,7 @@ saved_language3 = os.environ.pop("LANGUAGE", None)
 envsetup.fetch = fetch_names
 results3 = {}
 try:
-    for label_, lang_, named_ in (("zh", "zh-CN", ""), ("en", "en-US", ""), ("ru", "ru-RU", ""), ("zh+deu", "zh-TW", "deu")):
+    for label_, lang_, named_ in (("zh", "zh-CN", ""), ("en", "en-US", ""), ("ru", "ru-RU", ""), ("zh+ara", "zh-TW", "ara")):
         ownenv.system_language = lambda env=None, v=lang_: v
         d_, w_ = work_in("rp-env-ocrpack-")
         del asked3[:]
@@ -2330,15 +2387,17 @@ finally:
         ownenv._os_languages = real_os3
     if saved_language3 is not None:
         os.environ["LANGUAGE"] = saved_language3
-attempt("--setup fetches English and the pack of the user's own language, not Russian for everyone",
-        lambda: (results3["zh"][0] == ["eng.traineddata", "chi_sim.traineddata"] and results3["zh"][1] == ["eng", "chi_sim"]
-                 and results3["en"][0] == ["eng.traineddata"] and results3["en"][1] == ["eng"]
-                 and results3["ru"][0] == ["eng.traineddata", "rus.traineddata"], str(results3)[:200]))
-attempt("... READ_PAGE_OCR_LANGS adds to it, and the step says which language it took and which flag names others",
-        lambda: (results3["zh+deu"][1] == ["eng", "chi_tra", "deu"] and "the user's languages (zh-TW)" in results3["zh+deu"][2]
-                 and "--setup --ocr-langs eng+deu names others" in results3["zh+deu"][2], results3["zh+deu"][2]))
+attempt("--setup fetches the ten packs with the most web text and osd for everyone, the user's own language's first",
+        lambda: (results3["zh"][0] == [p + ".traineddata" for p in ocr_set("chi_sim")]
+                 and results3["zh"][1] == ocr_set("chi_sim")[:-1]
+                 and results3["en"][0] == [p + ".traineddata" for p in ocr_set()] and results3["en"][1] == TEN
+                 and results3["ru"][0] == [p + ".traineddata" for p in ocr_set("rus")], str(results3)[:300]))
+attempt("... READ_PAGE_OCR_LANGS adds to them, and the step says which it took, why, and which flag names others",
+        lambda: (results3["zh+ara"][1] == ocr_set("chi_tra")[:-1] + ["ara"]
+                 and "the user's languages (zh-TW)" in results3["zh+ara"][2] and "osd" in results3["zh+ara"][2]
+                 and "--setup --ocr-langs eng+ara names others" in results3["zh+ara"][2], results3["zh+ara"][2]))
 attempt("... from the mirror when one is named",
-        lambda: (mirror_asked == ["https://m.example/fast/eng.traineddata", "https://m.example/fast/chi_sim.traineddata"], str(mirror_asked)))
+        lambda: (mirror_asked == ["https://m.example/fast/%s.traineddata" % p for p in ocr_set("chi_sim")], str(mirror_asked)))
 tools_home = tempfile.mkdtemp(prefix="rp-env-ocrtools-")
 junk.append(tools_home)
 saved_ocr = os.environ.pop("READ_PAGE_OCR_LANGS", None)
@@ -2346,7 +2405,7 @@ saved_path3 = os.environ.get("PATH"), os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
 try:
     ownenv._tools(tools_home, {"ocr_langs": ["eng", "rus", "chi_sim", "osd"]})
     default_langs = os.environ.get("READ_PAGE_OCR_LANGS")
-    os.environ.pop("READ_PAGE_OCR_LANGS")
+    os.environ.pop("READ_PAGE_OCR_LANGS", None)
     ownenv._tools(tools_home, {"ocr_langs": ["eng", "rus"]})
     only_rus = os.environ.get("READ_PAGE_OCR_LANGS")
     os.environ["READ_PAGE_OCR_LANGS"] = "eng+deu"
@@ -2361,9 +2420,9 @@ finally:
             os.environ.pop(k_, None)
         else:
             os.environ[k_] = v_
-attempt("a read in the environment reads with the pack --setup fetched for the machine's language beside English; "
-        "Russian keeps its own rule (a Cyrillic page) and a variable the user set wins",
-        lambda: (default_langs == "eng+chi_sim" and only_rus is None and named_wins == "eng+deu", "%s %s %s" % (default_langs, only_rus, named_wins)))
+attempt("a read in the environment is not given the packs --setup fetched as READ_PAGE_OCR_LANGS (every page would be "
+        "read with all of them: each is read with its own); a variable the user set wins",
+        lambda: (default_langs is None and only_rus is None and named_wins == "eng+deu", "%s %s %s" % (default_langs, only_rus, named_wins)))
 
 # ---------------------------------------------------------------- no source in plain http (KNOWN-ISSUES 210)
 # An http index, registry or download host was used as it was - for the very parts no hash protects (yt-dlp and what
@@ -2881,7 +2940,7 @@ attempt("a read finds defuddle's files from npm ci's node_modules/.bin, as it di
 od3 = tempfile.mkdtemp(prefix="rp-env-named-")
 junk.append(od3)
 os.makedirs(os.path.join(od3, "tessdata"))
-for n_ in ("jpn", "deu", "chi_sim", "rus"):
+for n_ in ("ara", "hin", "chi_sim", "rus"):
     open(os.path.join(od3, "tessdata", n_ + ".traineddata"), "w").close()
 named_runs = {}
 real_fetch6, real_lang6, real_os6 = envsetup.fetch, ownenv.system_language, ownenv._os_languages
@@ -2889,9 +2948,9 @@ envsetup.fetch = fake_fetch
 ownenv.system_language, ownenv._os_languages = (lambda env=None: "en-US"), (lambda: [])
 saved_lang6 = dict((k_, os.environ.pop(k_)) for k_ in ("LANGUAGE", "READ_PAGE_LANG", "READ_PAGE_OCR_LANGS") if k_ in os.environ)
 try:
-    for label_, prev_, named_ in (("kept", {"ocr_named": ["jpn", "deu", "fra"]}, ""),          # fra: not on disk any more
-                                  ("older", {"ocr_langs": ["eng", "rus", "chi_sim", "jpn"]}, ""),  # before ocr_named
-                                  ("now", {"ocr_named": ["jpn", "deu"]}, "eng+kor")):
+    for label_, prev_, named_ in (("kept", {"ocr_named": ["ara", "hin", "tha"]}, ""),          # tha: not on disk any more
+                                  ("older", {"ocr_langs": ["eng", "rus", "chi_sim", "ara"]}, ""),  # before ocr_named
+                                  ("now", {"ocr_named": ["ara", "hin"]}, "eng+tha")):
         w_ = envsetup.Work(od3, "rn", "test")
         w_.prev = prev_
         if named_:
@@ -2908,13 +2967,13 @@ finally:
     os.environ.update(saved_lang6)
 attempt("a pack named once stays named: the next plain --setup keeps it (it was dropped, and reads went back to English), "
         "one the user deleted goes, and a setup.json of before keeps what it had beyond today's own",
-        lambda: (named_runs["kept"][1] == ["eng", "jpn", "deu"] and named_runs["kept"][2] == ["jpn", "deu"]
-                 and "named at an earlier --setup, kept for the next --setup: jpn+deu" in named_runs["kept"][0][1]
-                 and named_runs["older"][1] == ["eng", "rus", "chi_sim", "jpn"], str(named_runs)[:300]))
+        lambda: (named_runs["kept"][1] == TEN + ["ara", "hin"] and named_runs["kept"][2] == ["ara", "hin"]
+                 and "named at an earlier --setup, kept for the next --setup: ara+hin" in named_runs["kept"][0][1]
+                 and named_runs["older"][1] == TEN + ["ara"], str(named_runs)[:300]))
 attempt("... and what is named now replaces it (the user's own word)",
-        lambda: (named_runs["now"][1] == ["eng", "kor"] and named_runs["now"][2] == ["eng", "kor"], str(named_runs["now"])))
+        lambda: (named_runs["now"][1] == TEN + ["tha"] and named_runs["now"][2] == ["eng", "tha"], str(named_runs["now"])))
 attempt("READ_PAGE_LANG decides what --setup fetches, as it decides what a read asks for",
-        lambda: (lang_packs == ["eng", "chi_tra"], str(lang_packs)))
+        lambda: (lang_packs == ocr_set("chi_tra"), str(lang_packs)))
 rp_flag = load_rp("ocrflag")
 seen_flag = []
 real_setup = ownenv.setup

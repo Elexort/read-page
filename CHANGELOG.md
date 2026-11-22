@@ -8,6 +8,22 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A scanned page is read with the packs of its own script, from ten that `--setup` fetches for everyone**
+  (KNOWN-ISSUES 225). `--setup` fetched English and the packs of the user's own languages, and a scan was read with all
+  of them: a page in another script read as nothing (Chinese, Japanese, Korean, Arabic, Hindi: 80-98 % CER with
+  English). It fetches now the ten languages with the most web text by Common Crawl's CC-MAIN-2026-43 - `eng rus
+  chi_sim chi_tra jpn kor deu fra spa por`, 22.8 MiB -, the user's own beside them, and `osd` (10.1 MiB), tesseract's
+  own script detection: 30 MB more to download than English alone. Each page is read with the pack of the script OSD
+  sees on it - `chi_sim`, `chi_tra` and `jpn` alone, which read the English words in their text themselves, the others
+  with English beside them; a Han page with `chi_sim`, then `chi_tra` and `jpn` while the best reading is unsure; a
+  Latin page again with the pack of the language its words are in (`intl.latin_pack`) - and never with all of them at
+  once. On 40 scans in the ten languages: English alone 46.7 % CER at 0.95 s a page, all ten at once 5.6 % at 5.2 s
+  (Korean 35 %), chosen per page 1.4 % at 2.15 s - the CER of each page's own pack. OSD adds 0.3 s a page (0.25-0.6); an
+  English scan reads the same, 1.19 s against 0.92. A script whose pack is not here is named in `improve`
+  (`readpage.py --setup --ocr-langs eng+ara`). Measured on 94 synthetic scans in 24 languages, 16 Chinese, Japanese and
+  Korean ones with English words in them and 27 real ones (references/engines.md). `READ_PAGE_OCR_LANGS` still decides
+  when the user sets it: the environment no longer sets it from its packs. An environment set up before reads as it
+  did until the next `--setup`.
 - **Speech recognition for a video without captions was measured and left out** (KNOWN-ISSUES 15, by design): where an automatic track exists Whisper small is not better than it (WER 8.9 against 10.9 % over 43 clips), and it would add 287-345 MB to `--setup` and minutes of CPU an hour of speech.
 - **No source in plain http, for any part** (KNOWN-ISSUES 210). An http index (`UV_DEFAULT_INDEX`, `UV_INDEX_URL`,
   `PIP_INDEX_URL`, pip's own `index-url`, an entry of `UV_EXTRA_INDEX_URL`, `UV_INDEX` or `UV_FIND_LINKS`), npm's

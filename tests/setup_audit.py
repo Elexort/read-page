@@ -264,6 +264,12 @@ check("with tesseract and English alone the report offers another language pack"
       and "ocr-langs" in mod.setup_report(tess_only), str(ocr_row)[:120])
 check("no language-pack row where there is no tesseract",
       not [r for r in mod.setup_rows(empty) if r[0] == "ocr-langs"], "")
+# what --setup fetches now: the ten packs and osd, which picks each scanned page's own from them
+ten = caps_of(langs=("eng", "rus", "chi_sim", "chi_tra", "jpn", "kor", "deu", "fra", "spa", "por", "osd"), libs=True)
+ten_report = mod.setup_report(ten)
+check("the report lists the OCR packs and says each scanned page is read with its script's (osd), osd not among them",
+      "ocr langs : eng+rus+chi_sim+chi_tra+jpn+kor+deu+fra+spa+por, each scanned page read with its script's (osd)"
+      in ten_report, [ln for ln in ten_report.splitlines() if ln.startswith("ocr langs")][:1])
 
 # ---------------------------------------------------------------- this machine
 real = mod.caps()

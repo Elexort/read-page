@@ -1212,8 +1212,8 @@ def setup_rows(c):
         packs = fix("ocr-langs", "download a language's .traineddata (rus, deu, jpn...) into tessdata - "
                                  "github.com/tesseract-ocr/tessdata_fast - and name it in READ_PAGE_OCR_LANGS")
         if packs == SETUP:
-            packs += (" --ocr-langs eng+deu (English and the packs of the user's languages come by themselves; the "
-                      "flag names others)")
+            packs += (" --ocr-langs eng+ara (the ten languages with the most web text and the user's own come by "
+                      "themselves; the flag names others)")
         # after --setup the choice is made (English and the user's languages): the row is not a nag then
         rows.insert(at, ("ocr-langs", True if any(x != "eng" for x in langs) else (
             None if (ownenv.status().get("used") and ownenv.load().get("ocr_langs")) else False), packs,
@@ -1270,7 +1270,9 @@ def setup_report(c):
         fams = sorted({(b.get("name") or "?").split("-")[0] for b in brs})
         lines.append("browsers  : %s" % ", ".join(fams))
     if langs:
-        lines.append("ocr langs : %s" % "+".join(langs))
+        # osd: tesseract's script detection, which picks each scanned page's packs from these
+        lines.append("ocr langs : %s%s" % ("+".join(langs), ", each scanned page read with its script's (osd)"
+                                           if "osd" in (c.get("ocr_langs") or []) else ""))
     if miss:
         lines += ["", "worth adding - each line says what it buys, not a requirement:"]
         width = max(len(n) for n, _f, _g in miss)
@@ -4914,23 +4916,103 @@ OCR_DARK_ON_LIGHT = 120      # the second pass of a picture's OCR: darker than t
 
 
 def _ocr_own_packs():
-    """The language packs of the user's own languages, unless the user named the languages themselves."""
-    return [] if "READ_PAGE_OCR_LANGS" in os.environ else intl.locale_packs()
+    """The language packs of the user's own languages, and those `--setup --ocr-langs` was named (setup.json's
+    ocr_named; an older one's ocr_langs beyond English), unless the user named the languages for the read."""
+    if "READ_PAGE_OCR_LANGS" in os.environ:
+        return []
+    own = intl.locale_packs()
+    env = ownenv.status()
+    if env.get("used"):
+        info = ownenv.load(env.get("home"))
+        kept = info.get("ocr_named") if isinstance(info.get("ocr_named"), list) else [
+            x for x in (info.get("ocr_langs") or []) if x != "eng"]
+        own += [x for x in kept if isinstance(x, str) and x not in own and x not in ("eng", "osd")]
+    return own
 
 
-def _ocr_plan(have, page_text=""):
-    """(the packs to read with, the packs the read needs and this machine lacks). What READ_PAGE_OCR_LANGS names
-    (eng), the pack of the page's script (Chinese, Japanese, Korean, Russian text: intl.script_pack), and - when the
-    user did not name languages - the pack of the user's own language; only packs this machine has are used.
-    A pack named or called for by the text and missing is reported; the user's own is only a wish."""
+# A scanned page's script, as tesseract's own detection (OSD: osd.traineddata, which --setup fetches) names it, and the
+# packs that read it: the user's own pack of the script first, else the first one installed. A script with no pack
+# here, or none named, leaves the page to English and the user's own packs. Latin is English's, and the language of
+# its text (intl.latin_pack) has the page read again with that language's pack.
+OCR_SCRIPT_PACKS = {
+    "Cyrillic": ("rus", "ukr", "bel", "bul", "srp", "mkd", "kaz", "kir", "tgk", "mon"),
+    "Han": ("chi_sim", "chi_tra"), "Japanese": ("jpn",), "Hiragana": ("jpn",), "Katakana": ("jpn",),
+    "Korean": ("kor",), "Hangul": ("kor",), "Arabic": ("ara", "fas", "urd", "pus", "uig", "snd"),
+    "Devanagari": ("hin", "mar", "nep", "san"), "Greek": ("ell",), "Hebrew": ("heb", "yid"), "Thai": ("tha",),
+    "Bengali": ("ben", "asm"), "Tamil": ("tam",), "Telugu": ("tel",), "Kannada": ("kan",), "Malayalam": ("mal",),
+    "Gujarati": ("guj",), "Gurmukhi": ("pan",), "Oriya": ("ori",), "Sinhala": ("sin",), "Armenian": ("hye",),
+    "Georgian": ("kat",), "Ethiopic": ("amh", "tir"), "Khmer": ("khm",), "Lao": ("lao",), "Myanmar": ("mya",),
+    "Tibetan": ("bod",), "Syriac": ("syr",), "Thaana": ("div",),
+}
+# The confidence OSD gives its script from which the script chooses the packs, and a pack it needs and this machine
+# lacks is named; below it the page is read as one whose script nobody told. Measured on 94 synthetic scans in 24
+# languages (2026-11-22): 7 of 48 Latin pages were taken for Cyrillic, at 0.2-1.4, and Cyrillic pages gave 10-60; Han's
+# is low by OSD's own rule - its characters count for Japanese and Korean too - 0.5-1.4 on Chinese pages, Japanese
+# 2.0-2.7, Korean 0.8-1.6; Greek 0.7-5.4; Arabic, Hebrew, Devanagari and Thai 9-210; no page was taken for any script
+# but Latin, Cyrillic or its own.
+OCR_SCRIPT_TRUST = {"Cyrillic": 3.0, "Han": 0.3, "Japanese": 0.3, "Hiragana": 0.3, "Katakana": 0.3, "Korean": 0.3,
+                    "Hangul": 0.3}
+OCR_SCRIPT_TRUST_ELSE = 1.0
+# Packs that read a page alone, without English beside it: they read the English words in a Chinese or Japanese text
+# themselves (12-16 of 13-17 terms on a page, as many as with English beside them), and English beside them made the
+# rest worse and slower (CER 1.6 against 2.2 %, 2.0 against 3.3, 1.3 against 1.5; about 0.7 s more a page). kor is
+# not one: alone it read none of 14 English terms in a Korean text (with English beside it 10-11).
+OCR_ALONE = ("chi_sim", "chi_tra", "jpn")
+# OSD names Han, not which Chinese: on 16 Chinese pages (8 with English words in the text) chi_sim's mean word
+# confidence was 88-91 on simplified ones and 79-87 on traditional ones (where it misread a fifth to a third of the
+# characters), chi_tra's 86-90 on simplified ones (a fifth to a quarter misread) and 88-92 on its own; on 8 Japanese
+# pages both were 44-56, jpn 90-92. chi_sim reads a Han page first; under OCR_HAN_SURE chi_tra reads it too, and
+# under OCR_HAN_JAPANESE (no Chinese page's best reading was) jpn; a reading is kept when it is OCR_HAN_MARGIN more
+# confident than the best before it.
+OCR_HAN_SURE = 90
+OCR_HAN_JAPANESE = 70
+OCR_HAN_MARGIN = 3
+
+
+def _pack_script(pack):
+    """The script a pack reads ("Latin" for any pack of no script in OCR_SCRIPT_PACKS)."""
+    base = pack[:-5] if pack.endswith("_vert") else pack
+    return next((s for s, packs in OCR_SCRIPT_PACKS.items() if base in packs), "Latin")
+
+
+def _ocr_plan(have, page_text="", script=None):
+    """(the packs to read with, the packs the read needs and this machine lacks).
+
+    The user's word first: what READ_PAGE_OCR_LANGS names, and the pack of the page text's script beside it. Else the
+    page's own: the pack of its text's script (Chinese, Japanese, Korean, Russian text: intl.script_pack), English and
+    the user's own packs beside it; or the pack of the script OSD saw on a scan (`script`: its name and confidence;
+    OCR_SCRIPT_PACKS, OCR_SCRIPT_TRUST), English beside it unless the pack reads alone (OCR_ALONE); a scan OSD saw as
+    Latin, English and the user's Latin-script packs. Where neither tells, English and the user's own packs
+    (intl.locale_packs, and those --setup was named). Only packs this machine has are used. A pack the user named,
+    the text called for or the script needs, and that is not here, is reported; the user's own are only wishes."""
     asked = [x.strip() for x in OCR_LANGS.split("+") if x.strip()]
-    want = list(asked)
     hint = intl.script_pack(page_text)
-    for x in [hint] + _ocr_own_packs():
-        if x and x not in want:
-            want.append(x)
+    if "READ_PAGE_OCR_LANGS" in os.environ:
+        want, need = asked + [x for x in [hint] if x and x not in asked], asked + [hint]
+    else:
+        own = _ocr_own_packs()
+        name, conf = script or ("", 0.0)
+        trusted = not hint and conf >= OCR_SCRIPT_TRUST.get(name, OCR_SCRIPT_TRUST_ELSE)
+        packs = OCR_SCRIPT_PACKS.get(name, ()) if trusted else ()
+        # the user's own pack of the script first (a Ukrainian's ukr, a Taiwanese's chi_tra), else its first one here
+        pick = next((x for x in own if x in packs and (not have or x in have)), "") or next(
+            (x for x in packs if not have or x in have), "")
+        need = [hint or (packs[0] if packs and not pick else "")]
+        # a page whose text is in a Latin-script language: its pack, when it is here (a wish, never reported)
+        latin = "" if hint else intl.latin_pack(page_text)
+        if latin and latin != "eng" and (not have or latin in have):
+            hint = latin
+        if hint:
+            want = [hint, "eng"] + own
+        elif pick:
+            want = [pick] + ([] if pick in OCR_ALONE else ["eng"])
+        elif trusted and name == "Latin":
+            want = ["eng"] + [x for x in own if _pack_script(x) == "Latin"]
+        else:
+            want = ["eng"] + own + need
+    want = [x for i, x in enumerate(want) if x and x not in want[:i]]
     use = [x for x in want if not have or x in have]
-    lost = [x for x in want if have and x not in have and (x in asked or x == hint)]
+    lost = [x for x in want if have and x not in have and x in need]
     return (use or (["eng"] if "eng" in have else [x for x in have if x != "osd"][:1] or ["eng"])), lost
 
 
@@ -5119,14 +5201,49 @@ def ocr_answer(workdir, manifest, n):
     return manifest, info
 
 
+def _tess_page(api, png):
+    """A rendered page to tesserocr: by its path where the library can open it (the file's own resolution: the page's
+    150 dpi), else as a picture with its resolution given - tesserocr hands a picture over re-saved without it, and
+    tesseract took 70 dpi for a page rendered at 150."""
+    if str(png).isascii():
+        api.SetImageFile(png)
+        return
+    try:
+        from PIL import Image
+    except ImportError:
+        shown, _outs, narrow_done = narrow_paths([png])
+        try:
+            api.SetImageFile(shown[0])
+        finally:
+            narrow_done()
+        return
+    with Image.open(png) as shot:
+        shot.load()
+        dpi = (shot.info.get("dpi") or (OCR_RENDER_DPI,))[0]
+        api.SetImage(shot)                               # no path for the library to open in the ANSI code page
+        api.SetSourceResolution(int(round(float(dpi))) or OCR_RENDER_DPI)
+
+
+def _osd_text(text):
+    """(script, confidence) from tesseract's OSD report (`--psm 0`: "Script: Latin", "Script confidence: 2.5")."""
+    m = re.search(r"(?m)^Script: *(\S+)", text or "")
+    c = re.search(r"(?m)^Script confidence: *([0-9.]+)", text or "")
+    try:
+        return (m.group(1), float(c.group(1))) if m and c else ("", 0.0)
+    except ValueError:
+        return "", 0.0
+
+
 def ocr_pages(paths):
     """Text from rendered pages, plus what happened with the languages.
 
-    A scanned PDF has no text layer, so the only way to read it locally is to look at the page.
-    Languages come from READ_PAGE_OCR_LANGS ("eng" by default, "eng+rus" for more);
-    READ_PAGE_TESSDATA points at a tessdata folder outside the install. A requested pack that is
-    not installed is reported instead of failing silently: tesseract would answer with garbage or
-    nothing at all. tesserocr (--setup's) reads in-process; tesseract's command is the fallback.
+    A scanned PDF has no text layer, so the only way to read it locally is to look at the page. Each page is read with
+    the packs of its own script (_ocr_plan): tesseract's script detection (OSD, osd.traineddata) names it, and a Latin
+    page whose words are another language's (intl.latin_pack) is read again with that language's pack when it is
+    here - never with every pack at once, which was slower and worse. READ_PAGE_OCR_LANGS, when set, decides for every
+    page; READ_PAGE_TESSDATA points at a tessdata folder outside the install. A pack the page needs and the machine
+    lacks is reported instead of failing silently: tesseract would answer with garbage or nothing at all. tesserocr
+    (--setup's) reads in-process; tesseract's command is the fallback.
     """
     lib = _tesserocr()
     exe = None if (lib or "tesseract" in SKIP or "ocr" in SKIP) else which("tesseract")
@@ -5137,57 +5254,100 @@ def ocr_pages(paths):
             info["error"] = "tesserocr is installed but " + _OCR_STATE["why"]    # not an OCR that found nothing
         return "", info
     have = info["have"]
-    use, info["missing"] = _ocr_plan(have, "")
+    _use, info["missing"] = _ocr_plan(have, "")
     info["maybe"] = [x for x in _ocr_own_packs() if have and x not in have]        # a wish of the user's languages
-    info["used"] = use
+    # the script of each page, unless the user named the packs; osd.traineddata is --setup's (an installer's too)
+    auto = "READ_PAGE_OCR_LANGS" not in os.environ
+    detect = auto and "osd" in have
     extra = (["--tessdata-dir", _tess_dir(os.environ["READ_PAGE_TESSDATA"]) or os.environ["READ_PAGE_TESSDATA"]]
              if os.environ.get("READ_PAGE_TESSDATA") else [])
     info["timeouts"] = []
     pages = list(enumerate(paths[:OCR_MAX_PAGES], 1))
     secs = budget.cap(OCR_TIMEOUT, floor=1.0)
     t_ocr = now()
-    done = {}
+    done, plans = {}, {}
 
-    def one(n, png):
+    def osd(png):
+        """(script, confidence) of a page, ("", 0.0) when OSD cannot tell (too few letters)."""
+        try:
+            if not lib:
+                shown, _outs, narrow_done = narrow_paths([png])
+                try:
+                    rc, so, _se = run_tool([exe, shown[0], "stdout", "--psm", "0"] + extra, timeout=min(secs, 10.0))
+                finally:
+                    narrow_done()
+                return _osd_text(so.decode("utf-8", "replace")) if rc == 0 else ("", 0.0)
+            with ownenv.tess_dir(lib[1]) as tdir:
+                api = lib[0].PyTessBaseAPI(path=tdir, lang="osd", psm=0)       # PSM.OSD_ONLY
+            with api:
+                _tess_page(api, png)
+                got = api.DetectOrientationScript() or {}
+            return str(got.get("script_name") or ""), float(got.get("script_conf") or 0.0)
+        except Exception as e:                               # noqa: BLE001  (no script told: the page's plan without it)
+            debuglog.exc("ocr: osd", e)
+            return "", 0.0
+
+    def read(png, use, limit):
+        """(rc, text, error, the mean confidence of its words - -1 from the command)."""
         if not lib:
             shown, _outs, narrow_done = narrow_paths([png])
             try:
-                done[n] = run_tool([exe, shown[0], "stdout", "-l", "+".join(use)] + extra, timeout=secs)
+                return tuple(run_tool([exe, shown[0], "stdout", "-l", "+".join(use)] + extra, timeout=limit)) + (-1,)
             finally:
                 narrow_done()
-            return
         # tesserocr (--setup's OCR) in-process: it lets the other threads run while it reads, and
         # its own clock stops a page at the step's seconds
         try:
             with ownenv.tess_dir(lib[1]) as tdir:            # started from the folder's parent where a narrow path fails
                 api = lib[0].PyTessBaseAPI(path=tdir, lang="+".join(use))
             with api:
-                if str(png).isascii():
-                    api.SetImageFile(png)                # the file's own resolution: the page's 150 dpi
-                else:
-                    try:
-                        from PIL import Image
-                        with Image.open(png) as shot:
-                            shot.load()
-                            dpi = (shot.info.get("dpi") or (OCR_RENDER_DPI,))[0]
-                            api.SetImage(shot)           # no path for the library to open in the ANSI code page
-                            # tesserocr hands the picture over re-saved without its resolution: tesseract
-                            # took 70 dpi for a page rendered at 150
-                            api.SetSourceResolution(int(round(float(dpi))) or OCR_RENDER_DPI)
-                    except ImportError:
-                        shown, _outs, narrow_done = narrow_paths([png])
-                        try:
-                            api.SetImageFile(shown[0])
-                        finally:
-                            narrow_done()
+                _tess_page(api, png)
                 try:
-                    api.Recognize(int(secs * 1000))
+                    api.Recognize(int(limit * 1000))
                 except TypeError:
                     pass
-                done[n] = (0, (api.GetUTF8Text() or "").encode("utf-8"), b"")
+                text = (api.GetUTF8Text() or "").encode("utf-8")
+                try:
+                    conf = int(api.MeanTextConf())
+                except (AttributeError, TypeError, ValueError):
+                    conf = -1
+                return 0, text, b"", conf
         except Exception as e:                               # noqa: BLE001
             debuglog.exc("ocr: tesserocr page", e)
-            done[n] = (1, b"", str(e).encode("utf-8", "replace"))
+            return 1, b"", str(e).encode("utf-8", "replace"), -1
+
+    def one(n, png):
+        t_page = now()
+        script = osd(png) if detect else ("", 0.0)
+        use, lost = _ocr_plan(have, "", script)
+        # a Han page: chi_sim reads it first whatever the user's own - its confidence tells a traditional page and
+        # chi_tra's does not tell a simplified one (OCR_HAN_SURE) - and chi_tra again where chi_sim is unsure
+        han = bool(lib) and use in (["chi_sim"], ["chi_tra"]) and "chi_sim" in have
+        if han:
+            use = ["chi_sim"]
+        plans[n] = (use, lost, script)
+        t_read = now()
+        got = read(png, use, max(1.0, secs - (t_read - t_page)))
+        once = now() - t_read
+        # ... then chi_tra, and jpn for a Japanese page OSD took for Han (kanji-heavy text: its kana are what make it
+        # Japanese to OSD), each while the best reading is that unsure and the page's time allows one more
+        for alt, sure in ((("chi_tra", OCR_HAN_SURE), ("jpn", OCR_HAN_JAPANESE)) if han and got[0] == 0 else ()):
+            if alt not in have or not 0 <= got[3] < sure:
+                continue
+            if now() - t_page + once >= secs:
+                break
+            other = read(png, [alt], max(1.0, secs - (now() - t_page)))
+            if other[0] == 0 and other[3] >= got[3] + OCR_HAN_MARGIN:
+                got, plans[n] = other, ([alt], lost, script)
+        # a page whose words are a Latin-script language with a pack here that it was not read with: read again with
+        # it, English beside it, while the page's time allows the same again
+        lang = intl.latin_pack(got[1].decode("utf-8", "replace")) if got[0] == 0 and auto else ""
+        took = now() - t_page
+        if lang and lang not in plans[n][0] and lang in have and took * 2 < secs:
+            again = read(png, [lang, "eng"], max(1.0, secs - took))
+            if again[0] == 0 and again[1].strip():
+                got, plans[n] = again, ([lang, "eng"], lost, script)
+        done[n] = got[:3]
 
     # the pages side by side: three took 1.3-1.5 s together, 0.7-1.5 s each in a row
     threads = [threading.Thread(target=one, args=pg, daemon=True) for pg in pages]
@@ -5205,9 +5365,17 @@ def ocr_pages(paths):
             # names this one instead of leaving a silent gap
             info["timeouts"].append(n)
             out.append("[page %d: OCR did not finish in %d s]" % (n, int(secs)))
+    # the packs the pages were read with, and those their scripts needed and this machine lacks, page by page
+    scripts = []
+    for n, _png in pages:
+        use, lost, script = plans.get(n) or (_use, [], ("", 0.0))
+        info["used"] += [x for x in use if x not in info["used"]]
+        info["missing"] += [x for x in lost if x not in info["missing"]]
+        scripts.append("%s %.1f" % script if script[0] else "?")
     budget.record("ocr", t_ocr, budget.ended(OCR_TIMEOUT, secs) if info["timeouts"] else "ok",
-                  own=OCR_TIMEOUT, given=secs, note="%s, %d pages, %d late" % (info["engine"], len(pages),
-                                                                                len(info["timeouts"])))
+                  own=OCR_TIMEOUT, given=secs, note="%s, %d pages, %d late, %s; osd: %s" % (
+                      info["engine"], len(pages), len(info["timeouts"]), "+".join(info["used"]),
+                      ", ".join(scripts) if detect else "none"))
     return "\n\n".join(out), info
 
 
@@ -8731,9 +8899,9 @@ def main(argv=None):
     ap.add_argument("--setup", action="store_true",
                     help="install every engine into the skill's own environment, a folder of the user's "
                          "(no admin rights; asks nothing - running it is the consent), or bring it up to date")
-    ap.add_argument("--ocr-langs", dest="ocr_langs", default="", metavar="eng+jpn",
-                    help="with --setup: the OCR language packs to fetch besides English and the user's own "
-                         "(kept for the next --setup; reads in the environment use them)")
+    ap.add_argument("--ocr-langs", dest="ocr_langs", default="", metavar="eng+ara",
+                    help="with --setup: the OCR language packs to fetch besides the ten it fetches for everyone and "
+                         "the user's own (kept for the next --setup; each scanned page is read with its script's)")
     ap.add_argument("--allow-external", dest="allow_external", action="store_true",
                     help="allow egress: public readers and archives may be used")
     ap.add_argument("--force-external", dest="force_external", action="store_true",
