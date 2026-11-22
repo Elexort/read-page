@@ -310,20 +310,26 @@ below runs on the standard library alone, so a machine that never ran `--setup` 
   curl_cffi leaves its impersonation's own header, the same), the browser's locale (`zh-CN`, `en-US` for English: one tag, which
   Chromium also sends as its Accept-Language), the subtitle tracks asked of yt-dlp when `READ_PAGE_SUB_LANGS`
   is not set (`zh-Hans,zh-CN,zh,en`; `ru,en`; `en`; with the track the video speaks in, `<lang>-orig`; a video
-  with none of them is asked once more for the language its own info names) and the OCR language packs
+  with none of them, or only a machine's, is asked once more for the language its own info names) and the OCR language packs
   (below). `READ_PAGE_SUB_LANGS` and `READ_PAGE_OCR_LANGS`, when set, are the user's own word and win.
 - **Which subtitle track.** YouTube offers a machine translation of a video's captions into every language, and
-  yt-dlp lists it beside the real tracks: a human track in the user's languages is read first, then the words as
-  spoken (speech recognition, the video's own language), a machine translation only when there is nothing else.
-  The answer's first line names the track (`subtitles en`, `subtitles fr, automatic`, `subtitles zh-Hans,
-  machine-translated from en`; `content.track`).
+  yt-dlp lists it beside the real tracks: a human track in the user's languages is read first, then the human track
+  in the language the speaker uses, then the words as spoken (speech recognition, the video's own language), then
+  the speech recognition of a dub, a machine translation only when there is nothing else. The speaker's language is
+  the audio track marked original, else yt-dlp's `language` (which, for a dubbed video, names the default audio,
+  the dub's). The answer's first line names the track (`subtitles en`, `subtitles fr, automatic`, `subtitles en,
+  automatic, of a dub (original audio zh-Hant)`, `subtitles zh-Hans, machine-translated from en`; `content.track`).
+  A format other than VTT (`--sub-format vtt/srt/best`: RuTube's SRT, TTML, ASS ...) is read by `scripts/subtitles.py`.
+  yt-dlp runs with `--ignore-errors`: YouTube answers 429 to a machine translation (the user's `en` for a Russian
+  talk), and yt-dlp then stopped with no track and no info written.
 - **OCR languages.** The packs asked for are `READ_PAGE_OCR_LANGS` (`eng`), the pack of the text's script
   (`chi_sim` or `chi_tra` by the characters only one of them has, `jpn` where kana is a real part of the text -
   a tenth at least - or kanji in Japan's own forms are there, `kor` for Hangul, `rus` for Cyrillic) and, unless
   the variable is set, the packs of the user's languages (at most three) - each only if installed. A pack the
   text called for and the machine lacks is `signals.ocr_missing_langs` and an `improve` line that names the
-  command (`READ_PAGE_OCR_LANGS=eng+jpn readpage.py --setup`: `--setup` fetches only English, the user's own
-  languages and what that variable names); the user's own language's pack is named when a scan gives no text,
+  command (`readpage.py --setup --ocr-langs eng+jpn`, a flag every shell runs as it is: `--setup` fetches only
+  English, the user's own languages - `READ_PAGE_LANG`'s first - and what it was named, which it keeps for the
+  next `--setup`); the user's own language's pack is named when a scan gives no text,
   and `--ocr N` names it on its `ocr:` line. tesserocr reads a page by its path when it can open it, so the
   page keeps its 150 dpi; a page under a path outside ASCII goes as a picture with its resolution given.
 - **Programs with narrow arguments.** On Windows pdftotext, tesseract's command and lynx get their arguments in
@@ -429,9 +435,13 @@ installs: uv 0.13.9 from
 PyPI (its wheel's SHA256 pinned in `envsetup.py` for every platform: `UV_WHEEL_SHA256`), CPython 3.13.18 from python-build-standalone through it (`--no-bin
 --no-registry`: nothing outside the folder), a venv `envs/py<version>-<lock hash>` with the 54
 packages of `scripts/setup-lock.txt` (each file pinned by SHA256: `tools/setup_lock.py` writes the lock
-with `--generate-hashes` - 1 092 files, about 94 KB - and uv checks the hashes of `-r` and of `-c`, the
-one-package-at-a-time fallback and the yt-dlp step included; yt-dlp, which floats, has none and is not
-refused for it; wheels only; a package with no wheel for the machine is left
+with `--generate-hashes` - 1 092 files, about 94 KB - and the set is the lock's: `--require-hashes` on the
+whole install refuses a package it does not name - measured with uv 0.13.9, an index that served the lock's own
+wheel with a PEP 658 metadata file naming one more package got that one installed, unhashed, without it - and the
+one-package-at-a-time fallback installs each top package as `name==<its pin>` with `-c` the lock under the same
+flag; the yt-dlp step has `--verify-hashes`, so the lock's packages in its tree keep their hashes and yt-dlp, which
+floats, is not refused for having none; on the command line, so no `verify-hashes = false` in a settings file turns
+any of it off; wheels only; a package with no wheel for the machine is left
 out and named) and, not pinned, yt-dlp in the newest release that has been out three days
 ([video.md](video.md)), Node: the one Playwright's wheel carries in its driver (24.21.0 for the pinned Playwright, at
 least 22.9 as npm 11 asks: nothing of nodejs.org is downloaded, 33-53 MB and 90-180 MB on disk saved) with npm 11.19.1 from
@@ -439,11 +449,20 @@ the registry's tarball, held to the SHA512 pinned in `envsetup.py` (`NPM_INTEGRI
 https `npm_config_registry` serves it, the hash decides); where there is no such Node - musl has no Playwright wheel, a
 wheel may lack its driver - Node 24.22.3 from nodejs.org checked against its archive's SHA256 pinned in
 `envsetup.py` (`NODE_SHA256`; a mirror - `NODEJS_ORG_MIRROR` - serves the archive, never its checksum; else
-`nodejs-wheel-binaries` 24.19.0 from PyPI, for networks that reach PyPI alone), defuddle 0.19.4
-through that npm (`--ignore-scripts`; its own 26 packages as npm resolved them as of one fixed
-instant, `--before=2026-11-19T00:00:00Z`: the pinned version must exist by it), Playwright's `chromium-headless-shell`
-(`PLAYWRIGHT_BROWSERS_PATH` = the folder's `browsers`), `eng` and `rus` from tessdata_fast 4.1.0
-with pinned SHA256 (plus any language `READ_PAGE_OCR_LANGS` names) - then a check of every engine
+`nodejs-wheel-binaries` 24.19.0 from PyPI, for networks that reach PyPI alone and for musl, its eight wheels pinned
+by SHA256 in `NODE_WHEEL_SHA256` and installed with `--require-hashes`), defuddle 0.19.4
+through that npm by `npm ci` of `scripts/defuddle-lock.json` (npm's own lock of defuddle and its 26 packages, written
+by `tools/setup_lock.py --npm` as npm resolves them as of one fixed instant, `--before=2026-11-19T00:00:00Z`: every
+tarball held to the SHA512 the lock names, whatever registry serves it; `--ignore-scripts --include=optional`; after it
+the tree is checked against the lock, for npm leaves out an optional package whose tarball does not match - linkedom,
+which defuddle's Node entry needs, is one - and says nothing; the files go where `npm install -g` put them,
+`node_modules` of the npm folder on Windows and `lib/node_modules` elsewhere, the command in its `node_modules/.bin`,
+which `setup.json` names as `npm_bin`; measured, 2.6-3.2 s from an empty cache against the global install's 3.5-3.7,
+the same 27 versions), Playwright's `chromium-headless-shell`
+(`PLAYWRIGHT_BROWSERS_PATH` = the folder's `browsers`), and English and the packs of the user's own languages from
+tessdata_fast 4.1.0 (plus what `--setup --ocr-langs` names, kept in `setup.json` as `ocr_named` for the next run;
+`READ_PAGE_OCR_LANGS` set for the `--setup` is the same), every pack of the release - 125, 339 MB - pinned by SHA256
+in `scripts/tessdata-lock.txt` (`tools/setup_lock.py --tessdata`) and held to it whoever serves it - then a check of every engine
 on a sample (import, defuddle on a page, the browser on a page, OCR of a rendered line). No
 pandoc since 2026-11-21: our own readers read EPUB, ODT and RTF ([documents.md](documents.md)).
 tessdata_fast against tessdata_best and the standard tessdata, through tesserocr on
@@ -499,7 +518,10 @@ shared the link - the engines took 59 s instead of 26 beside the browser's downl
 Each run builds the venv for the skill's pins (a new folder when they change, from uv's cache:
 7 s on that machine; the lock it was built from is copied into the folder, the yt-dlp updater's constraints),
 switches `setup.json` to it at the end, keeps the previous one for reads still in
-flight and deletes older ones. `readpage.py` and `mcp_server.py` check `setup.json` before their
+flight and deletes older ones, but one a process still runs from (an MCP server started under it: `/proc` on Linux,
+`ps` on macOS, a program that cannot be opened for writing on Windows) or one it cannot tell about. An environment
+whose files are links into uv's cache (a run with `UV_LINK_MODE=symlink` before such a link mode was refused) is
+built anew. `readpage.py` and `mcp_server.py` check `setup.json` before their
 other imports (`ownenv.use`): outside the environment the run goes on under its Python - `exec`
 on POSIX, on Windows a child with the same arguments on the same console, the first process itself in a job
 that dies with it before the child starts (so everything the read starts is born inside it, nested
@@ -518,13 +540,14 @@ has an `environment:` line (`signals.env_failed`) and `--caps` says why. On POSI
 nothing to fall back from, the first run of each build is a child (`setup.started` in the folder
 holds the build once one has started); after it `exec` is kept, and only that first start is guarded.
 
-What is fetched is checked as far as each source allows: the packages by the lock's hashes, uv's wheel
-and Node's archive (the fallback) by hashes pinned in `envsetup.py`, npm's tarball by its pinned SHA512,
-defuddle's packages by npm's own integrity values from the registry (`--before` fixes the set), the language data
-of English and Russian by SHA256 in the code and any other pack by Content-Length and by tesseract starting
-with it (`READ_PAGE_TESSDATA_URL` may serve them: an https folder or template; the pins decide), Playwright's
+What is fetched is checked as far as each source allows: the packages by the lock's hashes, and the set by the
+lock (`--require-hashes`), uv's wheel, Node's archive and PyPI's Node wheel (the fallbacks) by hashes pinned in
+`envsetup.py`, npm's tarball by its pinned SHA512, defuddle's packages by the SHA512 of each in its lock (`npm ci`),
+every OCR pack by its SHA256 in `tessdata-lock.txt` (`READ_PAGE_TESSDATA_URL` may serve them: an https folder or
+template; the pins decide), our Python by the SHA256 the pinned uv carries for each build, Playwright's
 browser by TLS and its Content-Length only (Playwright's design: no hash anywhere in its download), and
-yt-dlp - not pinned - by TLS. urllib trusts the machine's certificate store; uv and Node are told to
+yt-dlp with the five packages that float with it (`yt-dlp-ejs`, `brotli`, `mutagen`, `pycryptodomex`,
+`websockets`) - not pinned - by TLS, from an https source. urllib trusts the machine's certificate store; uv and Node are told to
 (`UV_SYSTEM_CERTS=1`, `NODE_USE_SYSTEM_CA=1`, checked in uv 0.13.9's and Node 24's own help: 153 system
 roots beside Node's 118 bundled ones on the measured machine) unless the user set them, so a proxy that inspects TLS with
 its root in the OS store works for every download; a step that fails on a certificate says so once.
@@ -542,25 +565,49 @@ environment keeps its files by their links, and the next update fetches what it 
 folder: the read cache (`read-page` in the temp folder) and, for a read that does not run in the
 environment, the skill's bytecode there.
 
-Where the installers fetch from can be redirected - by variables, a `uv.toml`, an `.npmrc`, a `pip.conf` -
-and the setup names each such setting at the top of its log, with its value (credentials left out), and keeps
-the lines in `setup.json` for the report. uv is run with `UV_NO_CONFIG=1` unless the user set it: uv looks
+Where the installers fetch from can be redirected - by variables, a `uv.toml`, a `UV_CONFIG_FILE`, an `.npmrc`, a
+`pip.conf` - and the setup names each such setting at the top of its log, with its value, and keeps the lines in
+`setup.json` for the report. An address shows as its scheme, host and port alone (`envsetup.redact`): nothing of a
+user, a password - an `@` or a `/` in it too -, a token in the path (Gemfury, Cloudsmith) or the query (`?apikey=`);
+in every line of the log, a step's note and an installer's last words included, and in the report, which redacts
+an older `setup.json`'s lines as well. No source is used in plain `http://` (`refuse_plain_http`): an index (uv's
+variables, `PIP_INDEX_URL`, pip's `index-url` - pip's own `trusted-host` is no licence here), an entry of a list
+(`UV_EXTRA_INDEX_URL`, `UV_INDEX`, `UV_FIND_LINKS`), our Python's mirror or list (`UV_PYTHON_INSTALL_MIRROR`,
+`UV_PYTHON_DOWNLOADS_JSON_URL`, which holds the hashes uv checks the Python against), the browser's host (Playwright's
+variables and npm's forms of them), npm's registry (the environment's or an `.npmrc`'s, a scope's too: registry.npmjs.org
+is given in its place), Node's and the OCR data's mirrors; a `UV_CONFIG_FILE` that names one is not read. The parts no
+hash protects - yt-dlp and what floats with it, the browser - were exactly what such a source served, to anyone on the
+network path. A loopback address stays usable; `READ_PAGE_ALLOW_HTTP=<host>` - one setting, hosts by commas - lets a
+company's intranet mirror through, and every line that uses it says it goes in plain http. pip, used only when
+pypi.org gives no uv, runs `--isolated` with uv's index. uv is run with `UV_NO_CONFIG=1` unless the user set it: uv looks
 for a `uv.toml` (or a `pyproject.toml` with `[tool.uv]`) in the working folder's parents, the user's and the
 system's configuration folders, and measured with uv 0.13.9 a `uv.toml` in a parent of the folder sent the
 install to the index it named, so what is installed would depend on where the folder is and on files nobody
 told about it. `UV_NO_CONFIG=1` ignores all of them (user-level too) and still honours the environment's
 variables (`UV_DEFAULT_INDEX`, `UV_EXTRA_INDEX_URL`, ...) and an explicit `UV_CONFIG_FILE` (also measured):
 a company's mirror is one variable. A `uv.toml` that names an index is listed as not read, with that advice,
-and a failed `pypi.org` check names it as the likely cause. `NODEJS_ORG_MIRROR` must be `https://`; a
-plain-http one is not used (nodejs.org is), though the archive's SHA256 is pinned either way.
+and a failed `pypi.org` check names it as the likely cause (and the http index left out, with the setting that would
+let it through). A `UV_CONFIG_FILE`'s keys are named like a `uv.toml`'s.
 pip's own configuration is the exception: its `index-url` (the user's and the system's `pip.ini`/`pip.conf`, or
-`PIP_CONFIG_FILE`) becomes `UV_DEFAULT_INDEX` when no variable names an index, because that is where a user in
+`PIP_CONFIG_FILE`, in pip's own order: the system's file, the user's two unless `PIP_CONFIG_FILE` names one, then
+that one, and `[install]` over `[global]` whatever file holds it; `os.devnull` for none) becomes `UV_DEFAULT_INDEX`
+when no variable names an index, because that is where a user in
 mainland China or behind a company keeps the mirror and uv does not look there; the log names the file. Mirrors,
 one variable each: `UV_DEFAULT_INDEX`, `UV_PYTHON_INSTALL_MIRROR` (our Python), `READ_PAGE_TESSDATA_URL` (OCR
-data), `PLAYWRIGHT_DOWNLOAD_HOST` (the browser), `npm_config_registry` (defuddle and npm's tarball),
-`NODEJS_ORG_MIRROR` (the Node fallback).
-`UV_NO_VERIFY_HASHES` would switch off the lock's hash check: it is not passed on. `NODE_TLS_REJECT_UNAUTHORIZED=0`
-and the like are named, not undone.
+data), `PLAYWRIGHT_DOWNLOAD_HOST` (the browser), `npm_config_registry` (defuddle and npm's tarball - which tries the
+user's registry, the environment's or the `.npmrc`'s, then registry.npmjs.org: its hash is pinned, and a registry that
+wants a token answers 401), `NODEJS_ORG_MIRROR` (the Node fallback).
+`UV_NO_VERIFY_HASHES` would switch off the lock's hash check: it is not passed on. A link mode of `symlink` (the
+variable, a `UV_CONFIG_FILE`'s, a `uv.toml` uv reads) is replaced by `hardlink`: the environment's files would be links
+into uv's cache, which the setup cleans - measured, the cleaning after a check that passed removed 7 962 of them.
+`NODE_TLS_REJECT_UNAUTHORIZED=0` and the like are named, not undone.
+
+On Windows a home outside the profile (`C:\read-page`) takes the ACL of its parent, and `C:\` lets every signed-in user
+modify what is made in it: `--setup` makes such a home its user's, SYSTEM's and the administrators' alone (`icacls`,
+inheritance off) where the folder is the skill's own - new, or holding nothing but what `--setup` keeps -, else says so
+with that command. On a POSIX mount with no Unix modes (WSL's `/mnt/c`, exFAT) every folder looks writable by all, so
+the environment's bytecode folder fails its check: the temp folder's is used then (reads had run with no bytecode,
+0.25 s more each).
 
 `caps()` - what this machine has - costs ~0.3 s on Windows (every tool name against every PATH
 folder and PATHEXT ending), so it is kept for an hour in `caps.json` in the cache and asked again

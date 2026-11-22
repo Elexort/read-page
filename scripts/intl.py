@@ -341,6 +341,13 @@ def browser_locale():
 _SUB_TRACKS = {"Hans": ("zh-Hans", "zh-CN", "zh"), "Hant": ("zh-Hant", "zh-TW", "zh-HK", "zh")}
 
 
+def track_names(tag):
+    """The names a video site gives the subtitle tracks of a language, best first: Chinese by script
+    (`zh-Hant`, `zh-TW`, `zh-HK`, `zh`), any other language by its primary subtag (`en-US` -> `en`)."""
+    script = chinese_script(tag)
+    return list(_SUB_TRACKS[script]) if script else [(tag or "").split("-")[0]]
+
+
 def sub_langs():
     """The subtitle tracks asked of yt-dlp, as a list: READ_PAGE_SUB_LANGS when it is set, else the user's
     languages - Chinese as YouTube names its tracks - then English."""
@@ -349,8 +356,7 @@ def sub_langs():
         return [x.strip() for x in env.split(",") if x.strip()]
     out = []
     for t in user_langs():
-        script = chinese_script(t)
-        for x in (_SUB_TRACKS[script] if script else (t.split("-")[0],)):
+        for x in track_names(t):
             if x not in out:
                 out.append(x)
     return out

@@ -61,9 +61,9 @@ so a file tool that stops at 2 000 still sees every word.
 | `login_required` | an account is needed (a password form with its sign-in label on a short page, a sentence of a wall - "sign in to continue", "for subscribers only" - in 20 languages, redirect to /login, 401/407) | not this skill: the user's own browser, or their paste |
 | `not_found` | 404 or a soft 404 (a 200 page that says it is not there, in 20 languages: in its title or heading, or with few words; the browser's page counts); the archive was tried with `--allow-external` | report it |
 | `empty` | no usable text: an app shell, an error stub, or a binary body; a document with no word of its own; a file named as an archive that is none (a `.doc` saved as `.docx`: `advice` says what it is) | follow `advice`: `--alternate` when the browser has not rendered it, `--screenshots` when it has; for a file that is no archive, what reads it |
-| `media_only` | the URL *is* a file (image/audio/video); it is saved, not converted | the text names the file: open it |
-| `too_large` | the file or page is over the cap, or a document was still arriving when its time ran out | the `reason:` line names the cap; `--download` lifts policy limits |
-| `error` | network, DNS, timeout; a transfer the server stopped (a stub, or a document stuck halfway); the server's own HTTP 4xx/5xx page (kept as the text); or an archive cut or damaged (a DOCX, an EPUB, a ZIP) whose whole members hold under 40 words of their own (`signals.broken_archive`) | retry later; for a public page `--allow-external` also tries a reader and the archive; for a cut or damaged archive what `advice` says - a whole copy of a file on this machine, `--refresh` for a server's |
+| `media_only` | the URL *is* a file (image/audio/video), whole; it is saved, not converted | the text names the file: open it |
+| `too_large` | the file or page is over the cap, or a document or a media file was still arriving when its time ran out | the `reason:` line names the cap, or how much arrived; `--download` lifts policy limits and the time limit |
+| `error` | network, DNS, timeout; a transfer the server stopped (a stub, or a document or a media file stuck halfway); the server's own HTTP 4xx/5xx page (kept as the text); or an archive cut or damaged (a DOCX, an EPUB, a ZIP) whose whole members hold under 40 words of their own (`signals.broken_archive`) | retry later; for a public page `--allow-external` also tries a reader and the archive; for a cut or damaged archive what `advice` says - a whole copy of a file on this machine, `--refresh` for a server's |
 
 `+ 3 blocks of page.md` after the engine: the extractor dropped those paragraphs, code blocks or
 tables and they were put back where they stood; `outside the text: 6.2 KB … - page.md` is what only
@@ -111,7 +111,8 @@ A PDF's tables come as Markdown tables where the layout model is installed (`--s
 | `--clear-cookies` | forget this site's stored cookies first (they otherwise live 6 hours; `--refresh` keeps them) |
 | `--screenshots [N]` | also capture the page as images: the first N screens of a 1280x784 window (default 2, 0 = none), two glued into one 1280x1568 picture, never scaled; needs a browser, works for PDFs too |
 | `--caps` | print what this machine has (libs, CLIs, browsers, keys, OCR languages, the environment in use) and exit |
-| `--setup` | install every engine into the skill's own environment, a folder of the user's that every agent sees (no admin rights; it first says the download, about 430-480 MB, and the 1.2-1.3 GB it keeps), or bring it up to date and check it; asks nothing - running it is the consent |
+| `--setup` | install every engine into the skill's own environment, a folder of the user's that every agent sees (no admin rights; it first says the download, about 360-390 MB, and the 0.85-1.0 GB it keeps), or bring it up to date and check it; asks nothing - running it is the consent |
+| `--ocr-langs eng+jpn` | with `--setup`: the OCR language packs to fetch besides English and the user's own; kept for the next `--setup`, and read with in the environment (the `ocr:` line and `improve` name this command for a pack a scan needs) |
 | `--version` | print the skill version, schema and cache build |
 
 **No URL is a command too**: `readpage.py` with nothing else prints the *setup report* - the
@@ -241,13 +242,18 @@ on disk, no OCR engine.
 
 ## Video
 
-Read through **subtitles** only: 30-second blocks, each with a timestamp (`[0:18] …`, citable), raw
-cues kept as `transcript.vtt`. The first line names the track (`subtitles en`; `subtitles fr, automatic` for
-speech recognition; `subtitles zh-Hans, machine-translated from en` - YouTube's translation, read only when the
-video has no other track; `content.track`). No captions: the page is read as a page (description, comments) and
-`signals.no_transcript` says why; an `.mp4` URL is `media_only`. Only a video's own address takes
-this path: `vimeo.com/about` is a page. No speech recognition, no frame analysis -
-[video.md](video.md) prices both.
+Read through **subtitles** only: 30-second blocks, each with a timestamp (`[0:18] …`, citable), the cues kept
+as `transcript.vtt` (WEBVTT whatever format the site sent: VTT, SRT, TTML, ASS ...). The first line names the
+track: `subtitles en` (a person's), `subtitles fr, automatic` (speech recognition), `subtitles en, automatic, of a dub
+(original audio zh-Hant)` (the recognition of a dubbed video's default audio, which is not the speaker's words: a
+track in the speaker's own language, a human one first, is read before it), `subtitles zh-Hans, machine-translated
+from en` (YouTube's translation, read only when the video has no other track); `content.track`. No captions: the
+page is read as a page (description, comments) and `signals.no_transcript` says why. A video that has not
+premiered, a site that refused the request and any other error yt-dlp stopped with are said in its words, with an
+`advice:` (`--refresh` once the video has started or the refusal has passed; [video.md](video.md)). A video URL
+that is itself a file (`.mp4`) is `media_only`; one cut in transit is `error` or `too_large`, with how much arrived,
+never a file that looks whole. Only a video's own address takes this path: `vimeo.com/about` is a page. No speech
+recognition, no frame analysis - [video.md](video.md) prices both.
 
 ## MCP
 

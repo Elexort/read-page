@@ -7,7 +7,7 @@ not, and why the usual "chunk + embed + ASR + OCR" recipe is not simply adopted.
 
 | Input | Path | Output |
 |---|---|---|
-| YouTube watch / shorts / live, TikTok, Vimeo, VK, RuTube, ... | `yt-dlp --skip-download --write-subs --write-auto-subs --sub-langs $READ_PAGE_SUB_LANGS --sub-format vtt` (the tracks: `READ_PAGE_SUB_LANGS`, else the user's language, then English, then the track the video speaks in - `zh-Hans,zh-CN,zh,en,.*-orig` for `READ_PAGE_LANG=zh-CN`, `en,.*-orig` for an English user; none of them: one more call for the language the video's own info names). The track read: a human one in the user's languages first, then the words as spoken (speech recognition), YouTube's machine translation (its address asks for `tlang=`) only when there is nothing else; the answer's first line names it | `content.md`: transcript in blocks of up to 30 s, each starting with `[0:18] ...`; `transcript.vtt` kept beside it |
+| YouTube watch / shorts / live, TikTok, Vimeo, VK, RuTube, ... | `yt-dlp --skip-download --write-subs --write-auto-subs --sub-langs $READ_PAGE_SUB_LANGS --sub-format vtt/srt/best` (the tracks: `READ_PAGE_SUB_LANGS`, else the user's language, then English, then the track the video speaks in - `zh-Hans,zh-CN,zh,en,.*-orig` for `READ_PAGE_LANG=zh-CN`, `en,.*-orig` for an English user; none of them, or only a machine's: one more call for the language the video's own info names). The track read: a human one in the user's languages first, then the human one in the language the speaker uses, then the words as spoken (speech recognition), the speech recognition of a dub, YouTube's machine translation (its address asks for `tlang=`) only when there is nothing else; the answer's first line names it | `content.md`: transcript in blocks of up to 30 s, each starting with `[0:18] ...`; `transcript.vtt` kept beside it |
 | a page with an embedded player | the page text, plus the player iframe is *not* followed | the text of the page, not of the video |
 | a video **file** (`.mp4` URL, `Content-Type: video/*`) | magic/type detection -> `media_only` | the file is saved, no text, no transcription |
 | audio file | `media_only` | the file is saved, no text |
@@ -16,9 +16,10 @@ Why the timestamps matter: they cost nothing (the VTT already has them) and they
 into something a document can cite. A cue every two seconds is noise, so cues are grouped until
 either a 2-second gap or 30 seconds of speech - that is `vtt_to_text(block_seconds=30)`.
 
-Limits today: captions only, one track per read (a human track in the user's languages, else the words as
-spoken, else - named so - YouTube's machine translation), no translation of our own, no speaker labels, no
-confidence. A video without captions produces an empty text with an honest note.
+Limits today: captions only, one track per read (a human track in the user's languages, else the human track in
+the language the speaker uses, else the words as spoken, else - named so - YouTube's machine translation), no
+translation of our own, no speaker labels, no confidence. A video without captions produces an empty text with an
+honest note.
 
 yt-dlp is the one engine `--setup` does not pin: the sites change under it
 from week to week. `--setup` installs `yt-dlp[default]` - with yt-dlp-ejs, the scripts for
@@ -36,6 +37,77 @@ Windows job around the read would end it with the read. The
 environment's yt-dlp is given the environment's Node (`--js-runtimes node:<path>`): a YouTube read
 then solves the challenge when one is asked ("Solving JS challenges using node"), 4.8 s
 against 2.8 s without it. A machine's own yt-dlp is left as it is.
+
+### Which text a track is
+
+Measured on a census of 222 public videos (2026-11-22: YouTube in nine languages, Bilibili, RuTube), 199 of whose
+infos could be read (163 YouTube, 31 RuTube, 5 Bilibili), as an English, a Russian, a Chinese and a German reader.
+
+- **The format.** yt-dlp is asked for VTT, then SRT, then the best the site has (`--sub-format vtt/srt/best`).
+  A site without VTT gives what it has: RuTube's automatic subtitles come as SRT - 13 of its 31 readable videos
+  had them, and the answer said "no subtitles" while yt-dlp wrote `video.ru.srt`. `scripts/subtitles.py` turns SRT,
+  SBV, TTML, DFXP, YouTube's srv1-3 and json3, ASS and LRC into the same WEBVTT cues, so the blocks and
+  `transcript.vtt` are the same whatever the site sent. A track a site names automatic (RuTube: `Русский • Авто`) is
+  named so in the answer, though yt-dlp lists it among the human ones. The 13 RuTube videos read 2 100 to 17 400
+  words each; the 18 with no track at all read as before.
+- **A dub.** A dubbed video offers its audio in several languages (60 of the 163 YouTube videos did: YouTube's
+  automatic dubbing), and yt-dlp's `language` names the default one, which can be the dub's (`en` for a Chinese
+  news video whose original is `zh-Hant`; a yt-dlp of today names the original). The speaker's language is the audio
+  marked original (`format_note`), else `language`. A speech recognition made from audio in another language is the
+  speech of a dub, not the speaker's words: the answer names it (`subtitles en, automatic, of a dub (original audio
+  zh-Hant)`), and a track in the speaker's own language - human, or speech recognition - is read before it. One
+  more case is named the same way and is not a dub: a video whose original audio YouTube takes for English while
+  it is spoken in Russian lists the Russian recognition as a dub's (1 of the 39 videos with a dub's recognition).
+  Of the 39: 7 have only that (5 Chinese news videos with the English dub's, a Portuguese one and the Russian talk
+  above), and 14 list the recognition of three dubs or more - up to 19 `-orig` tracks, which `.*-orig` asks for
+  all: 13-19 s a read, inside the 20 s step but not by much.
+- **A human track in the speaker's language** is asked for once more when the first call brought only speech
+  recognition (or a dub's, or a machine translation) and the user's languages do not include it: an English reader
+  of a Russian talk with human `ru` subtitles was handed YouTube's recognition. One more call, 4-13 s more, and the
+  answer names the track (`subtitles ru`). The names of a language's variants count (`pt-BR` spoken, `pt-PT`
+  subtitles; `zh-Hant`, `zh-TW`), several tracks of one language named by an id (`en-uYU-mmqFLq8`: a broadcaster's
+  CC1, DTVCC1, each a live-caption track that took 15 s to fetch) do not, nor does the live chat replay or Bilibili's
+  comments (`live_chat`, `danmaku`: they are listed with the subtitles and are not).
+- **A machine translation is refused, and that is not the end.** YouTube answers HTTP 429 to a request for its
+  machine translation, and the user's `en` is one for a Russian talk. yt-dlp then stopped with no track and no
+  info file written, so a Russian, Spanish or Portuguese talk read by an English user, a Chinese one by a Chinese
+  user, was "no subtitles" (16 of the 41 videos an English user read for real: every YouTube video not in English
+  and every one with many dubs). The call carries `--ignore-errors`: the
+  refused track is a warning, the others and the info arrive.
+
+What the answers did, the census's infos run through the code before and after with a stand-in for yt-dlp that has
+exactly the tracks the info lists (796 answers: 199 videos, four users; and again with YouTube refusing its
+translations, as it does today) and 41 videos read for real by an English user, 6 and 7 of them by a Chinese and a
+Russian one: where YouTube answers its translations, 618 answers are the same, 28 the same text with the dub named,
+52 (RuTube) were nothing and are the transcript, 10 a machine's recognition and are a human track, 88 a dub's
+recognition and are the speaker's own (22 videos); none is worse. Where it refuses them, 244 are the same and 470
+were "no subtitles" and are the recognition, 44 the human track, 22 the dub's speech, 10 a dub's recognition and are
+the speaker's own. Real, an English reader: 28 of 41 better, 6 the same, 5 the same text with the dub named, the
+premiere said instead of "no subtitles", and a RuTube read that ran out of time (read at the rerun); the Chinese and
+the Russian reader's 13 videos: 10 better, 1 the same, 2 the same text, one named `subtitles ru` for a recognition
+before (without the info file nothing says which: the info arrives now).
+
+### What a video that gives no transcript answers
+
+The page is read as a page and `signals.no_transcript` says why; the `advice` and the `missing:` line name what to
+do. yt-dlp's own words decide it - its last `ERROR:` line, or the warning of a track it was refused:
+
+| yt-dlp said | the answer |
+|---|---|
+| a premiere or a live event that has not started (`Premieres in 2 hours`, `This live event will begin in 38 days.`) | `advice: the video has not started yet (…): it has no subtitles until it has aired; read it again after that, with --refresh`, and `missing: transcript - read it again after it has started, with --refresh`. It was `no subtitles in en,ru` and `missing: transcript - set READ_PAGE_SUB_LANGS`, which cannot help. No other road to a track is tried (youtube-transcript-api and markitdown cannot have one either); the page's own text, title and description, is the answer |
+| HTTP 429, too many requests, and nothing else arrived | `advice: the site refused the request for subtitles (…): try again in a few minutes, with --refresh` |
+| any other error (a private or members-only video, an age check, a country block, a bot check) | `advice: yt-dlp stopped with: …`: its words, not "no subtitles" |
+| nothing, and no track | `no subtitles in en,ru (set READ_PAGE_SUB_LANGS to change)`, the page read as a page |
+| the read's time ran out before it ended | `advice: yt-dlp did not finish in 20 s …: read it again, with --refresh` |
+
+`--refresh` is named because the answer of a read of the page is kept 15 minutes. Only subtitles are asked of
+YouTube (`--skip-download`): a stream address, which answers 403 until its `available_at` (a few seconds after the
+info), is never requested, so that wait is not met on this path. A URL that is a media file is the other path, and
+a file cut in transit (the connection broke, the server stopped sending, the time ran out) was `media_only` with a
+short file, said nothing of the cut, and had no advice. It is `error` (`the connection broke after 11K of 1.9M of
+the video file`) or, when it was still arriving as the time ran out, `too_large` (`rerun with --download: no time
+limit, the file arrives whole`), and what arrived is not kept: a cut fragmented MP4 (YouTube's DASH) opens only as
+a stream, a cut MP4 with its index at the end not at all.
 
 ## The usual recipe, and why it is not copied
 
