@@ -293,7 +293,7 @@ one thing: a video read in the environment looks for a newer yt-dlp every three 
 | `trafilatura`, `readability-lxml`, `html2text` | second opinions and the full-page fallback | 2.2.0, 0.9, 2025.4.15 |
 | headless Chromium | JavaScript pages, hash routes, late mounts | Playwright 1.63's `chromium-headless-shell`; a Chrome or Edge on the machine is used for screenshots |
 | `pymupdf`, `pymupdf4llm` | PDF text, its tables as tables (a small layout model, on the pages that look like they hold one), and the scanned-PDF path | 1.28.2 |
-| our EPUB, ODT and RTF readers | headings, nested lists, tables with merged cells, notes, links, pictures where they stand, code, formulas (ODT), code pages (RTF); against pandoc on 52 files they lost nothing it kept, and kept the endnotes, headings, tables and non-Latin RTF it lost | built in: `scripts/docreaders.py`, the standard library alone, in a process of its own (pandoc left `--setup` on 2026-11-21) |
+| our EPUB, ODT, ODS, ODP and RTF readers | headings, nested lists, tables with merged cells, notes, links, pictures where they stand (an RTF's too), code, formulas (ODT), a sheet's table and a slide's text and notes (ODS, ODP), code pages (RTF); against pandoc on 52 files they lost nothing it kept, and kept the endnotes, headings, tables and non-Latin RTF it lost | built in: `scripts/docreaders.py`, the standard library alone, in a process of its own (pandoc left `--setup` on 2026-11-21) |
 | `youtube-transcript-api` | a YouTube transcript when yt-dlp has none | 1.2.5 |
 | OCR | scanned PDFs (3 pages a document) and `--ocr N` | tesseract 5.5.4 in `tesserocr` 2.13, English and the packs of the user's own languages (zh-CN `chi_sim`, zh-TW `chi_tra`, ja `jpn`, ko `kor`, ru `rus`, ...) from `tessdata_fast` |
 | `yt-dlp` | video subtitles and thumbnails | not pinned: the newest release that has been out three days, looked for again every three days by a video read |
@@ -424,7 +424,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | The 226-page check (2026-11-06), pages picked to be hard | **202 ok, 6 blocked, 4 login_required, 5 not_found, 7 error, 2 empty**, each with its reason; p50 2.1 s, max 22.9 s on a fast machine, p50 4.8 s, max 30.9 s on an emulated weak laptop |
 | A set read the way `SKILL.md` says (2026-11-07): `--allow-external` first, advice followed, the outline to jump | a 34-page set **34 of 34**, 37 held-out pages no rule was tuned on **37 of 37** (each fact taken from a real Chrome; walls and paywalls by an honest status or through a reader); **1.10 calls** a question; every answer within 9 911 bytes and 309 lines, no CR; from the cache p50 0.22 s, max 0.26; UTF-8 whole in cmd, PowerShell 5.1 and 7, Git Bash and WSL under five code pages |
 | Contract | every manifest in the suite validated against `references/manifest-schema.json` (17 manifests, 0 errors) |
-| Tests | answer contract **84**, statuses **75**, timeouts **15**, deadline **22**, formats **93** (90 off Windows), reading **19**, sources **42**, blocks **26**, images **53**, speed **8**, MCP parallel **14**, security **53** (49 on Windows), props **82**, fixes **154**, channel **9**, setup audit **39**, environment **175** (168 off Windows), MCP **28**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **126** (125 on macOS), Chinese, Japanese and Korean input **182** (175 off Windows, 147 without curl_cffi and charset_normalizer), browser live **32**; against the real services: sources live **20** |
+| Tests | answer contract **84**, statuses **75**, timeouts **15**, deadline **22**, formats **108** (105 off Windows), reading **19**, sources **42**, blocks **26**, images **54**, speed **8**, MCP parallel **14**, security **53** (49 on Windows), props **82**, fixes **154**, channel **9**, setup audit **39**, environment **175** (168 off Windows), MCP **28**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **158** (156 on macOS), Chinese, Japanese and Korean input **182** (175 off Windows, 147 without curl_cffi and charset_normalizer), browser live **32**; against the real services: sources live **20** |
 | CI | the offline suites on ubuntu (3.9 and 3.12), windows, macOS; a browser job on all three; and a real install - `--setup` from nothing into a folder with a space and Cyrillic in its path, every engine checked, the suites and a scanned PDF read through OCR under the environment's Python, `--setup` again with nothing to fetch - on Linux, Windows and macOS, x64 and arm64, a user's own clone-and-read, a bare Python, and containers of Alpine, Ubuntu 20.04 and 24.04, Debian 11, Rocky Linux 8, Fedora, Arch and openSUSE, a proxy that inspects TLS (Linux, Windows, macOS), a Windows whose Python has the code page 936 or 950 in a profile named in Chinese, README's ZIP, and the suites in a GBK locale on Linux (`install.yml`) |
 | Coverage | 65 % of the engine's statements |
 
@@ -452,10 +452,10 @@ It says so, and says what to do:
 | `blocked` | a wall answered - a challenge header or markup, a wall's words in any of 20 languages, or HTTP 403/419/429/451; archive or reader may have it (`advice` says which flag) |
 | `login_required` | a login marker was found; this skill does not log in |
 | `not_found` | a real `404`/`410`, or a soft-404 page |
-| `empty` | the page is a shell that no engine could fill, or the text was below the floor |
+| `empty` | the page is a shell that no engine could fill, or the text was below the floor; a document with no word of its own; a file named as an archive that is none (a `.doc` saved as `.docx`) |
 | `media_only` | the URL is a file; it was saved, not parsed |
 | `too_large` | over the parse limit; the bytes are on disk as `raw.*` |
-| `error` | the host did not answer, the transfer broke after a stub, or the server answered 4xx/5xx (its own page is kept as the text); the reason is in `status_reason` |
+| `error` | the host did not answer, the transfer broke after a stub, the server answered 4xx/5xx (its own page is kept as the text), or an archive is cut or damaged and its whole members hold under 40 words; the reason is in `status_reason` |
 
 ## Docs
 
@@ -463,7 +463,7 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (196 rows: 152 fixed, 3 planned, 41 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (207 rows: 162 fixed, 4 planned, 41 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License

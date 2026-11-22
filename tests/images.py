@@ -404,6 +404,11 @@ entries = [{"n": i, "file": "img/%02d-p.png" % i, "bytes": 2048, "dims": "10x10"
 lst = pictures.unplaced_list(entries)
 check("pictures without a place are listed, ten lines at most",
       lst.count("[img #") == 10 and "4 more" in lst and "manifest.json" in lst, lst[-80:])
+doc = ("Words of the document itself. [img #1 · 10x10 2K · p1] img/01-p.png and a tail.\n\n"
+       + pictures.unplaced_list(entries))
+own = pictures.unmarked(doc).split() if hasattr(pictures, "unmarked") else []
+check("a document's own words leave out its pictures' markers and their list (a deck of 9 pictures was `ok` "
+      "on their 60)", own == ["Words", "of", "the", "document", "itself.", "and", "a", "tail."], str(own))
 
 # ------------------------------------------------ --ocr N: a picture's text for a model that cannot see it
 try:

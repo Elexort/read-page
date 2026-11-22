@@ -47,6 +47,48 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   readers are (32 MB a member, 128 MB in all, 10 000 members - folder entries count - one member in memory at a time): 10 000 members
   in 0.3 s, a member that unpacks to 256 MB in 0.2 s and 98 MB. `zip_text` says under a member's name that it
   does not unpack (one such member ended the listing's reading).
+- **What a cut or damaged archive costs is bounded** (KNOWN-ISSUES 199): every byte unpacked to judge its members
+  counts, kept or not - members past the size limit and members with a wrong CRC were unpacked to 32 MB each and
+  thrown away uncounted, so 2 000 of them (62 MB of file) held a read 58 s and a DOCX of 200 of them 7-12 s. 256 MB
+  an archive (`ZIP_WHOLE_SPENT`), then the reason says the rest were not looked at; the read's clock is looked at
+  every member, and a member's data is read 64 KB at first: 0.98 s and 1.2 s now.
+- **A cut document's words are its own** (KNOWN-ISSUES 200): the 40-word rule of a cut archive and the 5-word
+  `empty` counted the skill's markers of the pictures and their list, so a deck whose slides were lost was `ok` on
+  60 words of markers; a document of a few words of its own (a DOCX that is one formula) is `ok`, not `empty`.
+- **A cut or damaged XLSX or PPTX keeps its whole sheets and slides** (KNOWN-ISSUES 201): they read nothing, the
+  workbook's or the presentation's list naming the lost one; what a package lacks of its index - content types,
+  root relationships, a workbook's list of sheets, all of which openpyxl writes last - is written from its parts. An
+  archive none of whose members unpacks where its table of contents says (a wrong offset in its end record) is read
+  from the members' own headers, an EPUB too. The advice says when whole members gave no text.
+- **A file cut in its table of contents is cut, its members all there** (KNOWN-ISSUES 202): it was "damaged" and
+  wanted "a whole copy for the rest"; `signals.broken_archive.all_members` says every member was looked at. A header
+  cut by the file's end is a cut too, a ZIP64 size past the end of the file a cut member (the whole member before
+  it was lost), and a header where a deflated member's data ends the next member (a wrong packed size lost them).
+- **A document's picture left out is never asked of its server** (KNOWN-ISSUES 203): a tracking pixel, a copy, one
+  over the size limit or the archive lacks kept its link, and over HTTP the read asked the document's server for
+  `rtf-pict-0003.png`, a name our RTF reader made up. Its link goes, or becomes its picture's marker, or a marker that
+  says why (`not in the document`), its address the name inside the document.
+- `rtf_images` reads each picture for its own size: a 100 MB buffer cost 17 ms a picture, 17 s at the reader's
+  1 000 (KNOWN-ISSUES 204); 3.7 s now through the CLI.
+- **An ODS sheet's repeats are capped by their text too** (KNOWN-ISSUES 205): one 64 KB cell repeated in 1 024
+  columns and 1 000 rows, 1 KB of file, was 16 GB of text; 32 MB a table, 128 MB a document, then the table is cut.
+- **ZIP names read in the code page their reading makes names of** (KNOWN-ISSUES 206): Shift-JIS names were CP437 to
+  the rule for accented letters, on a Japanese machine too (データ.csv was "âfü[â^.csv"), Russian and Greek ones
+  that Windows' own zipper writes in its OEM code page (CP866, CP737) were mojibake or Korean, and a GBK name that
+  happens to decode as UTF-8 was read so. Shift-JIS of kana and kanji with no character glued to a Latin letter,
+  the machine's OEM code page (GetOEMCP), CP866's and CP737's words now have their turn; a name is cut at a NUL and
+  has "/" for a backslash. 1 458 of 1 536 names right under eight machines' code pages (703 of 960 under five).
+- Smaller findings (KNOWN-ISSUES 207): a DOCX's formulas and text inside a hyperlink, an insertion, a smart tag or a
+  field are read; a DOCX whose XML breaks names python-docx and its error, not "no converter (pymupdf)"; an n-ary
+  operator's long body is not searched at every level; the readers' process says when its memory limit was refused
+  (`memory=not held` in the trace) and "it ran out of memory"; an RTF floating shape's alt text; the copies of a cut
+  archive's whole members go once read; the archive's background read keeps its own word on a broken archive; a
+  reader's remarks are `signals.document_note` and the answer's `document:` line, not `missing: converter`; the
+  schema has `images[].line`, and an answer with no text needs no `content.engine`.
+- **An archive cut in transit is read** (KNOWN-ISSUES 208) from the members that arrived whole, as a cut archive is:
+  it was `too_large` or `error` with nothing read. Its advice says the transfer was cut: `--refresh`, `--download`.
+- GPT-3's Table H.1 holds two of the models' columns in one cell of the layout model's grid (KNOWN-ISSUES 209):
+  filed, not fixed - a split would be measured on the corpus first.
 - The "documents" gap (install pymupdf) is a PDF's alone (KNOWN-ISSUES 177): it was named for an EPUB or ODT
   read on a machine without pymupdf, pdftotext or markitdown, which our readers read with the standard library.
   A DOCX, XLSX or PPTX whose library does not import names that library instead.

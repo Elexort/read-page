@@ -195,15 +195,26 @@ def mark(md, base, by_url, drop=()):
     return "".join(out)
 
 
+UNPLACED = "## Pictures not in the text"
+_UNPLACED = re.compile(r"(?m)^%s\n(?:[ \t]*\n|\[img #[^\n]*\n?|… and \d+ more: the `images` list of manifest\.json\n?)*"
+                       % re.escape(UNPLACED))
+
+
 def unplaced_list(entries):
     """Pictures of the shown blocks that found no place in the text (a document's pictures the
     converter does not name): ten lines at most, then where the rest are."""
     if not entries:
         return ""
-    lines = ["## Pictures not in the text", ""] + [marker(e) for e in entries[:LIST_LINES]]
+    lines = [UNPLACED, ""] + [marker(e) for e in entries[:LIST_LINES]]
     if len(entries) > LIST_LINES:
         lines.append("… and %d more: the `images` list of manifest.json" % (len(entries) - LIST_LINES))
     return "\n".join(lines) + "\n"
+
+
+def unmarked(md):
+    """A text without what this skill wrote about its pictures - their markers, and the list of those
+    with no place in it: the words a document holds of its own."""
+    return MARK.sub(" ", _UNPLACED.sub("", md or ""))
 
 
 def compact(lines):

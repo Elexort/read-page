@@ -183,11 +183,16 @@ def watch():
 threading.Thread(target=watch, daemon=True).start()
 import docreaders
 t0 = time.time()
-if sys.argv[3] == "zip":                   # readpage's reading of an archive that does not open whole
-    import readpage
-    got, info = readpage.zip_whole(sys.argv[2], os.path.dirname(sys.argv[5]))
+if sys.argv[3] in ("zip", "mend"):         # readpage's reading of an archive that does not open whole,
+    import readpage                        # or whose members do not all unpack
+    if sys.argv[3] == "zip":
+        got, info = readpage.zip_whole(sys.argv[2], os.path.dirname(sys.argv[5]))
+    else:
+        info = readpage.zip_mend(sys.argv[2], sys.argv[5] + ".zip")
+        info["reason"] = readpage.zip_reason(info)
     md, note = json.dumps({"how": info["how"], "members": info["members"], "whole": len(info["whole"]),
-                           "broken": info["broken"][-3:], "more": info["more"]}), info["reason"]
+                           "broken": info["broken"][-3:], "more": info["more"],
+                           "all": info.get("all_members")}), info["reason"]
 elif sys.argv[3] == "rtf-pictures":        # an RTF, its pictures written to RP_TEST_PICS
     md, note = docreaders.read(sys.argv[2], "rtf", t0 + float(sys.argv[4]), None, os.environ["RP_TEST_PICS"])
 else:
@@ -558,6 +563,15 @@ odf("repeats.ods", "application/vnd.oasis.opendocument.spreadsheet",
 md, info = hostile("repeats.ods", "ods")
 check("an ODS of 20 sheets of rows and cells repeated a million and 100 000 times stays small, and says it is cut",
       fine(info, 3, 150) and len(md) < 6000000 and "cut" in info.get("note", ""), show(info, md))
+# the caps count cells, and a repeat copies a cell's text: one cell of 64 KB repeated in 1 024 columns and 1 000
+# rows, 1 KB of file, is 16 GB of text (2 GB in 8 s here, and macOS has no limit to stop it)
+row = ('<table:table-row table:number-rows-repeated="1000"><table:table-cell table:number-columns-repeated="1024">'
+       '<text:p>%s</text:p></table:table-cell></table:table-row>' % ("x" * 65536))
+odf("big-cells.ods", "application/vnd.oasis.opendocument.spreadsheet",
+    '<office:spreadsheet><table:table table:name="Big">%s</table:table></office:spreadsheet>' % row)
+md, info = hostile("big-cells.ods", "ods", wall=60, mb=400)
+check("an ODS that repeats a 64 KB cell 1 024 times in 1 000 rows stays small, and says it is cut",
+      fine(info, 10, 400) and len(md) < 80000000 and "cut" in info.get("note", ""), show(info, md))
 md, info = scaled(lambda n: rtf("cellx.rtf", TRAP_RTF + b"\\trowd\\cellx9000000" +
                                 b"".join(b"\\cellx%d" % (20 * (k + 1)) for k in range(n)) +
                                 b"\\intbl a\\cell\\row" * n + b"\\pard after\\par}"), "rtf", 750, 3000)
@@ -776,6 +790,25 @@ check("a template's 60 MB picture is not unpacked to give python-docx the plain 
       peak < 20 and b"document.main+xml" in zipfile.ZipFile(io.BytesIO(got)).read("[Content_Types].xml"),
       "%.2fs, %.0f MB" % (secs, peak))
 
+# the archive's background read (archived_text -> doc_text) wrote the read's own word on a broken archive
+seen = {}
+
+
+def other_thread():
+    readpage._ZIPS["read"] = {"how": "cut"}
+    readpage._OFFICE["missing"] = "python-docx"
+    seen["other"] = readpage._ZIPS.get("read")
+
+
+readpage._ZIPS.clear()
+readpage._OFFICE.clear()
+worker = __import__("threading").Thread(target=other_thread)
+worker.start()
+worker.join()
+check("another thread's broken archive and office state are its own, not the read's (they were shared)",
+      readpage._ZIPS.get("read") is None and not readpage._OFFICE.get("missing") and seen.get("other"),
+      "%r %r" % (readpage._ZIPS.get("read"), readpage._OFFICE.get("missing")))
+
 # KNOWN-ISSUES 133: an archive's parts are read with a size cap of their own
 buf = io.BytesIO()
 with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -837,6 +870,24 @@ else:
     check("the readers' process cannot take more memory than its limit (%s), and takes what is under it" % HOW,
           p.returncode != 0 and b"MemoryError" in p.stderr and b"SET" in p.stdout and b"NOT" not in p.stdout,
           "%r %r" % (p.stdout[-40:], p.stderr[-160:]))
+    r = run_read(path("doc.rtf"), env={"READ_PAGE_SKIP": "browser", "READ_PAGE_TRACE": "1"})
+    check("... and the read's trace says the process's memory is held (a limit the OS refused went unsaid)",
+          b"event=document.own" in r.err and b"memory=held" in r.err,
+          repr([ln for ln in r.err.splitlines() if b"document.own" in ln][:1]))
+
+
+def out_of_memory(*_a, **_k):
+    raise MemoryError()
+
+
+real_odt = docreaders.odt_md
+docreaders.odt_md = out_of_memory
+try:
+    md, note = docreaders.read(path("doc.odt"), "odt")
+finally:
+    docreaders.odt_md = real_odt
+check("a reader that runs out of memory says so, and its plain text is the answer (the note read \"MemoryError: ;\")",
+      "ran out of memory" in note and "plain text" in note and md.strip(), repr(note))
 
 
 # ------------------------------------------------ KNOWN-ISSUES 167: a cut archive read from its members' headers
@@ -909,6 +960,143 @@ check("167: five members of 30 MB: four are taken (128 MB in all), the fifth is 
       fine(info, 30, 200) and got.get("whole") == 4 and "over the size limit" in info.get("note", ""), show(info, md))
 
 
+def raw_archive(name, members, toc=True, cut=None):
+    """An archive written field by field, so its sizes and CRCs can say what its data does not: members
+    are (name, packed bytes, CRC, unpacked size, method) or with an extra field and a packed size of
+    their own last; toc=False leaves the table of contents out; `cut` keeps that many bytes."""
+    import struct
+    out, central = bytearray(), bytearray()
+    for m in members:
+        nm, packed, crc, usize, method = m[:5]
+        extra = m[5] if len(m) > 5 else b""
+        csize = m[6] if len(m) > 6 else len(packed)
+        nm = nm.encode("utf-8") if isinstance(nm, str) else nm
+        off = len(out)
+        out += struct.pack("<4sHHHHHIIIHH", b"PK\x03\x04", 20, 0, method, 0, 0x21, crc, csize & 0xFFFFFFFF,
+                           usize & 0xFFFFFFFF, len(nm), len(extra)) + nm + extra + packed
+        central += struct.pack("<4sHHHHHHIIIHHHHHII", b"PK\x01\x02", 20, 20, 0, method, 0, 0x21, crc,
+                               csize & 0xFFFFFFFF, usize & 0xFFFFFFFF, len(nm), 0, 0, 0, 0, 0, off) + nm
+    if toc:
+        start = len(out)
+        out += central + struct.pack("<4sHHHHIIH", b"PK\x05\x06", 0, 0, len(members), len(members), len(central),
+                                     start, 0)
+    with open(path(name), "wb") as fh:
+        fh.write(out if cut is None else out[:cut])
+    return name
+
+
+def deflated(data):
+    import zlib
+    c = zlib.compressobj(9, zlib.DEFLATED, -15)
+    return c.compress(data) + c.flush()
+
+
+def crc_of(data):
+    import zlib
+    return zlib.crc32(data) & 0xFFFFFFFF
+
+
+# What is unpacked to judge the members counts whether a member is kept or not: members past the size limit
+# and members whose CRC is wrong were each unpacked to 32 MB and thrown away, uncounted, in the read's own process
+FIRST = ("first.txt", b"FIRST-WHOLE words", crc_of(b"FIRST-WHOLE words"), 17, 0)
+OVER, UNDER = (32 << 20) + 4096, (32 << 20) - 4096
+over_z, under_z = deflated(b"\0" * OVER), deflated(b"\0" * UNDER)
+raw_archive("over.zip", [FIRST] + [("m%05d.bin" % k, over_z, crc_of(b"\0" * OVER), OVER, 8) for k in range(600)],
+            toc=False)
+md, info = hostile("over.zip", "zip", wall=90, mb=250)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: 600 members that unpack past the size limit (20 MB of file) stop at what an archive may unpack (each "
+      "was unpacked to 32 MB: 13 s)", fine(info, 6, 250) and got.get("whole") == 1 and got.get("members", 999) <= 12
+      and "not looked at" in info.get("note", ""), show(info, md))
+raw_archive("crc.zip", [FIRST] + [("m%05d.bin" % k, under_z, 7, UNDER, 8) for k in range(600)], toc=False)
+md, info = hostile("crc.zip", "zip", wall=90, mb=250)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: ... 600 members of 32 MB whose CRC is wrong, the same", fine(info, 6, 250) and got.get("whole") == 1
+      and got.get("members", 999) <= 12 and "not looked at" in info.get("note", ""), show(info, md))
+OFFICE_TYPES = ('<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                '<Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" '
+                'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+                '</Types>').encode()
+DOC = b'<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>'
+raw_archive("mend.docx", [("[Content_Types].xml", OFFICE_TYPES, crc_of(OFFICE_TYPES), len(OFFICE_TYPES), 0),
+                          ("word/document.xml", DOC, 1, len(DOC), 0)]
+            + [("word/media/z%05d.bin" % k, under_z, 7, UNDER, 8) for k in range(200)])
+md, info = hostile("mend.docx", "mend", wall=90, mb=250)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: an office file zipfile opens, its 200 members of 32 MB with a wrong CRC: mended within what an archive "
+      "may unpack (each was unpacked whole: 9 s)", fine(info, 6, 250) and got.get("whole") == 1
+      and "not looked at" in (got.get("more") or ""), show(info, md))
+for name in ("over.zip", "crc.zip", "mend.docx"):
+    os.unlink(path(name))                      # 20 MB each
+# an office package's index parts were kept in memory until the new archive closed: four .rels of 30 MB, 120 MB
+cut_archive("rels.zip", [("[Content_Types].xml", b"<Types/>")] + [("r%d/_rels/x.rels" % k, (b" " * (1 << 20), 30))
+                                                                  for k in range(4)])
+md, info = hostile("rels.zip", "zip", wall=60, mb=170)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: four .rels of 30 MB are written one at a time, not held in memory together (181 MB)",
+      fine(info, 20, 170) and got.get("whole") == 5, show(info, md))
+
+
+# A file cut inside its table of contents has every member whole: it is cut, not damaged, and nothing is missing
+def zipped(name, members):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for n, data in members:
+            z.writestr(n, data)
+    return buf.getvalue()
+
+
+NOTES = [("notes/part%d.txt" % k, ("PART-%d-FACT " % k + "words of the note " * 20).encode()) for k in range(3)]
+whole = zipped("notes.zip", NOTES)
+toc_at, toc_start = whole.rfind(b"PK\x05\x06"), zipfile.ZipFile(io.BytesIO(whole)).start_dir
+with open(path("cut-toc.zip"), "wb") as fh:
+    fh.write(whole[:(toc_start + toc_at) // 2])
+md, info = hostile("cut-toc.zip", "zip", wall=30, mb=150)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: a ZIP cut inside its table of contents is cut, every member found and whole (it was \"damaged\")",
+      fine(info, 10, 150) and got.get("how") == "cut" and got.get("whole") == 3 and got.get("all") is True,
+      show(info, md))
+last = zipfile.ZipFile(io.BytesIO(whole)).infolist()[2].header_offset
+with open(path("cut-head.zip"), "wb") as fh:
+    fh.write(whole[:last + 12])
+md, info = hostile("cut-head.zip", "zip", wall=30, mb=150)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: ... one cut 12 bytes into its last member's header is cut too, not damaged",
+      fine(info, 10, 150) and got.get("how") == "cut" and got.get("whole") == 2 and not got.get("all"), show(info, md))
+raw_archive("cut-extra.zip", [FIRST, ("named-last.txt", b"LAST", crc_of(b"LAST"), 4, 0, b"\x99\x99\x10\x00" + b"x" * 16)],
+            toc=False, cut=30 + 9 + 17 + 30 + 14 + 6)
+md, info = hostile("cut-extra.zip", "zip", wall=30, mb=150)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: ... one cut in a member's header after its name names that member, cut",
+      fine(info, 10, 150) and got.get("how") == "cut" and ["named-last.txt", "cut"] in (got.get("broken") or []),
+      show(info, md))
+# ZIP64 sizes past what a file can hold: the reading seeked there and failed, and the first member, whole, was lost
+huge = __import__("struct").pack("<HHQQ", 1, 16, 2 ** 64 - 1, 2 ** 64 - 1)
+raw_archive("zip64-huge.zip", [FIRST, ("huge.bin", b"x" * 100, crc_of(b"x" * 100), 0xFFFFFFFF, 0, huge, 0xFFFFFFFF)],
+            toc=False)
+md, info = hostile("zip64-huge.zip", "zip", wall=30, mb=150)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: a member whose ZIP64 size runs past the end of the file is cut, and the member before it whole (it was "
+      "\"damaged, before its first member\")", fine(info, 10, 150) and got.get("whole") == 1
+      and got.get("how") == "cut" and ["huge.bin", "cut"] in (got.get("broken") or []), show(info, md))
+# a deflated member whose header gives a packed size far larger than its data: the members after it were lost
+alpha = b"alpha words " * 50
+raw_archive("lie.zip", [("a.txt", deflated(alpha), crc_of(alpha), len(alpha), 8, b"", len(deflated(alpha)) + 10 ** 9),
+                        ("b.txt", deflated(b"beta words " * 50), crc_of(b"beta words " * 50), 550, 8)], toc=False)
+md, info = hostile("lie.zip", "zip", wall=30, mb=150)
+got = json.loads(md) if md.startswith("{") else {}
+check("167: a deflated member whose header says too large a size: the member after it is read too",
+      fine(info, 10, 150) and got.get("whole") == 2, show(info, md))
+# a small member whose size follows its data was read a megabyte ahead: 10 000 of them took 14 times as long
+cut_archive("dd10k.zip", [("m%05d.txt" % k, b"x") for k in range(10000)], descriptor=True)
+cut_archive("plain10k.zip", [("m%05d.txt" % k, b"x") for k in range(10000)])
+md, dd = hostile("dd10k.zip", "zip", wall=60, mb=150)
+_md, plain_ = hostile("plain10k.zip", "zip", wall=60, mb=150)
+check("167: 10 000 members whose sizes follow their data take about the time of 10 000 that do not",
+      "killed" not in dd and "killed" not in plain_ and (json.loads(md) if md.startswith("{") else {}).get("whole") == 10000
+      and dd["secs"] <= 4 * max(plain_["secs"], FLOOR), "%s against %s" % (show(dd, md), show(plain_)))
+
+
 # ------------------------------------------------ KNOWN-ISSUES 166: an RTF's pictures
 def tiny_png(w, h, rgb=(10, 120, 200)):
     import struct
@@ -950,6 +1138,13 @@ check("rtf pictures: a floating shape's picture (\\sp pib) is written too; one o
       "![](rtf-pict-0003.png)" in md.split("Floating.")[0] and len(on_disk) == 3 and "over 32 MB" in note, repr(note))
 md, _note = docreaders.read(path("pictures.rtf"), "rtf")
 check("rtf pictures: with no folder given they are passed over, as before", "![" not in md and "WMF" not in md, repr(md))
+FLOAT = (b"{\\rtf1\\ansi A floating shape: {\\shp{\\*\\shpinst{\\sp{\\sn shapeType}{\\sv 75}}{\\sp{\\sn pib}{\\sv "
+         b"{\\pict\\pngblip " + hexed(tiny_png(20, 20)) + b"}}}{\\sp{\\sn wzDescription}{\\sv A FLOATING CHART}}}} after it."
+         b"\\par}")
+md, note = attempt(docreaders.read, rtf("floating.rtf", FLOAT), "rtf", None, None, path("floating-pictures")) if \
+    "pictures" in docreaders.read.__code__.co_varnames else ("", "no pictures")
+check("rtf pictures: a floating shape's alt text, a property beside its picture's, is its picture's (it was lost)",
+      "![A FLOATING CHART](rtf-pict-0001.png)" in md, "%r %r" % (md[:160], note))
 many = b"{\\rtf1\\ansi " + b"".join(b"Picture %d: {\\pict\\pngblip %s}\\par " % (k, hexed(tiny_png(4, 4)))
                                     for k in range(1200)) + b"}"
 rtf("many.rtf", many)
@@ -957,6 +1152,14 @@ os.environ["RP_TEST_PICS"] = path("many-pictures")
 md, info = hostile("many.rtf", "rtf-pictures", wall=60, mb=200)
 check("rtf pictures: 1 200 pictures give 1 000, and the note says the rest were left out, in seconds",
       fine(info, 10, 200) and md.count("![](rtf-pict-") == 1000 and "past 1000" in info.get("note", ""), show(info, md))
+r = run_read(path("many.rtf"), env={"READ_PAGE_SKIP": "browser"})
+check("cli: ... and the read takes them in seconds (each was read with a 100 MB buffer: 17 ms a picture, 17 s)",
+      r.seconds < 10 and len(r.manifest.get("images") or []) == 1000, "%.1f s, %d pictures, %s" % (
+          r.seconds, len(r.manifest.get("images") or []), r.manifest.get("status")))
+said = (r.manifest.get("signals") or {}).get("document_note") or ""
+check("cli: ... the reader's word on the pictures it left out is the answer's `document:` line, not a missing "
+      "converter", "past 1000" in said and "document: " in r.text and "converter" not in json.dumps(
+          r.manifest.get("missing") or []), "%r %s" % (said, json.dumps(r.manifest.get("missing"))[:120]))
 r = run_read(path("pictures.rtf"), env={"READ_PAGE_SKIP": "browser"})
 text, imgs = r.file("content.md"), r.manifest.get("images") or []
 files = [e.get("file") or "" for e in imgs]
@@ -991,6 +1194,15 @@ if hasattr(docreaders, "omml_text"):
         "<m:r><m:t>2</m:t></m:r></m:sup></m:sSup>" * 50), 125000, 500000)
     check("OMML: a run of 1 MB 50 levels deep is read in linear time (each level looked at its whole part)",
           linear and got.count("a+") == 500000, note)
+    run = "<m:r><m:t>%s</m:t></m:r>" % ("x" * 4000000)
+    nary = omml("<m:nary><m:e>" * 99 + run + "</m:e></m:nary>" * 99)
+    frac = omml("<m:f><m:num><m:r><m:t>1</m:t></m:r></m:num><m:den>" * 99 + run + "</m:den></m:f>" * 99)
+    _n, t_nary = timed(docreaders.omml_text, nary)
+    _f, t_frac = timed(docreaders.omml_text, frac)
+    _n, t2 = timed(docreaders.omml_text, nary)
+    t_nary = min(t_nary, t2)
+    check("OMML: a 4 MB run 99 n-ary operators deep costs what 99 fractions do (its body was searched at each level)",
+          t_nary <= 3 * max(t_frac, FLOOR), "%.3fs against %.3fs" % (t_nary, t_frac))
 else:
     check("OMML: a formula is read at all", False, "no docreaders.omml_text")
 
@@ -1048,6 +1260,51 @@ for label, members, prior, want in (
          ["說明文件.txt"])):
     codec, names, datas = names_of(raw_zip("names.zip", members), prior)
     check("names: %s" % label, names == want and len(datas) == len(want), "%r %r" % (codec, names))
+
+
+def names_on(p, prior, oem):
+    """names_of() on a machine whose CJK code page is `prior` and whose OEM code page is `oem`."""
+    with zipfile.ZipFile(p) as z:
+        codec = attempt(docreaders.fix_zip_names, z, prior, oem)
+        if isinstance(codec, Exception):
+            return codec, [], []
+        return codec, z.namelist(), [z.read(n) for n in z.namelist() if not n.endswith("/")]
+
+
+for label, members, prior, oem, want in (
+        # a Shift-JIS name alone was CP437 to the rule for accented letters, on a Japanese machine too
+        ("katakana alone (データ.csv was \"âfü[â^.csv\")", [("データ.csv".encode("cp932"), b"x")], "", "", ["データ.csv"]),
+        ("... on a Japanese machine", [("データ.csv".encode("cp932"), b"x")], "cp932", "", ["データ.csv"]),
+        ("ソフト.txt alone on a Japanese machine", [("ソフト.txt".encode("cp932"), b"x")], "cp932", "", ["ソフト.txt"]),
+        ("表.txt alone, its second byte a backslash (\"ò\\\\.txt\")", [("表.txt".encode("cp932"), b"x")], "", "",
+         ["表.txt"]),
+        ("kanji alone on a Japanese machine (議事録 was \"ïcÄûÿ^\")", [("議事録.txt".encode("cp932"), b"x")],
+         "cp932", "", ["議事録.txt"]),
+        ("GBK that happens to decode as UTF-8 (目录 was \"Ŀ¼\")", [("目录.txt".encode("gbk"), b"x")], "", "",
+         ["目录.txt"]),
+        # Windows' own zipper writes the OEM code page: CP866 on a Russian machine, CP737 on a Greek one
+        ("Russian in CP866 on a Russian machine", [("Отчёт за май.txt".encode("cp866"), b"x")], "", "cp866",
+         ["Отчёт за май.txt"]),
+        ("... upper case (it read as Latin letters: \"æÅêæÄè.TXT\")", [("СПИСОК.TXT".encode("cp866"), b"x")], "",
+         "cp866", ["СПИСОК.TXT"]),
+        ("... on a machine of another code page (it stayed \"ÄΓτ±Γ\")", [("Отчёт.txt".encode("cp866"), b"x")],
+         "", "", ["Отчёт.txt"]),
+        ("Greek in CP737 (it was read as Korean)", [("Αναφορά.txt".encode("cp737"), b"x")], "", "", ["Αναφορά.txt"]),
+        ("Latin names stay, on a Japanese machine too",
+         [("Müller.doc".encode("cp437"), b"x"), ("Bâle.txt".encode("cp437"), b"y")], "cp932", "",
+         ["Müller.doc", "Bâle.txt"]),
+        # a decoded name is cut at a NUL and has "/" for a backslash, as zipfile makes a name
+        ("a folder written with backslashes is a folder (文件夹\\ was a file)",
+         [("文件夹\\".encode("gbk"), b""), ("文件夹\\说明.txt".encode("gbk"), b"x")], "", "", ["文件夹/", "文件夹/说明.txt"]),
+        ("a name is cut at a NUL (说明\\x00evil.txt reached the listing whole)",
+         [("说明\x00evil.txt".encode("gbk"), b"x"), ("数据.csv".encode("gbk"), b"y")], "", "", ["说明", "数据.csv"])):
+    codec, names, datas = names_on(raw_zip("names.zip", members), prior, oem)
+    check("names: %s" % label, names == want and len(datas) == len([w for w in want if not w.endswith("/")])
+          and not isinstance(codec, Exception), "%r %r" % (codec, names))
+with zipfile.ZipFile(raw_zip("names.zip", [("文件夹\\".encode("gbk"), b""), ("文件夹\\a.txt".encode("gbk"), b"x")])) as z:
+    attempt(docreaders.fix_zip_names, z, "", "")
+    dirs = [i.is_dir() for i in z.infolist()]
+check("names: ... and zipfile takes it for one", dirs == [True, False], str(dirs))
 CHAP = "第一章.xhtml"
 p = raw_zip("gbk.epub", [(b"mimetype", b"application/epub+zip"), (b"META-INF/container.xml", CONTAINER.encode()),
                          (b"OEBPS/content.opf", ('<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" '

@@ -1008,6 +1008,35 @@ try:
               r.manifest.get("status") == "ok" and "`∑_(i=1)^n x_i`" in r.file("content.md")
               and "`[1, 2; 3, 4]`" in r.file("content.md"), "%s %r" % (r.manifest.get("status"),
                                                                        r.file("content.md")[:80]))
+        wrapped = docx.Document()
+        frac = '<m:oMath %s>%s</m:oMath>' % (MATH, WORD_FORMULAS[2][0])           # a/b
+        for label, xml in (("IN-A-LINK", '<w:hyperlink w:anchor="x" %s><w:r><w:t>LINK-TEXT </w:t></w:r>%s</w:hyperlink>'),
+                           ("IN-AN-INSERTION", '<w:ins w:id="1" w:author="a" %s><w:r><w:t>INSERTED-TEXT </w:t></w:r>%s</w:ins>'),
+                           ("IN-A-SMART-TAG", '<w:smartTag w:uri="u" w:element="e" %s><w:r><w:t>TAGGED-TEXT </w:t></w:r>%s'
+                                              '</w:smartTag>'),
+                           ("IN-A-FIELD", '<w:fldSimple w:instr="PAGE" %s><w:r><w:t>FIELD-TEXT </w:t></w:r>%s</w:fldSimple>')):
+            para = wrapped.add_paragraph(label + ": ")
+            para._p.append(parse_xml(xml % (MATH, frac)))
+            para.add_run(" after.")
+        wrapped.add_paragraph("NO-FORMULA: ")._p.append(parse_xml(
+            '<w:ins w:id="2" w:author="a" %s><w:r><w:t>ONLY-INSERTED</w:t></w:r></w:ins>' % MATH))
+        wp = os.path.join(tmpm, "wrapped.docx")
+        wrapped.save(wp)
+        got = mod2.office_fast(wp, "docx")
+        lost = [x for x in ("IN-A-LINK: LINK-TEXT `a/b` after.", "IN-AN-INSERTION: INSERTED-TEXT `a/b` after.",
+                            "IN-A-SMART-TAG: TAGGED-TEXT `a/b` after.", "IN-A-FIELD: FIELD-TEXT `a/b` after.",
+                            "NO-FORMULA: ONLY-INSERTED") if x not in got]
+        check("165: a formula in a hyperlink, an insertion, a smart tag or a field is read, and their text (both lost)",
+              not lost, "%s %r" % (lost, got[:300]))
+        one = docx.Document()
+        one.add_paragraph()._p.append(parse_xml('<m:oMathPara %s><m:oMath>%s</m:oMath></m:oMathPara>'
+                                                % (MATH, WORD_FORMULAS[0][0])))
+        onep = os.path.join(tmpm, "one-formula.docx")
+        one.save(onep)
+        r = run_read(onep, env=env)
+        check("165: a DOCX that is one formula is `ok`: a document's few words are the document (it was `empty`, "
+              "its text shown)", r.manifest.get("status") == "ok" and "`E=mc^2`" in r.file("content.md"),
+              "%s %r" % (r.manifest.get("status"), r.file("content.md")[:80]))
     except ImportError:
         check.skip("165: a DOCX's formulas", "python-docx is not installed here")
     try:
@@ -1140,6 +1169,9 @@ try:
           and "cut" in (r.manifest.get("advice") or "") and not no_converter(r), said(r))
     check("... its listing names the member that is not whole, and the advice what gets the rest (a whole copy)",
           "part2.txt (not read: cut)" in text and "whole copy" in (r.manifest.get("advice") or ""), said(r))
+    left_over = [n for n in os.listdir(r.dir) if n.startswith(("_whole-", "_mended-"))]
+    check("... and the archive made of its whole members is gone once read (it stayed for the cache's day)",
+          not left_over, str(left_over))
     with open(os.path.join(os.path.dirname(HERE), "references", "manifest-schema.json"), encoding="utf-8") as fh:
         schema = json.load(fh)["properties"]["signals"]["properties"].get("broken_archive") or {}
     check("... and references/manifest-schema.json has every field of signals.broken_archive",
@@ -1152,6 +1184,34 @@ try:
           r.manifest.get("status") == "error" and "not a whole archive" in str(
               (r.manifest.get("signals") or {}).get("status_reason")) and "no member of it is whole" in (
               r.manifest.get("advice") or "") and not no_converter(r), said(r))
+    toc = zipfile.ZipFile(io.BytesIO(whole)).start_dir
+    with open(cutzip, "wb") as fh:
+        fh.write(whole[:(toc + whole.rfind(b"PK\x05\x06")) // 2])       # halfway through its table of contents
+    r = run_read(cutzip, env=env)
+    sig = (r.manifest.get("signals") or {}).get("broken_archive") or {}
+    check("167: a ZIP cut in its table of contents: every member is whole, and the advice wants nothing more (it "
+          "said \"damaged\", and that a whole copy was needed for the rest)",
+          r.manifest.get("status") == "ok" and "PART-2-FACT" in r.file("content.md") and sig.get("how") == "cut"
+          and sig.get("all_members") is True and "all 3 of its members are whole" in (r.manifest.get("advice") or "")
+          and "the rest" not in (r.manifest.get("advice") or ""), said(r))
+    def cut_in_transit(h):
+        # the whole archive's length is sent, and two thirds of its bytes, then the connection closes
+        h.send_response(200)
+        h.send_header("Content-Type", "application/zip")
+        h.send_header("Content-Length", str(len(whole)))
+        h.send_header("Connection", "close")
+        h.end_headers()
+        h.wfile.write(whole[:third + 60])
+        h.wfile.flush()
+        h.close_connection = True
+    s.routes["/transit.zip"] = cut_in_transit
+    r = run_read(s.url("/transit.zip"), env=env)
+    sig = (r.manifest.get("signals") or {}).get("broken_archive") or {}
+    check("167: a ZIP cut in transit is read from the members that arrived whole (it was `error`, nothing read), and "
+          "the advice says the transfer was cut, not the server's copy",
+          r.manifest.get("status") == "ok" and "PART-1-FACT" in r.file("content.md") and sig.get("how") == "cut"
+          and (r.manifest.get("signals") or {}).get("partial") and "did not arrive" in (r.manifest.get("advice") or "")
+          and "server's copy" not in (r.manifest.get("advice") or ""), said(r))
     s.routes["/cut.zip"] = (200, {"Content-Type": "application/zip"}, whole[:third + 60])
     r = run_read(s.url("/cut.zip"), env=env)
     check("167: a server's cut ZIP sent whole: --refresh fetches it again, the same bytes while its copy is cut",
@@ -1187,8 +1247,137 @@ try:
         check("167: a DOCX whose picture does not unpack: its text is read, the member named (python-docx gave up)",
               r.manifest.get("status") == "ok" and "DOCX-LAST-FACT" in text and sig.get("how") == "damaged"
               and any("media/" in x for x in sig.get("not_whole") or []) and not no_converter(r), said(r))
+        # a wrong offset of the table of contents in its end record: zipfile opens the file, and no member
+        # unpacks where the table says it starts (python-docx: "negative seek value"); its members' own headers
+        # are right
+        eocd = data.rfind(b"PK\x05\x06")
+        wrong = bytearray(data)
+        wrong[eocd + 16:eocd + 20] = struct.pack("<I", struct.unpack("<I", data[eocd + 16:eocd + 20])[0] + 3)
+        offset = os.path.join(tmpc, "offset.docx")
+        with open(offset, "wb") as fh:
+            fh.write(bytes(wrong))
+        r = run_read(offset, env=env)
+        text, sig = r.file("content.md"), (r.manifest.get("signals") or {}).get("broken_archive") or {}
+        check("167: a DOCX whose table of contents is out of place is read from its members' own headers (it was "
+              "\"no converter\")", r.manifest.get("status") == "ok" and "DOCX-LAST-FACT" in text
+              and sig.get("whole") == sig.get("members") and sig.get("all_members") is True
+              and "not its members" in (r.manifest.get("advice") or "") and not no_converter(r), said(r))
     except ImportError:
         check.skip("167: a cut DOCX", "python-docx is not installed here")
+
+    def cut_in(data, member, into=200):
+        """The package's bytes up to `into` bytes into the data of `member`."""
+        info = zipfile.ZipFile(io.BytesIO(data)).getinfo(member)
+        return data[:info.header_offset + 30 + len(info.filename) + into]
+
+    def reordered(data, first=(), last=()):
+        """The package again: [Content_Types].xml first (as Excel and PowerPoint write it), then the members
+        whose names start with one of `first`, the others in their order, those that start with one of `last`."""
+        zin = zipfile.ZipFile(io.BytesIO(data))
+
+        def rank(i):
+            n = i.filename
+            return 0 if n == "[Content_Types].xml" else 1 if n.startswith(first) else 3 if n.startswith(last) else 2
+        infos = sorted(zin.infolist(), key=rank)
+        out = io.BytesIO()
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            for i in infos:
+                z.writestr(i.filename, zin.read(i))
+        return out.getvalue()
+    try:
+        import openpyxl
+        wb = openpyxl.Workbook()
+        for k, title in enumerate(("First", "Second", "Third")):
+            ws = wb.active if k == 0 else wb.create_sheet(title)
+            ws.title = title
+            for row in range(20):
+                ws.append(["SHEET-%d-FACT row %d" % (k + 1, row), "the quarterly figures", row * 7])
+        xbuf = io.BytesIO()
+        wb.save(xbuf)
+        xdata = xbuf.getvalue()
+        for label, made in (("as openpyxl writes it (its sheets first, the workbook and its content types last)",
+                             cut_in(xdata, "xl/worksheets/sheet3.xml")),
+                            ("as Excel orders it (the workbook and its content types first)",
+                             cut_in(reordered(xdata, last=("xl/worksheets/sheet3.xml",)), "xl/worksheets/sheet3.xml"))):
+            p = os.path.join(tmpc, "cut.xlsx")
+            with open(p, "wb") as fh:
+                fh.write(made)
+            r = run_read(p, env=env)
+            text = r.file("content.md")
+            check("167: an XLSX cut in its third sheet keeps the first two, %s (it read nothing)" % label,
+                  r.manifest.get("status") == "ok" and "SHEET-1-FACT row 19" in text and "SHEET-2-FACT row 19" in text
+                  and "SHEET-3-FACT" not in text and "cut" in (r.manifest.get("advice") or ""), said(r))
+    except ImportError:
+        check.skip("167: a cut XLSX", "openpyxl is not installed here")
+    try:
+        from pptx import Presentation
+        deck = Presentation()
+        for k in range(3):
+            sl = deck.slides.add_slide(deck.slide_layouts[1])
+            sl.shapes.title.text = "SLIDE-%d-TITLE" % (k + 1)
+            sl.placeholders[1].text = "SLIDE-%d-FACT %s" % (k + 1, EN * 3)
+        pbuf = io.BytesIO()
+        deck.save(pbuf)
+        p = os.path.join(tmpc, "cut.pptx")
+        with open(p, "wb") as fh:
+            fh.write(cut_in(pbuf.getvalue(), "ppt/slides/slide3.xml"))
+        r = run_read(p, env=env)
+        text = r.file("content.md")
+        check("167: a PPTX cut in its third slide keeps the first two (its slide list named the lost one: nothing read)",
+              r.manifest.get("status") == "ok" and "SLIDE-1-FACT" in text and "SLIDE-2-FACT" in text
+              and "SLIDE-3" not in text and "cut" in (r.manifest.get("advice") or ""), said(r))
+        # its pictures whole and its slides lost: the answer's words are the skill's list of the pictures
+        from pptx.util import Inches
+        pics = Presentation()
+        for k in range(3):
+            sl = pics.slides.add_slide(pics.slide_layouts[6])
+            sl.shapes.add_picture(io.BytesIO(noise_png(60 + k, 60)), Inches(1), Inches(1))
+        pbuf = io.BytesIO()
+        pics.save(pbuf)
+        p = os.path.join(tmpc, "pictures.pptx")
+        with open(p, "wb") as fh:
+            fh.write(cut_in(reordered(pbuf.getvalue(), ("ppt/media/",), ("ppt/slides/",)), "ppt/slides/slide1.xml", 40))
+        r = run_read(p, env=env)
+        check("167: a PPTX whose slides are lost and its pictures whole is an error, not `ok` on the list of its "
+              "pictures (60 words of markers)", r.manifest.get("status") == "error"
+              and len(r.manifest.get("images") or []) == 3 and "no text could be read" in (r.manifest.get("advice") or ""),
+              said(r))
+    except ImportError:
+        check.skip("167: a cut PPTX", "python-pptx is not installed here")
+    try:
+        import docx
+        d = docx.Document()
+        for k in range(4):
+            d.add_paragraph("DOCX-PICTURE-%d %s" % (k, EN))
+            d.add_picture(io.BytesIO(noise_png(50 + k, 50)))
+        dbuf = io.BytesIO()
+        d.save(dbuf)
+        p = os.path.join(tmpc, "pictures.docx")
+        with open(p, "wb") as fh:
+            fh.write(cut_in(reordered(dbuf.getvalue(), ("word/media/",), ("word/document.xml",)), "word/document.xml", 100))
+        r = run_read(p, env=env)
+        check("167: a DOCX cut in its text, its pictures whole before it: an error, not `ok` on its pictures' list",
+              r.manifest.get("status") == "error" and len(r.manifest.get("images") or []) == 4
+              and "DOCX-PICTURE" not in r.file("content.md")
+              and "no text could be read" in (r.manifest.get("advice") or ""), said(r))
+        # a DOCX whose XML breaks: python-docx's own error is named, not "no converter for this file type (pymupdf)"
+        zin = zipfile.ZipFile(io.BytesIO(dbuf.getvalue()))
+        bad = io.BytesIO()
+        with zipfile.ZipFile(bad, "w", zipfile.ZIP_DEFLATED) as z:
+            for i in zin.infolist():
+                part = zin.read(i)
+                z.writestr(i.filename, part.replace(b"<w:body>", b"<w:body>&undeclared;", 1)
+                           if i.filename == "word/document.xml" else part)
+        p = os.path.join(tmpc, "badxml.docx")
+        with open(p, "wb") as fh:
+            fh.write(bad.getvalue())
+        r = run_read(p, env={"READ_PAGE_SKIP": "browser,pandoc,markitdown"})
+        note = (r.manifest.get("signals") or {}).get("document_note") or ""
+        check("a DOCX whose XML breaks names python-docx and its error, not \"no converter (pymupdf)\", and is `empty` "
+              "with its pictures (it was `ok` on their list)", "python-docx could not read it" in note
+              and "pymupdf" not in json.dumps(r.manifest) and r.manifest.get("status") == "empty", said(r))
+    except ImportError:
+        check.skip("167: a cut DOCX with pictures", "python-docx is not installed here")
     ole2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 600       # a compound file, its directory's stream names
     for name, data, want in (
             ("old.docx", ole2 + "WordDocument".encode("utf-16-le") + b"\x00" * 900, "Word 97-2003"),
@@ -1227,6 +1416,53 @@ try:
     check("167: text served as a ZIP is answered with its text, and said to be no archive",
           "moved to the archive server" in r.file("content.md") and "is text" in (r.manifest.get("advice") or "")
           and not no_converter(r), said(r))
+
+    # ------------------------------------------------ a document's picture left out is never asked of its server
+    # a 1x1 counter in an RTF or a DOCX kept its link, which the picture phase resolved against the document's
+    # address: `rtf-pict-0002.png`, a name our reader made up, was asked of the server
+    def hexpic(data):
+        return data.hex().encode()
+    pix_rtf = (b"{\\rtf1\\ansi RTF-PICTURES-FACT " + (EN * 3).encode() + b"\\par {\\pict\\pngblip "
+               + hexpic(png(30, 20, (200, 10, 10))) + b"}\\par {\\pict\\pngblip " + hexpic(png(1, 1, (0, 0, 0)))
+               + b"}\\par The end.\\par}")
+    s.routes["/pics/pixel.rtf"] = (200, {"Content-Type": "application/rtf"}, pix_rtf)
+    before = len(s.log)
+    r = run_read(s.url("/pics/pixel.rtf"), env=env)
+    asked = [x["path"] for x in s.log[before:]]
+    text = r.file("content.md")
+    check("pictures: an RTF's 1x1 picture is left out with its link: nothing asked of the server for it, one marker",
+          asked == ["/pics/pixel.rtf"] and text.count("[img #") == 1 and "rtf-pict-0002" not in text and "![" not in text
+          and len(r.manifest.get("images") or []) == 1, "%s %s %r" % (asked, len(r.manifest.get("images") or []),
+                                                                   re.findall(r"\[img #[^\n]*", text)))
+    try:
+        import docx
+        dd = docx.Document()
+        dd.add_paragraph("DOCX-PIXEL-FACT " + EN * 3)
+        dd.add_picture(io.BytesIO(png(40, 40, (10, 200, 10))))
+        dd.add_picture(io.BytesIO(png(1, 1, (255, 255, 255))))
+        dd.add_paragraph("After the pictures.")
+        dbuf = io.BytesIO()
+        dd.save(dbuf)
+        s.routes["/pics/pixel.docx"] = (200, {"Content-Type": "application/vnd.openxmlformats-officedocument."
+                                                              "wordprocessingml.document"}, dbuf.getvalue())
+        before = len(s.log)
+        r = run_read(s.url("/pics/pixel.docx"), env=env)
+        asked = [x["path"] for x in s.log[before:]]
+        text = r.file("content.md")
+        check("pictures: ... a DOCX's 1x1 picture the same (word/media/image2.png was asked of the server)",
+              asked == ["/pics/pixel.docx"] and text.count("[img #") == 1 and "word/media" not in text,
+              "%s %r" % (asked, re.findall(r"\[img #[^\n]*", text)))
+    except ImportError:
+        check.skip("pictures: a DOCX's 1x1 picture", "python-docx is not installed here")
+    with open(picture_epub("served.epub"), "rb") as fh:
+        s.routes["/pics/book.epub"] = (200, {"Content-Type": "application/epub+zip"}, fh.read())
+    before = len(s.log)
+    r = run_read(s.url("/pics/book.epub"), env=env)
+    asked = [x["path"] for x in s.log[before:]]
+    gone = [e for e in r.manifest.get("images") or [] if not e.get("file")]
+    check("pictures: an EPUB's picture its archive lacks is named so, not asked of the server under its name there",
+          asked == ["/pics/book.epub"] and len(gone) == 1 and gone[0].get("why") == "not in the document"
+          and gone[0].get("n") == 3, "%s %s" % (asked, gone))
 finally:
     s.close()
 sys.exit(check.done())

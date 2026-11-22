@@ -235,6 +235,9 @@ def header(manifest, view, total_lines, text_bytes):
     if signals.get("env_failed"):
         # the environment's Python started and failed: this read ran in the machine's
         rows.append(("environment: " + str(signals["env_failed"]))[:300])
+    if signals.get("document_note"):
+        # what the document's reader says it left out or could not read (it was `missing: converter`)
+        rows.append(("document: " + str(signals["document_note"]))[:300])
     o = m.get("ocr")
     if isinstance(o, dict):
         # --ocr N: which picture, read how - or why it has no text here

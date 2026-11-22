@@ -93,12 +93,12 @@
     "content": {
       "type": "object",
       "additionalProperties": false,
-      "required": [
-        "engine"
-      ],
+      "description": "empty when no tier gave a text: a transfer cut before anything could be read, a page over the parse limit",
+      "required": [],
       "properties": {
         "engine": {
-          "type": "string"
+          "type": "string",
+          "description": "the tier whose text this is; absent when there is none"
         },
         "track": {
           "type": "string",
@@ -202,11 +202,19 @@
               "items": {
                 "type": "string"
               }
+            },
+            "all_members": {
+              "type": "boolean",
+              "description": "every member was looked at: the archive is cut or damaged in its table of contents (or its table names them all), so none is missing after the last one read; with no member in not_whole the document is all there"
             }
           }
         },
         "note": {
           "type": "string"
+        },
+        "document_note": {
+          "type": "string",
+          "description": "what the document's reader says of it: parts it left out or could not unpack, a table cut at its caps, pictures no browser or model shows, its time run out, its own error; printed as the answer's `document:` line (it was `missing: converter`)"
         },
         "login_hint": {
           "type": "string"
@@ -592,7 +600,7 @@
           },
           "why": {
             "type": "string",
-            "description": "why there is no file: 404, timeout, no time (N s), refused: ..., --deny-images"
+            "description": "why there is no file: 404, timeout, no time (N s), refused: ..., --deny-images; a document's own picture: not in the document, over the size limit, it does not unpack (its url is then its name inside the document, never asked of a server)"
           },
           "failed_at": {
             "type": "integer",
@@ -623,6 +631,10 @@
           "order": {
             "type": "integer",
             "description": "a document's picture: its place in document.xml or the EPUB spine"
+          },
+          "line": {
+            "type": "integer",
+            "description": "the line of content.md (page.md for a picture of page.md) its marker first stands on"
           }
         }
       }

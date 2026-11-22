@@ -54,6 +54,8 @@ ROWS = 20000                       # rows of one table
 WIDTH = 1024                       # columns of one table: a row's cells past it join its last cell
 CELLS = 250000                     # one table's grid, rows x columns, its spans and repeats included
 DOC_CELLS = 1000000                # the grids of all of one document's tables
+TABLE_BYTES = PART_BYTES           # the text of one table's cells, a repeated cell's as often as it is repeated
+DOC_TABLE_BYTES = TOTAL_BYTES      # ... of all of one document's tables
 TAG_MAX = 8192                     # characters of one tag: a "<" no ">" closes within them is text
 RUNS = 50000                       # runs of one look in an RTF paragraph; past them its rest is plain
 CELLX = 256                        # cell borders of one RTF row definition
@@ -72,12 +74,12 @@ class Late(Exception):
 class _Clock(object):
     """The time a reader has, and what it may still build for one document (table cells, spaces);
     what a cap cut is counted, to be said once in the note."""
-    __slots__ = ("until", "finish", "n", "t0", "cells", "spaces", "cuts")
+    __slots__ = ("until", "finish", "n", "t0", "cells", "spaces", "cuts", "table_bytes")
 
     def __init__(self, until, finish=None):
         self.until, self.n, self.t0 = until, 0, time.time()
         self.finish = finish if finish is not None or until is None else until + FINISH
-        self.cells, self.spaces, self.cuts = 0, 0, {}
+        self.cells, self.spaces, self.cuts, self.table_bytes = 0, 0, {}, 0
 
     def tick(self):
         if self.until is not None:
@@ -128,7 +130,9 @@ def read(path, kind, until=None, finish=None, pictures=None):
     except zipfile.BadZipFile as e:
         return "", "not a whole archive (%s): the file is cut or damaged" % str(e)[:80]
     except Exception as e:                                     # noqa: BLE001
-        why = "the reader failed: %s: %s" % (type(e).__name__, str(e)[:120])
+        # a MemoryError has no message: "the reader failed: MemoryError: " said nothing
+        why = ("the reader failed: it ran out of memory" if isinstance(e, MemoryError) else
+               "the reader failed: %s: %s" % (type(e).__name__, str(e)[:120]))
         try:
             md, note = plain(path, kind, until if until is None else max(until, time.time() + FINISH))
         except Exception:                                      # noqa: BLE001
@@ -382,20 +386,17 @@ def _grid_room(clock, rows, width):
 
 # A member's name is UTF-8 when its flag says so (bit 11); zipfile reads any other as CP437. Windows'
 # own zipper and many Chinese tools write the local code page and no flag: GBK names came out as
-# "╦╡├≈.txt", and an EPUB whose OPF names its chapters in UTF-8 lost them. A name whose CP437 reading
-# is no name anyone writes - box drawing, Greek, symbols - is UTF-8 when it decodes as UTF-8 (macOS
-# and Linux zippers with no flag), else the CJK code page that decodes every such name of the archive
-# into its script: the machine's own first, then kana for Shift-JIS, GB2312's characters for GBK,
-# Big5, Hangul for Korean. Plain ASCII and a CP437 name of accented letters stay as they are. Without
-# its code page on the machine, a Korean name of Hangul alone decodes as GBK too (its bytes are
-# GB2312's common characters): the code page of a Korean Windows is what tells them apart.
+# "╦╡├≈.txt", and an EPUB whose OPF names its chapters in UTF-8 lost them. The archive's names are read
+# in the code page whose reading of them reads as names (names_codec): UTF-8 (macOS and Linux zippers
+# with no flag), a CJK code page, CP437's Latin letters, an OEM code page's Cyrillic or Greek. Measured
+# 2026-11-22 on 185 names of seven scripts, alone and an archive of each script's together, under eight
+# machines' code pages: 1 458 of 1 536 read right (703 of 960 under the five the rules knew before). What is
+# left is what the bytes cannot tell: without its code page on the machine a Korean name of Hangul alone
+# decodes as GBK too (its bytes are GB2312's common characters), a Shift-JIS name of kanji alone whose
+# CP437 reading is Latin letters stays CP437 (仕様書 is "ÄdùlÅæ"), and on a CJK machine a Latin name
+# whose accented letter and the letter after it are one character of the machine's code page is read
+# in it (Öl.txt is 冤.txt on a Japanese one).
 CJK_CODECS = {936: "gb18030", 950: "big5", 932: "cp932", 949: "cp949"}
-
-
-def _latin(t):
-    """Is every letter of `t` past ASCII a Latin one (a CP437 name of accented letters: Größe, café)?"""
-    import unicodedata
-    return all(ord(c) < 0x80 or unicodedata.name(c, "").startswith("LATIN") for c in t)
 
 
 def _cjk_ok(t, codec):
@@ -460,20 +461,138 @@ def _common_share(text, codec):
     return intl.native_share(text, {"big5": "big5hkscs"}.get(codec, codec))
 
 
-def names_codec(raws, prior=None):
-    """The code page of an archive's names given the raw bytes of those with no UTF-8 flag: "utf-8", a
-    CJK code page, or "" - they are CP437, as zipfile reads them. `prior`: the machine's CJK code page
-    (machine_cjk() when None)."""
-    raws = [r for r in raws if any(b > 0x7F for b in bytearray(r))]
-    if not raws or all(_latin(r.decode("cp437")) for r in raws):
-        return ""
+# Windows' own zipper writes a name with no UTF-8 flag in the machine's OEM code page: CP437 on an American
+# machine, CP850 on a Western European one, CP866 on a Russian one, CP737 on a Greek one (a CJK machine's is its
+# ANSI code page, machine_cjk()). A one-byte code page's reading is a name's when every character past ASCII
+# is a letter of its script, and a Cyrillic or Greek word is lower case, Capitalised or UPPER, its letters
+# never mixed with ASCII ones (a Shift-JIS name read as CP866 is "ГfБ[Г^"), and has a vowel when it has
+# three letters or more. A CJK reading is a name's when every character past ASCII is one of its script's
+# own - an ideograph, kana for Shift-JIS, Hangul for Korean, bopomofo for Big5, the script's punctuation;
+# never a half-width kana or a fullwidth letter, which the bytes of another script make - and when no run of
+# them stands between two ASCII letters, and none of one character is glued to one: a Latin name read as
+# Shift-JIS is "M〕ler", "Gr批e", "始derungen", its accented letter and the letter after it one character.
+OEM_CODECS = dict((n, "cp%d" % n) for n in (437, 737, 775, 850, 852, 855, 857, 858, 860, 861, 862, 863, 865, 866, 869))
+_OEM_BY_LANG = {"ru": "cp866", "uk": "cp866", "be": "cp866", "bg": "cp866", "kk": "cp866", "el": "cp737",
+                "pl": "cp852", "cs": "cp852", "sk": "cp852", "hu": "cp852", "sl": "cp852", "hr": "cp852",
+                "ro": "cp852", "tr": "cp857", "he": "cp862"}
+_OEM_SCRIPT = {"cp866": "CYRILLIC", "cp855": "CYRILLIC", "cp737": "GREEK", "cp869": "GREEK", "cp862": "HEBREW"}
+_VOWELS = {"CYRILLIC": "аеёиоуыэюяіїєў", "GREEK": "αεηιουωάέήίόύώϊϋΐΰ"}
+_WORDS = re.compile(r"[^\W\d_]+")
+_HIGH_RUN = re.compile(r"[^\x00-\x7f]+")
+_TRAIL_BACKSLASH = re.compile(rb"[\x81-\xfc]\x5c")       # a double-byte character whose second byte is "\"
+
+
+def machine_oem():
+    """The OEM code page of this machine, or "": Windows' (GetOEMCP), else the one of the locale's language
+    (Russian CP866, Greek CP737...; a Western European or an English one is "": CP437 and CP850 read the
+    common letters alike). A CJK machine's is its ANSI code page: machine_cjk()."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            return OEM_CODECS.get(ctypes.windll.kernel32.GetOEMCP(), "")
+        except Exception:                                      # noqa: BLE001
+            return ""
+    lang = (os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE") or os.environ.get("LANG") or "").lower()
+    return _OEM_BY_LANG.get(lang[:2], "")
+
+
+def _one_byte(raws, codec):
+    """Do the names read in this one-byte code page as names of its script (see above)?"""
+    import unicodedata
+    script = _OEM_SCRIPT.get(codec, "LATIN")
+    for r in raws:
+        t = r.decode(codec, "replace")
+        for c in t:
+            if ord(c) >= 0x80 and not unicodedata.name(c, "").startswith(script + " "):
+                return False
+        if script == "LATIN":
+            continue
+        for w in _WORDS.findall(t):
+            if not any(ord(c) >= 0x80 for c in w):
+                continue
+            if any(ord(c) < 0x80 for c in w) or not (w.islower() or w.isupper() or w[1:].islower()):
+                return False
+            vowels = sum(1 for c in w.lower() if c in _VOWELS.get(script, ""))
+            if script in _VOWELS and len(w) >= 3 and (not vowels or len(w) >= 4 and vowels * 4 < len(w)):
+                return False                       # a word has its vowels (Russian ones are four in ten)
+            if re.search(r"(.)\1\1", w.lower()) or script == "GREEK" and not _greek_word(w):
+                return False
+    return True
+
+
+def _cjk_name(t, codec):
+    """Does this CJK reading read as names (see above)? A Korean name is Hangul: the bytes of another
+    script read as Korean make Hanja among its syllables."""
+    own = False
+    for c in t:
+        o = ord(c)
+        if o < 0x80:
+            continue
+        if (codec != "cp949" and (0x4E00 <= o <= 0x9FFF or 0x3400 <= o <= 0x4DBF or 0xF900 <= o <= 0xFAFF)) or \
+                (codec == "cp932" and 0x3041 <= o <= 0x30FF) or (codec == "cp949" and 0xAC00 <= o <= 0xD7A3) or \
+                (codec == "big5" and 0x3105 <= o <= 0x312F):
+            own = True
+        elif not (0x3000 <= o <= 0x303F or 0xFF01 <= o <= 0xFF20 or 0xFF3B <= o <= 0xFF40 or 0xFF5B <= o <= 0xFF65
+                  or 0x2010 <= o <= 0x2027 or o in (0xB7, 0xD7)):
+            return False
+    if not own:
+        return False
+    for m in _HIGH_RUN.finditer(t):
+        a, b = m.start(), m.end()
+        # an ASCII letter glued to the run, and whether it is a letter alone (a word of one letter)
+        left = a > 0 and t[a - 1].isalpha()
+        right = b < len(t) and t[b].isalpha()
+        lone = (left and not (a > 1 and t[a - 2].isalpha())) or (right and not (b + 1 < len(t) and t[b + 1].isalpha()))
+        if (left and right) or ((left or right) and (b - a == 1 or lone)):
+            return False
+    return True
+
+
+def _greek_word(w):
+    """A Greek word as Greek writes one: a final sigma at its end alone, one accent at most."""
+    if "ς" in w[:-1] or w.endswith("σ"):
+        return False
+    return sum(1 for c in w if c in "άέήίόύώΐΰΆΈΉΊΌΎΏ") <= 1
+
+
+def _utf8_names(raws):
+    """The UTF-8 reading of the names when every one decodes and they read as names of one script - a
+    Latin or Cyrillic name a macOS zipper wrote with no flag, a Chinese one - else None: GBK's 图片
+    decodes as UTF-8 too, to a Greek and a Latin letter side by side ("ͼƬ"), and 目录 to "Ŀ¼"."""
     try:
-        for r in raws:
-            r.decode("utf-8")
-        return "utf-8"
+        texts = [r.decode("utf-8") for r in raws]
     except UnicodeDecodeError:
-        pass
-    clean = {}
+        return None
+    import unicodedata
+    scripts = set()
+    for c in "".join(texts):
+        o = ord(c)
+        if o < 0x80 or c.isspace():
+            continue
+        if 0x3000 <= o <= 0x9FFF or 0xAC00 <= o <= 0xD7A3 or 0xF900 <= o <= 0xFFEF:
+            scripts.add("CJK")
+        elif unicodedata.category(c).startswith("L"):
+            scripts.add(unicodedata.name(c, "").split(" ")[0])
+        elif not unicodedata.category(c).startswith("P"):
+            return None                                    # a number, a symbol, a control, a mark: no name's
+    return texts if len(scripts) <= 1 else None
+
+
+def names_codec(raws, prior=None, oem=None):
+    """The code page of an archive's names given the raw bytes of those with no UTF-8 flag: "utf-8", a
+    CJK code page, a one-byte one ("cp866"), or "" - they are CP437, as zipfile reads them. `prior`: the
+    machine's CJK code page (machine_cjk() when None); `oem`: its OEM code page (machine_oem() when None).
+    In order: UTF-8 that reads as names; Shift-JIS that does (its kana, or kanji with no other CJK code page
+    on the machine) - a Shift-JIS name is CP437's Latin letters to a rule about them (データ.csv was
+    "âfü[â^.csv", 表.txt "ò\\.txt", on a Japanese machine too); the CJK reading that is plainly the common
+    characters of its script; the machine's CJK code page, its OEM one; CP437's Latin letters; CP866's
+    Cyrillic, CP737's Greek (they were read as Korean); then which CJK code page the characters point to."""
+    raws = [r for r in raws if any(b > 0x7F for b in bytearray(r))]
+    if not raws:
+        return ""
+    if _utf8_names(raws) is not None:
+        return "utf-8"
+    clean, named = {}, {}
     for codec in ("gb18030", "big5", "cp932", "cp949"):
         try:
             texts = [r.decode(codec) for r in raws]
@@ -481,17 +600,40 @@ def names_codec(raws, prior=None):
             continue
         if all(_cjk_ok(t, codec) for t in texts):
             clean[codec] = "".join(texts)
-    if len(clean) > 1:
+            named[codec] = all(_cjk_name(t, codec) for t in texts)
+    prior = machine_cjk() if prior is None else prior
+    if named.get("cp932") and any(0x3041 <= ord(c) <= 0x30FF for c in clean["cp932"]):
+        # the bytes of a Chinese or Korean name make half-width kana when read as Shift-JIS, and a Latin
+        # name's make one character of an accented letter and the next: a reading of kana and kanji is Japanese
+        return "cp932"
+    shares = dict((c, _common_share(t, c)) for c, t in clean.items())
+    known = all(v is not None for v in shares.values())
+    if len(clean) > 1 and known:
         # one reading that is plainly the common characters of its script, the others rare ones, wins - over the
         # machine's code page too (GBK names read as Big5 on a Taiwanese machine: "佽隴.txt"; Korean ones as GBK:
         # "焊绊辑.txt"); a close call goes on to the machine's code page and the rules below
-        shares = dict((c, _common_share(t, c)) for c, t in clean.items())
-        if all(v is not None for v in shares.values()):
-            ranked = sorted(clean, key=lambda c: -shares[c][0])
-            best, second = shares[ranked[0]], shares[ranked[1]]
-            if best[1] >= 2 and best[0] - second[0] >= 0.4:
-                return ranked[0]
-    prior = machine_cjk() if prior is None else prior
+        ranked = sorted(clean, key=lambda c: -shares[c][0])
+        best, second = shares[ranked[0]], shares[ranked[1]]
+        if best[1] >= 2 and best[0] - second[0] >= 0.4 and named.get(ranked[0]):
+            return ranked[0]
+    latin = _one_byte(raws, "cp437")
+    if named.get("cp932") and (prior == "cp932" or not named.get(prior) and (
+            not latin or any(_TRAIL_BACKSLASH.search(r) for r in raws))):
+        # kanji alone: Japanese on a Japanese machine; elsewhere when the CP437 reading is no Latin name, or
+        # puts a backslash right after an accented letter (表's second byte is one: "ò\\.txt")
+        return "cp932"
+    oem = machine_oem() if oem is None else oem
+    one = ([oem] if _OEM_SCRIPT.get(oem) else []) + [c for c in ("cp866", "cp737") if c != oem]
+    common = known and any(named.get(c) and shares[c][0] >= 0.5 for c in clean)
+    for codec in one if not common else ():
+        if _one_byte(raws, codec):
+            return codec                                   # Cyrillic, Greek: one script's letters, as its words are
+    if named.get(prior):
+        return prior
+    if oem in OEM_CODECS.values() and oem != "cp437" and _one_byte(raws, oem):
+        return oem                                         # a Latin OEM code page (CP850, CP852...)
+    if latin:
+        return ""
     if prior in clean:
         return prior
     if "cp932" in clean and any(0x3040 <= ord(c) <= 0x30FF for c in clean["cp932"]):
@@ -505,31 +647,35 @@ def names_codec(raws, prior=None):
     return next((c for c in ("cp932", "gb18030", "cp949") if c in clean), "")
 
 
-def fix_zip_names(z, prior=None):
+def zip_name(raw, codec):
+    """A member's name from its raw bytes read in `codec`, as zipfile makes a name: cut at a NUL, and a
+    backslash a "/" (a name decoded here kept them, so a folder `文件夹\\` was no folder; zipfile on
+    Windows turns them, and on other systems the same name now reads the same)."""
+    return bytes(raw).split(b"\x00", 1)[0].decode(codec or "cp437", "replace").replace("\\", "/")
+
+
+def fix_zip_names(z, prior=None, oem=None):
     """The names of zipfile `z`'s members with no UTF-8 flag read in the code page they were written
-    in (names_codec): each ZipInfo's `filename`, and the name `z` finds it by, become that reading;
-    its `orig_filename`, which zipfile checks against the member's own header, stays. Returns the
-    code page, "" when the names stay as zipfile read them."""
-    infos, raws = [], []
+    in (names_codec; `prior` and `oem` are its), cut at a NUL and with "/" for a backslash (zip_name):
+    each ZipInfo's `filename`, and the name `z` finds it by, become that reading; its `orig_filename`,
+    which zipfile checks against the member's own header, stays. Returns the code page, "" when the
+    names are CP437, as zipfile read them."""
+    raws = {}
     for i in z.infolist():
         if not i.flag_bits & 0x800:
             try:
-                raws.append(i.orig_filename.encode("cp437"))
-                infos.append((i, raws[-1]))
+                raws[id(i)] = i.orig_filename.encode("cp437")
             except UnicodeEncodeError:
                 continue
-    codec = names_codec(raws, prior)
-    if not codec:
-        return ""
+    codec = names_codec(list(raws.values()), prior, oem)
     taken = set(z.NameToInfo)
-    for i, raw in infos:
-        if not any(b > 0x7F for b in bytearray(raw)):
-            continue
-        try:
-            name = raw.decode(codec)
-        except UnicodeDecodeError:
-            continue
-        if name in taken:
+    for i in z.infolist():
+        raw = raws.get(id(i))
+        if codec and raw is not None and any(b > 0x7F for b in bytearray(raw)):
+            name = zip_name(raw, codec)
+        else:
+            name = i.filename.replace("\\", "/")              # zipfile cut it at a NUL itself
+        if name == i.filename or name in taken:
             continue
         if z.NameToInfo.get(i.filename) is i:
             del z.NameToInfo[i.filename]
@@ -1657,7 +1803,9 @@ def omml_text(el, depth=0):
         sup = "" if _mon(_mval(el, "supHide")) else part("sup").strip()
         body = part("e").strip()
         head = op + ("_" + _mg(sub) if sub else "") + ("^" + _mg(sup) if sup else "")
-        if body and re.search(r"[+\-−=<>≤≥≠±,;]", body) and not _bracketed(body):
+        # a body past 4 096 characters is not searched for an operator at each level (a 10 MB run
+        # 99 operators deep was searched 99 times): it gets parentheses, as _bracketed() says
+        if body and (len(body) > 4096 or re.search(r"[+\-−=<>≤≥≠±,;]", body)) and not _bracketed(body):
             body = "(%s)" % body
         return (head + " " + body).strip()
     if n == "d":
@@ -2100,9 +2248,11 @@ class _Odt(object):
         """A table's grid: repeated rows and cells `repeat` times each at most (None: as often as the
         grid's caps leave room for - a sheet's), a row WIDTH columns, the grid CELLS (DOC_CELLS with
         the document's other tables); past them the table is cut and the note says so (313 rows of 32
-        cells, each repeated 64 times both ways, took 40 s and gave 164 MB). A row with no text is
-        left out, and a row's empty cells at its end."""
-        rows, state = [], {"width": 0, "cut": False}
+        cells, each repeated 64 times both ways, took 40 s and gave 164 MB). The text the grid holds
+        is capped too, a repeated cell's counted as often as it is repeated: TABLE_BYTES a table,
+        DOC_TABLE_BYTES a document (a 64 KB cell repeated in 1 024 columns and 1 000 rows, 1 KB of
+        file, was 16 GB of text). A row with no text is left out, and a row's empty cells at its end."""
+        rows, state = [], {"width": 0, "cut": False, "bytes": 0}
         cap = repeat or (1 << 62)
 
         def walk(box, d):
@@ -2114,7 +2264,7 @@ class _Odt(object):
                         walk(r, d + 1)
                 elif r.tag == O_ROW:
                     self.clock.tick()
-                    cells = []
+                    cells, size = [], 0
                     for c in r:
                         if c.tag not in (O_CELL, O_COVERED):
                             continue
@@ -2124,24 +2274,31 @@ class _Odt(object):
                         if room <= 0:
                             if text:
                                 cells[-1] = (cells[-1] + " " + text).strip()
+                                size += len(text) + 1
                             continue
                         cells.extend([text] * min(rep, room))
+                        size += len(text) * min(rep, room)
                     while cells and not cells[-1]:
                         cells.pop()
                     if not cells:
                         continue
                     rep = min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), cap, ROWS - len(rows))
                     width = max(state["width"], len(cells))
-                    fit = _grid_room(self.clock, len(rows), width)
+                    fit, why = _grid_room(self.clock, len(rows), width), "table(s) cut at %d cells" % CELLS
+                    left = min(TABLE_BYTES - state["bytes"], DOC_TABLE_BYTES - self.clock.table_bytes - state["bytes"])
+                    if size and left // size < fit:
+                        fit, why = left // size, "table(s) cut at %d MB of text" % (TABLE_BYTES >> 20)
                     if fit < rep:
                         rep = max(0, fit)
                         state["cut"] = True
-                        self.clock.cut("table(s) cut at %d cells" % CELLS)
+                        self.clock.cut(why)
                     if rep:
                         state["width"] = width
+                        state["bytes"] += size * rep
                         rows.extend([cells] * rep)
         walk(el, 0)
         self.clock.cells += len(rows) * state["width"]
+        self.clock.table_bytes += state["bytes"]
         return _table_blocks(rows, self.clock)
 
     def cell(self, c, depth):
@@ -2293,6 +2450,7 @@ class _Rtf(object):
         # where the pictures go (None: they are passed over), how many and how much were written,
         # and the ones of formats no one shows, by format
         self.picdir, self.pics, self.pic_bytes, self.unshown = pictures, 0, 0, {}
+        self.shape = None                                # the last floating shape's group: (start, end)
         self.body = _Sink("body")
         self.st = [self.body, 1, None, False, False, False, False, 0, None, 0, 0, False, self.body, None]
         self.stack = []
@@ -2374,6 +2532,10 @@ class _Rtf(object):
         if not m:
             return pos
         name, star = m.group(1), self.s.startswith("\\*", pos)
+        if self.picdir is not None and name == "shpinst" and (self.shape is None or pos > self.shape[1]):
+            # a floating shape: its picture's alt text is a property beside the picture's (picture());
+            # a shape inside the one found is not looked for again (each would scan the outer's rest)
+            self.shape = (m.end(), _group_end(self.s, m.end()))
         if self.picdir is not None and name in ("pict", "shppict", "sp"):
             # a picture where it stands: an inline one (\pict, Word's \*\shppict, whose \nonshppict
             # is the same picture again as WMF and stays passed over), a floating shape's (\sp pib)
@@ -2416,16 +2578,22 @@ class _Rtf(object):
         group's control words, or \\binN bytes; its nested groups (\\*\\blipuid, \\*\\picprop) are
         passed over. PICTURES pictures at most, PICTURE_BYTES each, TOTAL_BYTES in all."""
         s = self.s
+        around = None                    # a floating shape's other properties: before and after its picture's
         if kind in ("sp", "shppict"):
             if kind == "sp" and not _PIB.match(s, a, b):
                 return                                          # a shape's other properties
+            if kind == "sp" and self.shape and self.shape[0] <= a <= self.shape[1]:
+                around = ((max(self.shape[0], a - 65536), a), (b, min(self.shape[1], b + 65536)))
             i = s.find("{\\pict", a, b)
             if i < 0:
                 return
             a, b = i + 6, max(i + 6, _group_end(s, i + 1) - 1)
         sink = self.st[_SINK] if self.st[_SINK] is not None else self.st[_PSINK]
-        # its alt text, which Word keeps in the picture's properties before its data
+        # its alt text, which Word keeps in the picture's properties before its data - a floating
+        # shape's in a property of the shape, beside the picture's
         alt = _WZ_DESCRIPTION.search(s, a, min(b, a + 65536))
+        for x, y in around or ():
+            alt = alt or _WZ_DESCRIPTION.search(s, x, y)
         alt = _one_line(alt.group(1)) if alt else ""
         fmt, pos, data_at, raw = "", a, None, None
         while pos < b:
@@ -3209,7 +3377,8 @@ def _limit_memory(nbytes):
 
 def main(argv):
     """python docreaders.py KIND PATH [UNTIL [KILL [PICTURES]]]: one document (KIND: epub, odt, ods, odp,
-    rtf), as JSON on stdout ({"md", "note"}).
+    rtf), as JSON on stdout ({"md", "note", "limit"}: limit, whether its memory is held - false where
+    the OS holds none, or where holding it failed, which readpage's trace then says).
     UNTIL is when the reading stops (a time.time(); 0: no limit), KILL when readpage.py kills this
     process: what was read is written by the middle of the two. PICTURES: the folder an RTF's
     pictures are written to."""
@@ -3218,12 +3387,13 @@ def main(argv):
     kill = float(argv[3]) if len(argv) > 3 and float(argv[3]) > 0 else None
     pictures = argv[4] if len(argv) > 4 and argv[4] else None
     finish = until + (kill - until) / 2 if until is not None and kill is not None and kill > until else None
-    _limit_memory(MEMORY)
+    limited = _limit_memory(MEMORY)
     slow = os.environ.get("READ_PAGE_TEST_DOC_SLEEP")          # the test suites' stand-in for a slow document
     if slow:
         time.sleep(float(slow))
     md, note = read(path, kind, until, finish, pictures)
-    sys.stdout.buffer.write(json.dumps({"md": md, "note": note}, ensure_ascii=False).encode("utf-8", "replace"))
+    sys.stdout.buffer.write(json.dumps({"md": md, "note": note, "limit": bool(limited)},
+                                       ensure_ascii=False).encode("utf-8", "replace"))
     sys.stdout.buffer.flush()
     return 0
 
