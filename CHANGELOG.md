@@ -8,6 +8,7 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **Speech recognition for a video without captions was measured and left out** (KNOWN-ISSUES 15, by design): where an automatic track exists Whisper small is not better than it (WER 8.9 against 10.9 % over 43 clips), and it would add 287-345 MB to `--setup` and minutes of CPU an hour of speech.
 - **No source in plain http, for any part** (KNOWN-ISSUES 210). An http index (`UV_DEFAULT_INDEX`, `UV_INDEX_URL`,
   `PIP_INDEX_URL`, pip's own `index-url`, an entry of `UV_EXTRA_INDEX_URL`, `UV_INDEX` or `UV_FIND_LINKS`), npm's
   registry (the environment's or an `.npmrc`'s, a scope's too), Playwright's download host and uv's list of Pythons

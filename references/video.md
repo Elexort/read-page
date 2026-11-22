@@ -161,10 +161,15 @@ in agent work.
 - keep a vector store inside the skill;
 - transcribe by default: captions are free and instant, ASR is neither.
 
-## Undecided
+## Decided (2026-11-22, measured)
 
-- Is ASR worth a 75-500 MB model download (and ffmpeg for the audio)? An opt-in flag, or never?
-- Frame OCR: only for "no captions", or also when a video has slides with text? (The second case
-  can double the run time for little gain.)
+- **No local speech recognition.** Where a platform's automatic track exists, Whisper small int8 is not
+  better than it: pooled WER 8.9 % automatic, 10.9 % Whisper small, 15.1 % Whisper base over 43 YouTube
+  clips in six languages, a tie on the professionally captioned ones (5.9 against 6.5 %), Russian 9.9
+  against 16.2 %; 42 questions on names and numbers answered alike. It would add 287-345 MB to `--setup`,
+  4-5 s of CPU per audio minute and only 9-10 minutes of speech a read, for the one gap it closes: Chinese
+  on YouTube (no speech recognition there), Bilibili to an anonymous client, RuTube videos with no track.
+- **No frame OCR for now**: a few dozen slide words a lecture, half of them noise, for the video's bytes.
+
 - A hard cap: "a video longer than N minutes is not transcribed; here is the transcript command to
   run yourself"?
