@@ -183,8 +183,19 @@ while the rows below stood)
   or folder arrived as other characters.
 - **A raw non-ASCII address becomes a URI** (host to punycode, the rest percent-encoded as UTF-8) at curl_cffi, curl,
   urllib, a picture and the archive's snapshot. Every picture whose `src` had Chinese in it was `not downloaded: ordinal
-  not in range(128)`; Git's curl and older Windows curls sent the path in GBK (`%d2%b3%c3%e6`). A Location header
-  that arrives as Latin-1 or raw GBK is read back to what it was.
+  not in range(128)`; Git's curl and older Windows curls sent the path in GBK (`%d2%b3%c3%e6`). A redirect's
+  Location goes on as the bytes it came in, as a browser's does, on every channel: UTF-8 as its own escapes, any
+  other byte percent-encoded as it is (`/caf\xe9` -> `/caf%E9`, a GBK path stays GBK; `intl.location`). Re-read by
+  a guess, a raw UTF-8 `/café` had gone out as `/caf%D0%B9` - a Cyrillic path, `not_found`; curl's own
+  `redirect_url` wrote the escapes in lower case.
+- **The network rule checks the name the request goes to.** A host written with percent-escapes (`127.0.0.%32`,
+  `%31%32%37.0.0.2`, `127.0.0.2%2e`), which curl, libcurl and urllib all decode, resolved to nothing and counted as
+  public; so did a name outside ASCII that Python's IDNA 2003 refuses (a right-to-left label that ends in a digit,
+  `שלום1`), whose lookup raised while the request went to its punycode. A public page that redirected there, or
+  showed a picture from there, made the reader ask the loopback interface, and the answer was read (`ok`). The rule
+  now looks at the host of the address as it is sent (`intl.host_ascii`: escapes decoded, punycode), the request -
+  a picture's redirect too - sends that same name, and a host with no such name, or one Python cannot look up, is
+  refused.
 - **A server's Chinese file name is kept** (`filename*=UTF-8''...`, raw UTF-8 or GBK bytes, `filename*=GBK''...`):
   it was `-.png`.
 - **OCR asks for the pack of the text's script and of the user's language** (`chi_sim` or `chi_tra`, `jpn`, `kor`,
@@ -201,8 +212,8 @@ while the rows below stood)
   `zh-Hans,zh-CN,zh,en`, and a video with none of them is asked once for the language its info names, the track
   of the user's first language is the one kept). `READ_PAGE_SUB_LANGS` and `READ_PAGE_OCR_LANGS`, when set, win. What
   is sent: `references/engines.md`.
-- tests: `cjk.py` 136 (107 on Windows without curl_cffi and charset_normalizer, 131 off Windows; offline, any OS; under a POSIX locale
-  that is not UTF-8 its folders are ASCII, row 175).
+- tests: `cjk.py` 141 (111 on Windows without curl_cffi and charset_normalizer, 136 off Windows; offline, any OS; under a POSIX locale
+  that is not UTF-8 its folders are ASCII, row 175); `security.py` 51 (47 on Windows).
 
 **`readpage.py --setup`**
 - **one command installs every engine** into the skill's own environment, one folder of the user's

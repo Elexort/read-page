@@ -32,11 +32,9 @@ def _escape(m):
     return urllib.parse.quote(m.group(0), safe="", errors="replace")
 
 
-def _host_ascii(host):
-    """A host name in punycode (IDNA 2003 first, as the standard library does; a label it refuses -
-    too long, empty - is encoded on its own)."""
-    if host.isascii():
-        return host
+def _punycode(host):
+    """A host name outside ASCII in punycode (IDNA 2003 first, as the standard library does; a label it
+    refuses - too long, empty - is encoded on its own), or None."""
     try:
         return host.encode("idna").decode("ascii")
     except UnicodeError:
@@ -49,30 +47,73 @@ def _host_ascii(host):
         try:
             out.append("xn--" + label.lower().encode("punycode").decode("ascii"))
         except UnicodeError:
-            return host
+            return None
     return ".".join(out)
+
+
+# what no host name holds: the forbidden domain code points of the WHATWG URL standard
+_NOT_IN_HOST = re.compile(r"[\x00-\x20#%/:<>?@\[\\\]^|\x7f]")
+
+
+def host_ascii(host):
+    """The name a request for `host` goes to, in ASCII - or None when there is none.
+
+    Every client the skill hands an address to decodes the host's percent-escapes (curl, libcurl and
+    urllib alike: `127.0.0.%31` is 127.0.0.1 to all of them), and a name outside ASCII goes out as its
+    punycode. This is that name, so it is also the one the network rule must look at. None: escapes
+    that are not UTF-8, a name that cannot be converted, a character no host name may hold - such a
+    host is refused, never guessed at. Not for an IPv6 literal (`[::1]`)."""
+    h = host or ""
+    if "%" in h:
+        try:
+            h = urllib.parse.unquote_to_bytes(h).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if not h.isascii():
+        h = _punycode(h)
+        if h is None:
+            return None
+    h = h.lower()
+    return None if _NOT_IN_HOST.search(h) else h
 
 
 def iri_to_uri(url):
     """`url` as a server can be asked for it: every character outside printable ASCII becomes its
-    UTF-8 percent escapes (a space too), the host goes to punycode. What is already escaped, and
-    every ASCII character, stays exactly as it was; an ASCII address comes back as it is."""
+    UTF-8 percent escapes (a space too), the host goes to punycode (host_ascii: the name the network
+    rule checks, escapes in it decoded). What is already escaped elsewhere, and every ASCII character,
+    stays exactly as it was; an ASCII address whose host has no escape comes back as it is."""
     url = url or ""
-    if not _RAW.search(url):
-        return url
     m = _ABS.match(url)
     if not m:
-        return _RAW.sub(_escape, url)
+        return _RAW.sub(_escape, url) if _RAW.search(url) else url
     scheme, netloc, rest = m.groups()
-    if not netloc.isascii():
-        userinfo, at, hostport = netloc.rpartition("@")
+    userinfo, at, hostport = netloc.rpartition("@")
+    if not hostport.startswith("["):
         host, port = hostport, ""
-        if not hostport.startswith("["):
-            h, colon, p = hostport.rpartition(":")
-            if colon and (p.isdigit() or not p):
-                host, port = h, ":" + p
-        netloc = _RAW.sub(_escape, userinfo) + at + _host_ascii(host) + port
-    return scheme + netloc + _RAW.sub(_escape, rest)
+        h, colon, p = hostport.rpartition(":")
+        if colon and (p.isdigit() or not p):
+            host, port = h, ":" + p
+        if not host.isascii() or "%" in host:
+            # no ASCII form: the host stays as it is, and the network rule refuses it
+            hostport = (host_ascii(host) or host) + port
+    return scheme + _RAW.sub(_escape, userinfo) + at + hostport + _RAW.sub(_escape, rest)
+
+
+_HIGH_BYTE = re.compile(rb"[\x80-\xff]")
+
+
+def location(raw):
+    """A redirect's Location - the header's bytes, as they came - as the address a browser goes to next.
+    UTF-8 is read as text: the request sends it as the same UTF-8 escapes, and its host is converted like
+    any other. Any other byte above ASCII is percent-encoded as it is (`/caf\\xe9` -> `/caf%E9`, a GBK
+    path stays GBK), as browsers do. Never re-read in another encoding. Text (a str) is taken as it is."""
+    if isinstance(raw, str):
+        return raw.strip()
+    raw = (raw or b"").strip()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return _HIGH_BYTE.sub(lambda m: b"%%%02X" % m.group(0)[0], raw).decode("ascii", "replace")
 
 
 # ---------------------------------------------------------------- the user's languages

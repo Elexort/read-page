@@ -13,7 +13,7 @@ whole of it, offline, and passes the same on every OS:
 - a declared gb2312 that holds one character outside GB2312 is still Chinese;
 - the MCP server's standard input is UTF-8 whatever the locale (a Chinese URL, a Chinese folder);
 - a raw non-ASCII address reaches the server as UTF-8 through each HTTP channel (curl_cffi, curl, urllib) and
-  for a picture;
+  for a picture, and a redirect's raw Location goes where a browser goes;
 - a server's Chinese file name (Content-Disposition, GBK bytes too) is kept;
 - OCR asks for the language pack of the user's language and of the text's script, and names a missing one;
 - a tool that takes narrow arguments is given an ASCII path;
@@ -396,6 +396,57 @@ try:
           bool(first.get("file")), str(first.get("why") or first.get("file")))
 finally:
     isrv.close()
+
+# a redirect's Location is bytes, and a browser sends them on as they came: UTF-8 as its own escapes, any other
+# byte above ASCII percent-encoded as it is - never read again in another encoding (`/café` in raw UTF-8 was
+# asked for as `/caf%D0%B9`, a Cyrillic path, and the read ended not_found). What Chrome asked the same server for:
+LOCATIONS = [(b"/caf\xe9", "/caf%E9"), (b"/caf\xc3\xa9", "/caf%C3%A9"), (b"/\xc3\xa9t\xc3\xa9", "/%C3%A9t%C3%A9"),
+             (b"/\xd2\xb3\xc3\xe6", "/%D2%B3%C3%E6"), (b"/caf%C3%A9", "/caf%C3%A9"),
+             (b"/\xe4\xb8\xad%E4%B8%AD", "/%E4%B8%AD%E4%B8%AD"), (b"/%\xe4\xb8\xad", "/%%E4%B8%AD"), (b"/\xff", "/%FF")]
+
+
+def raw_redirect(location):
+    def route(h):
+        h.wfile.write(b"HTTP/1.1 302 Found\r\nLocation: " + location + b"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        h.close_connection = True
+    return route
+
+
+lroutes = {"/r%d" % i: raw_redirect(raw) for i, (raw, _want) in enumerate(LOCATIONS)}
+lroutes.update({"/img-r%d" % i: raw_redirect(raw) for i, (raw, _want) in enumerate(LOCATIONS)})
+lroutes["/to-annee"] = raw_redirect("/année".encode("utf-8"))
+lroutes["/ann%C3%A9e"] = (200, {"Content-Type": "text/html; charset=utf-8"},
+                          html("La bonne année, une page assez longue pour être lue. " * 12, "Année").encode("utf-8"))
+lsrv = serve(lroutes)
+try:
+    for name, kind in CHANNELS:
+        with channel(kind) as ok:
+            if not ok:
+                check.skip("a raw Location through %s" % name, "not available here")
+                continue
+            wrong = []
+            for i, (raw, want) in enumerate(LOCATIONS):
+                del lsrv.log[:]
+                attempt(lambda: mod._fetch_once(lsrv.url("/r%d" % i)))
+                asked = [e["path"] for e in lsrv.log][1:2]
+                if asked != [want]:
+                    wrong.append("%r -> %s" % (raw, asked[0] if asked else "nothing"))
+            check("a redirect's raw Location through %s goes where a browser goes (%d Locations)" % (name, len(LOCATIONS)),
+                  not wrong, "; ".join(wrong[:3]))
+    wrong = []
+    for i, (raw, want) in enumerate(LOCATIONS):
+        del lsrv.log[:]
+        attempt(mod._fetch_image, (lsrv.url("/img-r%d" % i), ""), lsrv.url("/"))
+        asked = [e["path"] for e in lsrv.log][1:2]
+        if asked != [want]:
+            wrong.append("%r -> %s" % (raw, asked[0] if asked else "nothing"))
+    check("... and for a picture", not wrong, "; ".join(wrong[:3]))
+    rc, out, man, folder = cli(lsrv.url("/to-annee"))
+    check("CLI: a redirect to /année (raw UTF-8) lands on that page",
+          man.get("status") == "ok" and "La bonne année" in content(folder),
+          "%s %s" % (man.get("status"), (man.get("url") or {}).get("final")))
+finally:
+    lsrv.close()
 
 # ---------------------------------------------------------------- 4. a server's Chinese file name
 

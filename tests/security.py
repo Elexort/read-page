@@ -15,9 +15,11 @@ import socket
 import stat
 import sys
 import tempfile
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 
 import advsrv                                                # noqa: E402
 from harness import PRIVATE, PUBLIC, SCRIPT, Checks, run_read   # noqa: E402
@@ -96,6 +98,22 @@ try:
         check("a public page does not take a picture from 127.0.0.2",
               not any("literal-probe" in (e.get("file") or "") for e in r.manifest.get("images") or []),
               str([e.get("file") for e in r.manifest.get("images") or []])[:70])
+        # every client decodes a host's percent-escapes: 127.0.0.%32 is 127.0.0.2 to curl and urllib
+        s.public.routes.update({
+            "/redir-escaped": advsrv.redirect("http://%%31%%32%%37.0.0.2:%d/secret" % s.private.port),
+            "/img-escaped": advsrv.html(200, advsrv.page("Pics", "<article><h1>Pics</h1><p>" + advsrv.EN + "</p>"
+                                                         "<img src='http://127.0.0.%%32:%d/img/literal-probe.png'>"
+                                                         "</article>" % s.private.port)),
+        })
+        del s.private.log[:]
+        r = run_read(s.public.url("/redir-escaped"))
+        check("a redirect to 127.0.0.2 written with percent-escapes does not reach it",
+              not leaked(r, SECRET) and not s.private.log, "%s; the private server saw %s" % (
+                  r.manifest.get("status"), [e["path"] for e in s.private.log][:2]))
+        r = run_read(s.public.url("/img-escaped"), "--download")
+        check("... nor does a picture whose host is written so",
+              not any("literal-probe" in e["path"] for e in s.private.log),
+              str([e["path"] for e in s.private.log][:2]))
     else:
         check.skip("private target", "127.0.0.2 cannot be bound here")
     try:
@@ -105,6 +123,39 @@ try:
               str(r.manifest.get("status")))
     except OSError:
         check.skip("a name that resolves to loopback", "no DNS for localtest.me here")
+    # a name Python's IDNA refuses (a right-to-left label ending in a digit), whose punycode - the name the request
+    # goes to - resolves to loopback: the public server itself here, so what it is asked for is the evidence
+    idn_host = "שלום1.localtest.me"
+
+    def raw_redirect(location):
+        def route(h):                              # http.server writes a header as Latin-1: the bytes by hand
+            h.wfile.write(b"HTTP/1.1 302 Found\r\nLocation: " + location.encode("utf-8")
+                          + b"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            h.close_connection = True
+        return route
+
+    try:
+        socket.getaddrinfo("xn--1-9hcuf1d.localtest.me", 80)
+        s.public.routes.update({
+            "/redir-idn": raw_redirect("http://%s:%d/loopback-secret" % (idn_host, s.public.port)),
+            "/img-idn": advsrv.html(200, advsrv.page("Pics", "<article><h1>Pics</h1><p>" + advsrv.EN + "</p>"
+                                                     "<img src='http://%s:%d/loopback-only.png'></article>"
+                                                     % (idn_host, s.public.port))),
+            "/loopback-secret": advsrv.html(200, advsrv.page("Admin", "<article><h1>Admin</h1><p>"
+                                                             "INTERNAL-SECRET-MARKER " + advsrv.EN + "</p></article>")),
+            "/loopback-only.png": (200, {"Content-Type": "image/png"}, advsrv.PNG1),
+        })
+        del s.public.log[:]
+        r = run_read(s.public.url("/redir-idn"))
+        check("a redirect to a name outside ASCII whose punycode is loopback is refused",
+              not leaked(r, SECRET) and not any(e["path"] == "/loopback-secret" for e in s.public.log),
+              "%s %s" % (r.manifest.get("status"), str(r.manifest.get("error") or "")[:80]))
+        r = run_read(s.public.url("/img-idn"), "--download")
+        check("... and a picture there is not asked for",
+              not any(e["path"] == "/loopback-only.png" for e in s.public.log),
+              str([e["path"] for e in s.public.log][-3:]))
+    except OSError:
+        check.skip("a name outside ASCII that resolves to loopback", "no DNS for localtest.me here")
 
     mod = module()
     real = socket.getaddrinfo
@@ -135,6 +186,41 @@ try:
     }
     wrong = [u for u, want in forms.items() if bool(mod.host_is_private(u)) != want]
     check("host_is_private decides by the host only (15 forms)", not wrong, ", ".join(wrong[:3]))
+
+    # ------------------------------------------------ the host checked is the host asked for
+    # Every client decodes a host's percent-escapes (curl, libcurl and urllib alike) and sends a
+    # name outside ASCII as its punycode: the rule looks at that very name, and refuses a host that
+    # has none. Python's own lookup (IDNA 2003) refuses a right-to-left label that ends in a digit,
+    # which the request - like a browser - sends as xn--1-9hcuf1d.
+    import intl                                              # noqa: E402
+    idn = "http://שלום1.inside.example:8080/secret"
+    asked = urllib.parse.urlsplit(intl.iri_to_uri(idn)).hostname or ""
+
+    def fake_idn(host, *a, **k):
+        name = host.decode("ascii", "replace") if isinstance(host, bytes) else str(host)
+        if name.lower().rstrip(".") == asked:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.1.2.3", 80))]
+        return real(host, *a, **k)
+
+    socket.getaddrinfo = fake_idn
+    try:
+        mod = module()
+        check("a name outside ASCII is checked as the punycode the request sends (%s)" % asked,
+              asked.startswith("xn--") and bool(mod.host_is_private(idn)), repr(mod.host_is_private(idn)))
+        check("... so a public page's redirect or picture does not reach it",
+              bool(mod.hop_refused("http://%s/" % PUBLIC, idn)), "")
+    finally:
+        socket.getaddrinfo = real
+    escaped = ["http://%31%32%37.0.0.2:8080/", "http://127.0.0.2%2e:8080/", "http://%6c%6fcalhost:8080/",
+               "http://169.254.169.%32%35%34/latest/meta-data/"]
+    let_through = [u for u in escaped if not mod.host_is_private(u)]
+    check("a host written with percent-escapes is the host they decode to (4 forms)", not let_through,
+          ", ".join(let_through[:2]))
+    check("... and the request goes to that same host",
+          intl.iri_to_uri("http://%31%32%37.0.0.2:8080/a%20b") == "http://127.0.0.2:8080/a%20b",
+          intl.iri_to_uri("http://%31%32%37.0.0.2:8080/a%20b"))
+    check("a host that has no ASCII form (escapes that are not UTF-8) is refused, never let through",
+          bool(mod.hop_refused("http://%s/" % PUBLIC, "http://%ff%fe.example/x")), "")
 
     # ------------------------------------------------ a secret keeps a URL from readers only
     secrets = [

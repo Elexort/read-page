@@ -278,7 +278,11 @@ below runs on the standard library alone, so a machine that never ran `--setup` 
   rest percent-encoded as UTF-8, what is already escaped untouched - at every place an address leaves the
   program: curl_cffi, curl (argv: Git's curl, older Windows curls and package-manager builds take the ANSI
   code page, and sent the path in GBK), urllib, a picture, the archive's snapshot. The address the user gave
-  is what the manifest and the cache key keep.
+  is what the manifest and the cache key keep. The host goes out as `intl.host_ascii` makes it - escapes in it
+  decoded, as curl, libcurl and urllib all decode them - and the network rule checks that very name; a host that
+  has none (escapes that are not UTF-8, a character no host name holds) is refused. A redirect's Location goes
+  on as the bytes it came in, as a browser's does: UTF-8 as its own escapes, any other byte percent-encoded as it
+  is (`/caf\xe9` -> `/caf%E9`; never re-read in another encoding).
 - **What is sent in the user's name.** `READ_PAGE_LANG` (`zh-CN`, `zh-TW`, `ja`, `ru`, or a list `zh-CN,en`) is
   the user's language; unset, it is the operating system's list - the language the machine is set to first (Windows'
   user locale; elsewhere `LC_ALL`, `LC_MESSAGES`, `LANG`, `LANGUAGE`; a Mac's own setting), then the others the

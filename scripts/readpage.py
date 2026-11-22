@@ -2046,6 +2046,27 @@ def _cffi_get(url, imp, accept=None, verify=True, download=False, headers=None, 
                   headers=h, stream=True, **kw)
 
 
+def raw_header(headers, name):
+    """A response header's value as the bytes that came over the wire (b"" when there is none):
+    curl_cffi keeps them (`.raw`); http.client decodes them as Latin-1, which gives them back."""
+    want = name.lower().encode("ascii")
+    pairs = getattr(headers, "raw", None)
+    if isinstance(pairs, list):
+        for k, v in pairs:
+            if isinstance(k, bytes) and k.strip().lower() == want:
+                return (v or b"").strip()
+        return b""
+    v = headers.get(name) if headers is not None else None
+    if v is None:
+        return b""
+    if isinstance(v, bytes):
+        return v.strip()
+    try:
+        return str(v).strip().encode("latin-1")
+    except UnicodeEncodeError:
+        return str(v).strip().encode("utf-8")
+
+
 def _cffi_follow(url, imp, accept=None, verify=True, download=False, headers=None, deadline=None):
     """GET with redirects followed by hand, so every hop can be checked for a private target.
 
@@ -2097,7 +2118,7 @@ def _cffi_follow(url, imp, accept=None, verify=True, download=False, headers=Non
         except Exception as _dbg_e:                            # noqa: BLE001
             debuglog.exc("cookies: save after a hop", _dbg_e)
         if r.status_code in (301, 302, 303, 307, 308):
-            loc = intl.header_text((r.headers.get("location") or "").strip())
+            loc = intl.location(raw_header(r.headers, "location"))
             if not loc:
                 return r, cur
             nxt = urllib.parse.urljoin(cur, loc)
@@ -2339,7 +2360,7 @@ def _fetch_urllib(url, download, spool_dir, cond, deadline, out, t):
             break
         code = getattr(r, "code", None) or getattr(r, "status", 0) or 0
         if code in (301, 302, 303, 307, 308):
-            loc = intl.header_text((r.headers.get("Location") or "").strip())
+            loc = intl.location(raw_header(r.headers, "Location"))
             r.close()
             if not loc:
                 out["error"] = "a redirect without a Location"
@@ -2596,10 +2617,13 @@ def _fetch_once(url, download=False, workdir=None, validators=None, plain_only=F
             except OSError:
                 pass
             etag = last_modified = disposition = expected = ""
+            raw_loc = b""
             seen_headers = {}
             try:
                 with open(os.path.join(stage, "body.hdr"), "rb") as fh:
                     for rawline in fh:
+                        if rawline[:9].lower() == b"location:":
+                            raw_loc = rawline[9:].strip()       # as the bytes came: intl.location
                         line = intl.header_bytes(rawline)
                         low = line.lower()
                         if low.startswith("etag:"):
@@ -2650,8 +2674,9 @@ def _fetch_once(url, download=False, workdir=None, validators=None, plain_only=F
                 out.update(engine="http:curl", status=304, not_modified=True, final=cur,
                            ms=int((now() - t) * 1000))
                 return out
-            if code in ("301", "302", "303", "307", "308") and redir.strip():
-                nxt = redir.strip()
+            if code in ("301", "302", "303", "307", "308") and (redir.strip() or raw_loc):
+                # the Location itself, as on the other channels (curl's own redirect_url re-encodes it)
+                nxt = urllib.parse.urljoin(cur, intl.location(raw_loc)) if raw_loc else redir.strip()
                 if os.path.exists(p):
                     os.unlink(p)
                 why = hop_refused(url, nxt)
@@ -6108,7 +6133,9 @@ def _host_forms(host):
 
 def _resolves_private(host):
     """Why a host name points into the local network by the addresses it resolves to ("" when
-    none does, or when it does not resolve: such a request fails on its own)."""
+    none does, or when it does not resolve: such a request fails on its own). A name Python cannot
+    look up at all (a label over 63 characters, an empty one) is refused: the request's own lookup
+    is not Python's."""
     hit = _RESOLVED.get(host)
     if hit and now() - hit[0] < 60:
         return hit[1]
@@ -6121,7 +6148,9 @@ def _resolves_private(host):
             if any(ip.version == net.version and ip in net for net in INTERNAL_NETS):
                 why = "internal or loopback host (%s resolves to %s)" % (host, ip)
                 break
-    except (OSError, UnicodeError, ValueError):
+    except UnicodeError:
+        why = "a host name that cannot be looked up (%s)" % host[:60]
+    except (OSError, ValueError):
         why = ""
     _RESOLVED[host] = (now(), why)
     return why
@@ -6134,13 +6163,17 @@ def host_is_private(url):
     that an internal host never goes to a remote reader. Only the host counts: an IP literal in
     any form a browser accepts (2130706433, 0x7f.0.0.1, [::ffff:127.0.0.1]), an internal name
     (localhost, *.local, metadata), or a name that resolves to such an address (localtest.me).
-    The path and the query are the reader rule's business (url_has_secret).
+    The host is the one the request goes to (intl.iri_to_uri: escapes decoded, a name outside
+    ASCII in punycode); a host that has no such form is refused. The path and the query are the
+    reader rule's business (url_has_secret).
     """
-    p = urllib.parse.urlparse(url or "")
+    p = urllib.parse.urlparse(intl.iri_to_uri(url or ""))
     host = p.hostname or ""
     if not host:
         return "no host"
     low = host.strip("[]").rstrip(".").lower()
+    if ":" not in low and intl.host_ascii(low) != low:
+        return "a host name that has no ASCII form (%s)" % host[:60]
     if low and low == os.environ.get("READ_PAGE_TEST_PUBLIC_HOST", "").strip().lower():
         return ""      # tests only: this one address counts as public, so the main channel runs offline
     if low == "localhost" or low in METADATA_HOSTS or low.endswith(PRIVATE_SUFFIX):
@@ -6232,6 +6265,12 @@ def browser_policy(host, port):
     low = (host or "").strip().strip("[]").rstrip(".").lower()
     if not low:
         return "no host", []
+    if ":" not in low and intl.host_ascii(low) != low:
+        # Chrome hands over the ASCII name it asks for; anything else is converted as a request
+        # would be, and a name that has no ASCII form is refused
+        low = (intl.host_ascii(low) or "").rstrip(".")
+        if not low:
+            return "a host name that has no ASCII form (%s)" % (host or "")[:60], []
     test_public = os.environ.get("READ_PAGE_TEST_PUBLIC_HOST", "").strip().lower()
     if low == test_public:
         return "", [low]          # tests only: this one address counts as public
@@ -7110,6 +7149,9 @@ class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
     inside = False
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # urllib has percent-encoded the Location's bytes as they came (as a browser does); the host
+        # checked and the host asked for are then one name: a request decodes the escapes in a host
+        newurl = intl.iri_to_uri(newurl)
         why = hop_refused("http://localhost/" if self.inside else req.full_url, newurl)
         if why:
             raise urllib.error.HTTPError(newurl, code, "redirect refused: " + why, headers, fp)
