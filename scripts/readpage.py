@@ -1212,7 +1212,7 @@ def setup_rows(c):
         packs = fix("ocr-langs", "download a language's .traineddata (rus, deu, jpn...) into tessdata - "
                                  "github.com/tesseract-ocr/tessdata_fast - and name it in READ_PAGE_OCR_LANGS")
         if packs == SETUP:
-            packs += (" --ocr-langs eng+ara (the ten languages with the most web text and the user's own come by "
+            packs += (" --ocr-langs eng+hin (the fourteen packs every environment gets and the user's own come by "
                       "themselves; the flag names others)")
         # after --setup the choice is made (English and the user's languages): the row is not a nag then
         rows.insert(at, ("ocr-langs", True if any(x != "eng" for x in langs) else (
@@ -4945,13 +4945,14 @@ OCR_SCRIPT_PACKS = {
     "Tibetan": ("bod",), "Syriac": ("syr",), "Thaana": ("div",),
 }
 # The confidence OSD gives its script from which the script chooses the packs, and a pack it needs and this machine
-# lacks is named; below it the page is read as one whose script nobody told. Measured on 94 synthetic scans in 24
-# languages (2026-11-22): 7 of 48 Latin pages were taken for Cyrillic, at 0.2-1.4, and Cyrillic pages gave 10-60; Han's
-# is low by OSD's own rule - its characters count for Japanese and Korean too - 0.5-1.4 on Chinese pages, Japanese
-# 2.0-2.7, Korean 0.8-1.6; Greek 0.7-5.4; Arabic, Hebrew, Devanagari and Thai 9-210; no page was taken for any script
-# but Latin, Cyrillic or its own.
-OCR_SCRIPT_TRUST = {"Cyrillic": 3.0, "Han": 0.3, "Japanese": 0.3, "Hiragana": 0.3, "Katakana": 0.3, "Korean": 0.3,
-                    "Hangul": 0.3}
+# lacks is named; below it the page is read as one whose script nobody told. Measured on 160 synthetic scans in 24
+# languages and up to 9 fonts (2026-11-22): 7 of 90 Latin pages were taken for Cyrillic, at 0.2-1.4, and Cyrillic pages
+# gave 3.7-60; Han's is low by OSD's own rule - its characters count for Japanese and Korean too - 0.5-1.4 on Chinese
+# pages, Japanese 2.0-2.7, Korean 0.8-1.6; Greek 0.5-10.3 on 13 of 14 Greek pages (the other taken for Cyrillic, 2.9),
+# and no Latin or Cyrillic page of the 112 was taken for Greek; Arabic, Hebrew, Devanagari and Thai 9-210; no page was
+# taken for any script but Latin, Cyrillic or its own.
+OCR_SCRIPT_TRUST = {"Cyrillic": 3.0, "Greek": 0.4, "Han": 0.3, "Japanese": 0.3, "Hiragana": 0.3, "Katakana": 0.3,
+                    "Korean": 0.3, "Hangul": 0.3}
 OCR_SCRIPT_TRUST_ELSE = 1.0
 # Packs that read a page alone, without English beside it: they read the English words in a Chinese or Japanese text
 # themselves (12-16 of 13-17 terms on a page, as many as with English beside them), and English beside them made the
@@ -8899,9 +8900,9 @@ def main(argv=None):
     ap.add_argument("--setup", action="store_true",
                     help="install every engine into the skill's own environment, a folder of the user's "
                          "(no admin rights; asks nothing - running it is the consent), or bring it up to date")
-    ap.add_argument("--ocr-langs", dest="ocr_langs", default="", metavar="eng+ara",
-                    help="with --setup: the OCR language packs to fetch besides the ten it fetches for everyone and "
-                         "the user's own (kept for the next --setup; each scanned page is read with its script's)")
+    ap.add_argument("--ocr-langs", dest="ocr_langs", default="", metavar="eng+hin",
+                    help="with --setup: the OCR language packs to fetch besides the fourteen it fetches for everyone "
+                         "and the user's own (kept for the next --setup; each scanned page is read with its script's)")
     ap.add_argument("--allow-external", dest="allow_external", action="store_true",
                     help="allow egress: public readers and archives may be used")
     ap.add_argument("--force-external", dest="force_external", action="store_true",
