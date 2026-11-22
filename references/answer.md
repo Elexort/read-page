@@ -111,8 +111,8 @@ A PDF's tables come as Markdown tables where the layout model is installed (`--s
 | `--clear-cookies` | forget this site's stored cookies first (they otherwise live 6 hours; `--refresh` keeps them) |
 | `--screenshots [N]` | also capture the page as images: the first N screens of a 1280x784 window (default 2, 0 = none), two glued into one 1280x1568 picture, never scaled; needs a browser, works for PDFs too |
 | `--caps` | print what this machine has (libs, CLIs, browsers, keys, OCR languages, the environment in use) and exit |
-| `--setup` | install every engine into the skill's own environment, a folder of the user's that every agent sees (no admin rights; it first says the download, about 360-390 MB, and the 0.85-1.0 GB it keeps), or bring it up to date and check it; asks nothing - running it is the consent |
-| `--ocr-langs eng+jpn` | with `--setup`: the OCR language packs to fetch besides English and the user's own; kept for the next `--setup`, and read with in the environment (the `ocr:` line and `improve` name this command for a pack a scan needs) |
+| `--setup` | install every engine into the skill's own environment, a folder of the user's that every agent sees (no admin rights; it first says the download, about 380-420 MB, and the 0.85-1.0 GB it keeps), or bring it up to date and check it; asks nothing - running it is the consent |
+| `--ocr-langs eng+ara` | with `--setup`: the OCR language packs to fetch besides the ten it fetches for everyone and the user's own; kept for the next `--setup`, and chosen from for each scanned page by its script (the `ocr:` line and `improve` name this command for a pack a scan needs) |
 | `--version` | print the skill version, schema and cache build |
 
 **No URL is a command too**: `readpage.py` with nothing else prints the *setup report* - the
@@ -235,8 +235,12 @@ A model that cannot see pictures asks for their text: `--ocr N` answers with wha
 picture N - the page's other files stay as they are, and a picture still only an address is
 downloaded first. An SVG drawing gives its own `<text>`; any other picture goes through
 tesseract twice, as it is in grey and as dark ink on light, and the reading with more confident
-words wins (a diagram on tinted boxes: 7 of its 16 labels in grey, 14 as ink). Languages are
-`READ_PAGE_OCR_LANGS` (`eng`), plus the pack of the page's script (Chinese, Japanese, Korean, Russian) and of the user's language (`READ_PAGE_LANG`, the system's) when the pack is there; a pack the text needs and the machine lacks is named on the `ocr:` line. The `ocr:`
+words wins (a diagram on tinted boxes: 7 of its 16 labels in grey, 14 as ink). Languages are the
+pack of the page text's script (Chinese, Japanese, Korean, Russian) or of its Latin-script language (German, French,
+Spanish ...), English and the user's languages' (`READ_PAGE_LANG`, the system's) beside it, each when the pack is
+there, or `READ_PAGE_OCR_LANGS` when it is set; a pack the text needs and the machine lacks is named on the `ocr:`
+line. A scanned PDF's pages are read each with the pack of the script tesseract sees on it
+([documents.md](documents.md#ocr-on-when-tesseract-is-there)). The `ocr:`
 line names the picture, the engine and the pass - or why there is no text: no such picture, not
 on disk, no OCR engine.
 

@@ -323,14 +323,15 @@
           "description": "pages whose OCR did not finish in time; the text marks the gap, the other pages are kept"
         },
         "ocr_langs": {
-          "type": "string"
+          "type": "string",
+          "description": "the language packs the scan's pages were read with, joined by + (each page's own: the script tesseract's OSD saw on it, its Latin language; or READ_PAGE_OCR_LANGS)"
         },
         "ocr_missing_langs": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "language packs the read wanted (named in READ_PAGE_OCR_LANGS, or chosen by the user's language or the text's script) that tesseract does not have; the answer's `improve` names them"
+          "description": "language packs the read wanted (named in READ_PAGE_OCR_LANGS, called for by the text's script or a scanned page's, or the user's own when a scan gave no text) that tesseract does not have; the answer's `improve` names them"
         },
         "charset_guess": {
           "type": "string",

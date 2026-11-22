@@ -784,6 +784,55 @@ def script_pack(text):
     return ""
 
 
+# the commonest words of each Latin-script language with a tessdata pack, without their accents: tesseract's English
+# pack reads `für` as `fur`, and a text has these words whatever it is about. Measured on the English pack's readings
+# of 94 scans in 24 languages (2026-11-22): the right language on every page of 10 of the 12 Latin-script ones
+# (Turkish and Vietnamese undecided), and none for a page in another script, whose Latin letters are no language's
+# words (their best share was 9.5 %); tests/cjk.py has six of them
+LATIN_WORDS = {
+    "eng": "the of and to in is that for it as was with on by be are this from at or which an its were has have not "
+           "but they his her their been also who had",
+    "deu": "der die und das ist nicht ein eine zu den von mit sich des auf fur im dem auch es als wird wurde nach bei "
+           "aus sind oder werden einer eines zum zur uber",
+    "fra": "le la les et de des est un une du que en dans pour qui pas sur au avec par il plus ce sont aux elle ont "
+           "cette ses son leur mais comme",
+    "spa": "el la de que y en los del se las por un una para con no es al lo como su fue mas pero sus entre esta este "
+           "tambien",
+    "por": "o a de que e do da em um para com nao uma os no se na por mais as dos como ao foi das sua seu pelo pela "
+           "sao tambem",
+    "ita": "il di che e la per un non una del le si in sono della con al dei da gli nel alla anche delle piu questo "
+           "nella stato",
+    "nld": "de het een en van in is dat op te zijn met voor niet aan er ook als door werd wordt bij naar uit maar om "
+           "dan worden",
+    "pol": "i w na z sie nie do to jest o jak po co ale od jego przez oraz jako ze tak sa dla za ktore",
+    "tur": "bir ve bu da de ile ne olarak gibi daha en kadar sonra olan veya icin cok ise ilk her",
+    "ind": "yang dan di ini itu dengan untuk dari tidak dalam akan pada adalah ke oleh juga sebagai atau karena",
+    "ces": "a se na je v to s o ve z do jako by jsou k pro jeho ze byl ale tak jak ktery",
+    "swe": "och i att det som en pa ar av for med till den har de inte om ett var jag",
+    "ron": "si de la in cu a care pe din o un este sa mai ca pentru fost sunt al",
+    "hun": "a az es hogy nem is egy meg de ez van volt mint csak el ki ami",
+    "vie": "va cua la co cac nhung duoc trong cho mot voi khong nguoi nay da",
+}
+_LATIN_SETS = dict((k, frozenset(v.split())) for k, v in LATIN_WORDS.items())
+
+
+def latin_pack(text):
+    """The tessdata pack of the Latin-script language a text is in ("eng" for English, "deu", "fra" ...), by the
+    share of its words that are that language's commonest (LATIN_WORDS): "" for fewer than 30 Latin words, a text
+    mostly in another script, a share under 15 %, or two languages within 1.3 times of each other."""
+    import unicodedata
+    folded = "".join(c for c in unicodedata.normalize("NFKD", (text or "")[:20000]) if not unicodedata.combining(c))
+    words = re.findall(r"[^\W\d_]+", folded.lower())
+    latin = [w for w in words if w.isascii()]
+    if len(latin) < 30 or len(latin) < len(words) * 0.6:
+        return ""
+    ranked = sorted(((sum(1 for w in latin if w in s), k) for k, s in _LATIN_SETS.items()), reverse=True)
+    (best, pack), (second, _other) = ranked[0], ranked[1]
+    if best < len(latin) * 0.15 or best < second * 1.3:
+        return ""
+    return pack
+
+
 def locale_packs():
     """The language packs of the user's own languages, in their order ("chi_sim" for a Chinese user; none for an
     English one): the ones `--setup` fetches for them (ownenv.ocr_pack_for, at most ownenv.OCR_MORE_PACKS)."""

@@ -1851,13 +1851,14 @@ class Work:
         return True, "%s %s" % (BROWSER, found[-1].split("-")[-1] if found else "?")
 
     def ocr_data(self):
-        """English and the packs of the user's languages, and the packs the user named - now, or at an earlier
-        --setup (ocr_named) - each held to its SHA256 in TESSDATA_LOCK, whoever serves it."""
+        """The packs every environment gets (ownenv.OCR_DEFAULT_PACKS), the user's own languages' first, osd for a
+        scan's script, and the packs the user named - now, or at an earlier --setup (ocr_named) - each held to its
+        SHA256 in TESSDATA_LOCK, whoever serves it."""
         td = os.path.join(self.d, "tessdata")
         os.makedirs(td, exist_ok=True)
         self.info["tessdata"] = "tessdata"
         pins = tessdata_pins()
-        mine = ownenv.ocr_default_packs(os.environ)               # English, and the packs of the user's languages
+        mine = ownenv.ocr_default_packs(os.environ)               # the defaults, the user's languages' first, osd
         named, now = ocr_named(os.environ, self.prev, td, mine)
         got, bad = [], []
         for lang in mine + [x for x in named if x not in mine]:
@@ -1883,12 +1884,14 @@ class Work:
         # what the user named stays named: the next plain --setup keeps it, so reads go on with it (it was dropped,
         # and reads went back to English without a word)
         self.info["ocr_named"] = [x for x in named if x in pins]
-        why = "" if len(mine) < 2 else " - English and the packs of the user's languages (%s)" % ", ".join(
-            ownenv.ocr_languages(os.environ))
+        own = [x for x in ownenv.ocr_languages(os.environ) if ownenv.ocr_pack_for(x)]
+        why = " - the %d languages with the most web text%s; osd tells a scanned page's script, and each page is read " \
+              "with its own pack" % (len(ownenv.OCR_DEFAULT_PACKS), (", the user's languages (%s) first" % ", ".join(own))
+                                     if own else "")
         more = [x for x in named if x not in mine and x in got]
         kept = ("; named %s, kept for the next --setup: %s" % ("now" if now else "at an earlier --setup", "+".join(more))
                 if more else "")
-        return bool(got), "%s (tessdata_fast 4.1.0, each pack held to its SHA256%s%s; --setup --ocr-langs eng+deu " \
+        return bool(got), "%s (tessdata_fast 4.1.0, each pack held to its SHA256%s%s; --setup --ocr-langs eng+ara " \
                           "names others)" % ("+".join(got), why, kept) + ("; failed: %s" % ", ".join(bad) if bad else "")
 
     def check(self):
@@ -2679,10 +2682,8 @@ def _check_ocr(d, info):
             api = tesserocr.PyTessBaseAPI(path=api_dir, lang="+".join(x for x in langs if x in ("eng", "rus"))
                                           or "eng")
             for lang in langs:
-                if lang == "osd":
-                    continue
-                try:
-                    with tesserocr.PyTessBaseAPI(path=api_dir, lang=lang):
+                try:                                           # osd tells a scan's script (OSD_ONLY, the legacy engine)
+                    with tesserocr.PyTessBaseAPI(path=api_dir, lang=lang, psm=0 if lang == "osd" else 3):
                         pass
                 except Exception:                              # noqa: BLE001
                     broken.append(lang)

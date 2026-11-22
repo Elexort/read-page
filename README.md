@@ -255,10 +255,11 @@ the skill's - `.read-page` in the home folder on Windows (not AppData: a package
 Claude's desktop app gets a private copy of what it writes there, and no other agent would see
 the environment), `~/Library/Application Support/read-page` on macOS, `$XDG_DATA_HOME` or
 `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it. It says first what it will fetch:
-about 360 MB to download on Windows (390 on Linux, 350 on macOS) and about 0.9 GB on disk (on
+about 390 MB to download on Windows (420 on Linux, 380 on macOS) and about 0.9 GB on disk (on
 Windows: the Python engines 469 MB; the browser 275; defuddle and npm 30, on the Node Playwright's wheel
-carries; Python 69 - nodejs.org's Node, 36-56 MB to fetch and 90-190 on disk, and pandoc's 226 MB, are gone, our own
-readers read EPUB, ODT and RTF; measured by real installs on GitHub's runners).
+carries; Python 69; the OCR packs 34 - nodejs.org's Node, 36-56 MB to fetch and 90-190 on disk, and pandoc's 226 MB, are
+gone, our own readers read EPUB, ODT and RTF; measured by real installs on GitHub's runners, and the ten OCR packs and
+osd added by their sizes in the lock: 30 MB more than English alone).
 From nothing it takes about a minute (65-70 s on a 9 MB/s link, of which ~48 s are downloads; the
 steps side by side were no faster, measured), a check of an environment already up to
 date 8 s. From then on `readpage.py` and the MCP server run under that environment's Python by
@@ -306,7 +307,7 @@ one thing: a video read in the environment looks for a newer yt-dlp every three 
 | `pymupdf`, `pymupdf4llm` | PDF text, its tables as tables (a small layout model, on the pages that look like they hold one), and the scanned-PDF path | 1.28.2 |
 | our EPUB, ODT, ODS, ODP and RTF readers | headings, nested lists, tables with merged cells, notes, links, pictures where they stand (an RTF's too), code, formulas (ODT), a sheet's table and a slide's text and notes (ODS, ODP), code pages (RTF); against pandoc on 52 files they lost nothing it kept, and kept the endnotes, headings, tables and non-Latin RTF it lost | built in: `scripts/docreaders.py`, the standard library alone, in a process of its own (pandoc left `--setup` on 2026-11-21) |
 | `youtube-transcript-api` | a YouTube transcript when yt-dlp has none | 1.2.5 |
-| OCR | scanned PDFs (3 pages a document) and `--ocr N` | tesseract 5.5.4 in `tesserocr` 2.13, English and the packs of the user's own languages (zh-CN `chi_sim`, zh-TW `chi_tra`, ja `jpn`, ko `kor`, ru `rus`, ...) from `tessdata_fast` 4.1.0, each pack SHA256 pinned; `--setup --ocr-langs eng+deu` names more |
+| OCR | scanned PDFs (3 pages a document) and `--ocr N` | tesseract 5.5.4 in `tesserocr` 2.13 with `tessdata_fast` 4.1.0, each pack SHA256 pinned: the ten languages with the most web text (`eng rus chi_sim chi_tra jpn kor deu fra spa por`, 22.8 MiB), the packs of the user's own languages beside them, and `osd` (10.1 MiB), which tells each scanned page's script so that the page is read with its own; `--setup --ocr-langs eng+ara` names more |
 | `yt-dlp` | video subtitles and thumbnails | not pinned: the newest release that has been out three days, looked for again every three days by a video read |
 | `pillow`, `psutil`, `python-docx`, `openpyxl`, `python-pptx` | pictures for MCP, Office files | pinned in `scripts/setup-lock.txt` with all 54 packages |
 
@@ -329,14 +330,20 @@ os-release). Measured by a real install on every runner GitHub gives a public re
 Where the home folder has letters outside ASCII (a local account `Иван`) OCR still starts: by the 8.3 short
 name of its data folder where the volume makes one, else by the folder's own name from its parent.
 
-OCR languages: `--setup` fetches English and the packs of the user's own languages - `READ_PAGE_LANG`'s when it is
-set, else Windows' display languages (its user locale only when there are none), else the one the machine is set
-to (`LC_ALL`/`LANG`) and the others in the user's list (`LANGUAGE`, a Mac's AppleLanguages), at most three; Chinese
-goes by script - and a read in the environment reads with them beside English; the script of the page or the picture decides too - `chi_sim` or `chi_tra`, `jpn`, `kor`, `rus` when the text is Chinese, Japanese, Korean or Russian - and a pack the text needs and the machine lacks is named in `improve`. Any other language:
-`readpage.py --setup --ocr-langs eng+deu` (a flag, the same in every shell; `READ_PAGE_OCR_LANGS` set for the
-`--setup` does the same) - the next plain `--setup` keeps the packs it named, and a read in the environment reads
-with them; `READ_PAGE_OCR_LANGS` set for a read decides that read's. Without the environment the skill uses whatever the machine
-has, as before. Behind a proxy it uses the machine's (`HTTPS_PROXY`, or Windows' own setting); a
+OCR languages: `--setup` fetches the ten languages with the most web text (Common Crawl's CC-MAIN-2026-43: English,
+Russian, Chinese in both scripts, Japanese, Korean, German, French, Spanish, Portuguese), the packs of the user's own
+languages beside them - `READ_PAGE_LANG`'s when it is set, else Windows' display languages (its user locale only when
+there are none), else the one the machine is set to (`LC_ALL`/`LANG`) and the others in the user's list (`LANGUAGE`, a
+Mac's AppleLanguages), at most three; Chinese goes by script - and `osd`, tesseract's own script detection. Each
+scanned page is read with the pack of the script OSD sees on it (Chinese and Japanese alone, the others with English
+beside them), a Latin page again with the pack of the language its words are in; a picture with the pack of its
+page's text. Never all of them at once: on 40 scans in the ten languages that read at 5.6 % CER and 5.2 s a page,
+against 1.4 % and 2.2 s chosen per page (English alone: 46.7 %), Korean at 35 %. A page whose script
+needs a pack the machine lacks is named in `improve` with the command: `readpage.py --setup --ocr-langs eng+ara` (a
+flag, the same in every shell; `READ_PAGE_OCR_LANGS` set for the `--setup` does the same) - the next plain `--setup`
+keeps the packs it named; `READ_PAGE_OCR_LANGS` set for a read decides that read's. An environment set up before
+reads as it did (English and the user's packs) until the next `--setup`. Without the environment the skill uses
+whatever the machine has, as before. Behind a proxy it uses the machine's (`HTTPS_PROXY`, or Windows' own setting); a
 company's package mirror named in `UV_DEFAULT_INDEX` or `PIP_INDEX_URL` is used for the Python
 packages, and one for Node in `NODEJS_ORG_MIRROR`. Every source must be `https://` (a loopback address on this
 machine may be http; `READ_PAGE_ALLOW_HTTP` names an intranet host whose plain http is used, and said so).
@@ -432,7 +439,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | `--dir DIR` | write into this folder instead of the cache entry |
 | `--caps` | the same machine facts as the setup report, as JSON, with the environment in use |
 | `--setup` | install every engine into the skill's own environment, or bring it up to date ([Engines](#engines)) |
-| `--ocr-langs eng+deu` | with `--setup`: the OCR packs to fetch besides English and the user's own languages; kept for the next `--setup` |
+| `--ocr-langs eng+ara` | with `--setup`: the OCR packs to fetch besides the ten it fetches for everyone and the user's own languages; kept for the next `--setup` |
 | `--version` | skill version, manifest schema, cache build |
 
 ## Proof
@@ -443,7 +450,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | The 226-page check (2026-11-06), pages picked to be hard | **202 ok, 6 blocked, 4 login_required, 5 not_found, 7 error, 2 empty**, each with its reason; p50 2.1 s, max 22.9 s on a fast machine, p50 4.8 s, max 30.9 s on an emulated weak laptop |
 | A set read the way `SKILL.md` says (2026-11-07): `--allow-external` first, advice followed, the outline to jump | a 34-page set **34 of 34**, 37 held-out pages no rule was tuned on **37 of 37** (each fact taken from a real Chrome; walls and paywalls by an honest status or through a reader); **1.10 calls** a question; every answer within 9 911 bytes and 309 lines, no CR; from the cache p50 0.22 s, max 0.26; UTF-8 whole in cmd, PowerShell 5.1 and 7, Git Bash and WSL under five code pages |
 | Contract | every manifest in the suite validated against `references/manifest-schema.json` (17 manifests, 0 errors) |
-| Tests | answer contract **84**, statuses **75**, timeouts **18**, deadline **22**, formats **108** (105 off Windows), reading **58**, sources **42**, blocks **26**, images **54**, speed **8**, MCP parallel **14**, security **53** (49 on Windows), props **82**, fixes **154**, channel **9**, setup audit **39**, environment **217** (210 off Windows; 2 fewer where no uv is found), MCP **28**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **158** (156 on macOS), Chinese, Japanese and Korean input **182** (175 off Windows, 147 without curl_cffi and charset_normalizer), browser live **32**; against the real services: sources live **20** |
+| Tests | answer contract **84**, statuses **75**, timeouts **18**, deadline **22**, formats **108** (105 off Windows), reading **58**, sources **42**, blocks **26**, images **54**, speed **8**, MCP parallel **14**, security **53** (49 on Windows), props **82**, fixes **154**, channel **9**, setup audit **40**, environment **219** (212 off Windows; 2 fewer where no uv is found, 1 fewer with an environment set up before 2026-11-22), MCP **28**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **158** (156 on macOS), Chinese, Japanese and Korean input **196** (189 off Windows, 161 without curl_cffi and charset_normalizer), browser live **32**; against the real services: sources live **20** |
 | CI | the offline suites on ubuntu (3.9 and 3.12), windows, macOS; a browser job on all three; and a real install - `--setup` from nothing into a folder with a space and Cyrillic in its path, every engine checked, the suites and a scanned PDF read through OCR under the environment's Python, `--setup` again with nothing to fetch - on Linux, Windows and macOS, x64 and arm64, a user's own clone-and-read, a bare Python, and containers of Alpine, Ubuntu 20.04 and 24.04, Debian 11, Rocky Linux 8, Fedora, Arch and openSUSE, a proxy that inspects TLS (Linux, Windows, macOS), a Windows whose Python has the code page 936 or 950 in a profile named in Chinese, README's ZIP, and the suites in a GBK locale on Linux (`install.yml`) |
 | Coverage | 65 % of the engine's statements |
 
@@ -482,7 +489,7 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (222 rows: 177 fixed, 3 planned, 42 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (223 rows: 178 fixed, 3 planned, 42 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License

@@ -322,16 +322,25 @@ below runs on the standard library alone, so a machine that never ran `--setup` 
   A format other than VTT (`--sub-format vtt/srt/best`: RuTube's SRT, TTML, ASS ...) is read by `scripts/subtitles.py`.
   yt-dlp runs with `--ignore-errors`: YouTube answers 429 to a machine translation (the user's `en` for a Russian
   talk), and yt-dlp then stopped with no track and no info written.
-- **OCR languages.** The packs asked for are `READ_PAGE_OCR_LANGS` (`eng`), the pack of the text's script
-  (`chi_sim` or `chi_tra` by the characters only one of them has, `jpn` where kana is a real part of the text -
-  a tenth at least - or kanji in Japan's own forms are there, `kor` for Hangul, `rus` for Cyrillic) and, unless
-  the variable is set, the packs of the user's languages (at most three) - each only if installed. A pack the
-  text called for and the machine lacks is `signals.ocr_missing_langs` and an `improve` line that names the
-  command (`readpage.py --setup --ocr-langs eng+jpn`, a flag every shell runs as it is: `--setup` fetches only
-  English, the user's own languages - `READ_PAGE_LANG`'s first - and what it was named, which it keeps for the
-  next `--setup`); the user's own language's pack is named when a scan gives no text,
-  and `--ocr N` names it on its `ocr:` line. tesserocr reads a page by its path when it can open it, so the
-  page keeps its 150 dpi; a page under a path outside ASCII goes as a picture with its resolution given.
+- **OCR languages.** `--setup` fetches ten packs for everyone - `eng rus chi_sim chi_tra jpn kor deu fra spa por` -,
+  the packs of the user's languages beside them (at most three, `READ_PAGE_LANG`'s first) and `osd`, tesseract's
+  script detection; `--setup --ocr-langs eng+ara` (a flag every shell runs as it is) names more, kept for the next
+  `--setup`. A page is read with its own packs, chosen by `_ocr_plan`: `READ_PAGE_OCR_LANGS` when the user set it
+  (and the pack of the page text's script beside it); else the pack of the text's script (`chi_sim` or `chi_tra` by
+  the characters only one of them has, `jpn` where kana is a real part of the text - a tenth at least - or kanji in
+  Japan's own forms are there, `kor` for Hangul, `rus` for Cyrillic; `intl.script_pack`) or of its Latin-script
+  language (`intl.latin_pack`), English and the user's own packs beside it - a picture's page has text; else, on a
+  scan, the script OSD sees on the page (`OCR_SCRIPT_PACKS`, from the confidence `OCR_SCRIPT_TRUST`): that script's
+  pack - the user's own of it first - alone for `chi_sim`, `chi_tra` and `jpn`, with English beside it for the
+  others; a Latin page with English and the user's Latin-script packs, read again with the pack of its words'
+  language when that is here and was not used; a Han page with `chi_sim`, then `chi_tra` and `jpn` while the best
+  reading's mean confidence is under `OCR_HAN_SURE`; and where OSD is not sure (or there is no `osd`, an
+  environment built before), English and the user's own packs (and those `--setup` was named) - each only if
+  installed. A pack the user named, the text called for or a sure script needs, and the machine lacks, is
+  `signals.ocr_missing_langs` and an `improve` line that names the command; the user's own language's pack is
+  named when a scan gives no text, and `--ocr N` names it on its `ocr:` line. tesserocr reads a page by its path
+  when it can open it, so the page keeps its 150 dpi; a page under a path outside ASCII goes as a picture with its
+  resolution given.
 - **Programs with narrow arguments.** On Windows pdftotext, tesseract's command and lynx get their arguments in
   the ANSI code page: a profile folder named in Chinese (a character outside code page 936, an emoji; in Big5
   a name with 許, 功 or 蓋, whose second byte is 0x5C, a backslash to a program that splits on it) or
@@ -345,6 +354,76 @@ below runs on the standard library alone, so a machine that never ran `--setup` 
 - **The MCP server's standard input** is UTF-8 whatever the locale (it was the locale's code page unless
   Python had `-X utf8`: a Chinese URL or folder arrived as other characters), a BOM before the first line
   dropped.
+
+### OCR languages, measured
+
+**Which packs** (2026-11-22). Common Crawl's language statistics for CC-MAIN-2026-43 (2.17 billion HTML pages by
+their primary language, CLD2; `plots/languages.csv` of commoncrawl/cc-crawl-statistics, the ten crawls of 2026 within
+a point of it): English 42.6 %, Russian 6.3, German 5.8, Japanese 4.9, French 4.8, Spanish 4.7, Chinese 4.4, Italian
+2.6, Portuguese 2.5, Polish 1.9, Dutch 1.8, Czech 1.1, Turkish 1.1, Indonesian 1.1, Vietnamese 1.0, Korean 0.9,
+Ukrainian 0.8, Swedish 0.7, Arabic 0.7, Persian 0.6, ... Hindi 0.2. By speakers (Ethnologue 2026) Hindi is third and
+Arabic fifth: little web text for their speakers, who write much of it in English. Chinese is second by speakers and
+underestimated by a crawl from the US (apps, logins, the firewall), and it is both its scripts, whose packs read each
+other's text at 20-33 % CER. The ten: the first nine languages, Chinese as two packs, and Korean in place of Italian -
+English reads an Italian page at 1.3 % CER (0.5 with its pack) and a Korean one not at all. A language outside them is
+the user's own when it is (its pack comes beside them), or named missing when a scan is in its script.
+
+What a pack buys over English alone, on the synthetic pages below (CER, English alone -> the language's own pack):
+Russian 85.9 -> 0.4 %, Japanese 98.2 -> 1.3, Chinese 91.3 / 93.5 -> 1.6 / 2.0, Korean 88.9 -> 6.6 (with English),
+Arabic 85.5 -> 2.9, Hindi 80.5 -> 1.2, Greek 83.7 -> 1.1, Hebrew 84.2 -> 2.4, Thai 98.5 -> 0.5, Ukrainian 80.4 -> 2.5
+(19.0 with rus); and the Latin-script ones: Vietnamese 23.5 -> 2.3, Turkish 15.2 -> 0.2, Czech 12.9 -> 1.1, Polish 7.7
+-> 0.2, Portuguese 2.6 -> 0.1, Spanish 2.5 -> 0.9, German 2.3 -> 0.3, Italian 1.3 -> 0.5, French 1.1 -> 0.1, Dutch 0.1,
+Indonesian 0.2: a Latin-script pack buys the accents, another script's pack buys the page.
+
+**The three ways** (2026-11-22, this machine: tesserocr 2.13, tessdata_fast). 94 synthetic scans: the Wikipedia
+article on the Moon in 24 languages, an A4 page of it in two fonts each (Times and Arial; SimSun, YaHei, JhengHei,
+MS Gothic, Yu Gothic, Malgun, Tahoma, Nirmala), clean and as a mediocre office scan (a degree of skew, blur, noise,
+JPEG), each an image-only PDF rendered at 150 dpi as a scan is read; CER against the text, page by page, one engine
+started a reading as `ocr_pages` does, for an English user; the automatic choice is `ocr_pages` itself with the ten
+packs and osd. On the ten languages (40 pages), CER and seconds a page:
+
+| | English alone | all ten packs at once | chosen per page | the page's own pack, told |
+|---|---|---|---|---|
+| mean of the ten | 46.7 % / 0.95 s | 5.6 % / 5.22 s | 1.4 % / 2.15 s | 1.4 % / 1.18 s |
+| English | 0.3 / 0.92 | 0.4 / 2.54 | 0.3 / 1.19 | 0.3 / 0.92 |
+| Russian | 85.9 / 0.97 | 0.5 / 2.17 | 0.4 / 1.46 | 0.4 / 1.12 |
+| German, French, Spanish, Portuguese | 1.1-2.6 / 0.93-1.00 | 0.3-1.7 / 2.17-4.09 | 0.1-0.9 / 2.23-2.55 | 0.1-0.9 / 1.00-1.25 |
+| Chinese, simplified | 91.3 / 1.03 | 8.6 / 9.02 | 1.6 / 2.89 | 1.6 / 1.40 |
+| Chinese, traditional | 93.5 / 1.06 | 6.2 / 10.42 | 2.0 / 3.47 | 2.0 / 1.55 |
+| Japanese | 98.2 / 0.89 | 1.8 / 9.10 | 1.3 / 1.39 | 1.3 / 1.00 |
+| Korean | 88.9 / 0.80 | 35.3 / 6.73 | 6.6 / 1.61 | 6.6 / 1.39 |
+| Arabic, Hindi (no pack here) | 80.5-85.5 / 1.12-1.35 | 81.4-83.6 / 14.5-16.1 | the same as English, the pack named missing | 1.2-2.9 / 1.86-1.99 |
+
+All of them at once was never better than the page's own pack (German the same 0.3 %) and slower: 5.2 s a page on
+average against 2.15, up to 16 s (Arabic). Tesseract reads a word with the first pack and tries the others on the words
+it is unsure of, so English first wrecked Korean (34 % against 6.6 with Korean first), and a Latin page whose own pack
+was not among them read worse than with English alone (Portuguese 3.7 % with the seven of German, French and the
+rest, 2.6 with English). The choice per page matched the page's own pack everywhere; its time over that pack's is OSD
+(0.32 s a page on average, 0.25-0.60), the reading again of a Latin page in its language (about 1 s: German and French
+pages took as long as with all ten at once, 2.2-2.6 s) and a second Chinese pack where the first was unsure. An
+English scan: the same 0.3 % CER, 1.19 s against 0.92. OSD's script, by
+page language: Latin pages Latin at 0.2-27, or Cyrillic at 0.2-1.4 (7 of 48); Cyrillic 10-60; Han 0.5-1.4 (Chinese),
+Japanese 2.0-2.7, Korean 0.8-1.6 (its own rule makes Han count for the other two); Greek 0.7-5.4; Arabic, Hebrew,
+Devanagari, Thai 9-210.
+
+Chinese, Japanese and Korean pages with English words in them (16 pages, 13-17 terms each): `chi_sim`, `chi_tra` and
+`jpn` alone read the terms as well as with English beside them (12-16 against 12-16) and the rest better (0.4-2.6 %
+CER against 0.7-3.0); `kor` alone read none of them (16-20 % CER), with English beside it 10-11 of 14-15 (6-12 %).
+Told apart by confidence, the Han pages: `chi_sim` 88-91 on simplified ones, 79-87 on traditional ones, `chi_tra`
+86-92 on both, Japanese pages 44-56 with either; reading both packs at once (`chi_sim+chi_tra`) was 3.7-10 % CER on a
+simplified page at twice the time. The language of a Latin page's English reading (`intl.latin_pack`): right on every
+page of the 12 Latin languages measured but Turkish and Vietnamese, whose readings it leaves undecided, and no
+language named for a page in another script.
+
+27 real scans (proofread pages of Wikisource in 11 languages, the page 6.5 inches wide at 150 dpi): where OSD was sure
+and the pack is here, the choice read as the page's own pack did - Russian of 1910 15-17 % CER (old spelling) against
+86-88 with English and 17-21 at once, French 2.3-4.0 against 3.1-6.0, Spanish 2.2-3.0 against 3.1-5.3, Portuguese 4.2
+against 5.9-7.4, German 17-29 (old print) against 19-30 -, at 0.8-3.7 s a page against 2.4-26.7 for all ten at once. The
+vertical Chinese, Japanese and Korean pages (5 of 7) read at 88-100 % every way: tesseract's horizontal packs do not read
+vertical text (`jpn_vert` and its kind are not fetched). OSD took two of them, and a sparse list of Chinese titles, for
+Latin (that list: 98.4 % with English, 60.3 with `chi_tra`, 83.8 with all ten). A horizontal traditional page read at
+21.9 % (all ten 35.2, English 98.0). Arabic pages, whose pack is not among the ten: English's 82-84 %, `ara` named
+missing (15-31 % with it).
 
 ## Every timeout, retry and fallback: one deadline, a fuse per step
 
@@ -459,8 +538,9 @@ which defuddle's Node entry needs, is one - and says nothing; the files go where
 `node_modules` of the npm folder on Windows and `lib/node_modules` elsewhere, the command in its `node_modules/.bin`,
 which `setup.json` names as `npm_bin`; measured, 2.6-3.2 s from an empty cache against the global install's 3.5-3.7,
 the same 27 versions), Playwright's `chromium-headless-shell`
-(`PLAYWRIGHT_BROWSERS_PATH` = the folder's `browsers`), and English and the packs of the user's own languages from
-tessdata_fast 4.1.0 (plus what `--setup --ocr-langs` names, kept in `setup.json` as `ocr_named` for the next run;
+(`PLAYWRIGHT_BROWSERS_PATH` = the folder's `browsers`), and ten language packs, the packs of the user's own languages
+and `osd` from tessdata_fast 4.1.0 (`ownenv.OCR_DEFAULT_PACKS`, 34.5 MB with osd: [OCR languages, measured](#ocr-languages-measured);
+plus what `--setup --ocr-langs` names, kept in `setup.json` as `ocr_named` for the next run;
 `READ_PAGE_OCR_LANGS` set for the `--setup` is the same), every pack of the release - 125, 339 MB - pinned by SHA256
 in `scripts/tessdata-lock.txt` (`tools/setup_lock.py --tessdata`) and held to it whoever serves it - then a check of every engine
 on a sample (import, defuddle on a page, the browser on a page, OCR of a rendered line). No
@@ -504,9 +584,10 @@ its end. That is asked of a small child that has broken away (the job it lands i
 lets nothing leave), not read from the job the process is in: a venv's `python.exe` runs its
 interpreter in a job of its own, nested in the harness's, and hides it. A background yt-dlp update has a lock of its own (`ytdlp.lock`); a `--setup` waits for it, up
 to five minutes, and holds it for its run.
-Its first line says what it will download (about 360 MB on Windows, 390 on Linux, 350 on macOS - measured by
+Its first line says what it will download (about 390 MB on Windows, 420 on Linux, 380 on macOS - measured by
 real installs on GitHub's runners, 2026-11-21, with Node from Playwright's wheel: Windows x64 359 MB, Linux x64 393
-and arm64 370, macOS arm64 348; nodejs.org's archive is 36.0, 55.6, 55.4 and 50.6 MB against npm's tarball of 2.9, and its Node and npm take 102, 192, 189 and 188 MB on disk against npm's 11.7 - nothing at all once defuddle is installed) and keep
+and arm64 370, macOS arm64 348, then English's OCR pack alone; the ten packs and osd of 2026-11-22 add 30 MB, 34.5 in
+all; nodejs.org's archive is 36.0, 55.6, 55.4 and 50.6 MB against npm's tarball of 2.9, and its Node and npm take 102, 192, 189 and 188 MB on disk against npm's 11.7 - nothing at all once defuddle is installed) and keep
 (about 0.9 GB on Windows, 1.0 GB on Linux, 0.85 on macOS, uv's cache hard-linked into it not counted twice), or that
 the folder is up to date and only a check follows. The steps run
 one after another; only the check's engines answer side by side. Side by side was built and
