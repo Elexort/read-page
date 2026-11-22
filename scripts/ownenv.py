@@ -21,13 +21,13 @@ def _size_note():
     """What --setup downloads and keeps (no markitdown, no pandoc, and Node is Playwright's own: nothing of
     nodejs.org): measured by real installs on GitHub's runners (2026-11-21, the bytes the network adapter received and
     the folder's size without uv's cache, which is hard-linked into it): Windows x64 359 MB and 0.9 GB, Linux x64
-    393 MB and 0.96 GB (arm64 370 MB, 0.92 GB), macOS arm64 348 MB and 0.82 GB - with English's OCR pack alone; the ten
-    packs and osd of 2026-11-22 are 30 MB more (34.5 MB in all, by the lock's sizes)."""
+    393 MB and 0.96 GB (arm64 370 MB, 0.92 GB), macOS arm64 348 MB and 0.82 GB - with English's OCR pack alone; the
+    fourteen packs and osd of 2026-11-22 are 35 MB more (39.3 MB in all, by the lock's sizes)."""
     if os.name == "nt":
-        return "downloads about 390 MB, takes about 0.9 GB on disk, no admin rights"
+        return "downloads about 395 MB, takes about 0.9 GB on disk, no admin rights"
     if sys.platform == "darwin":
-        return "downloads about 380 MB, takes about 0.85 GB on disk, no admin rights"
-    return "downloads about 420 MB, takes about 1.0 GB on disk, no admin rights"
+        return "downloads about 385 MB, takes about 0.85 GB on disk, no admin rights"
+    return "downloads about 430 MB, takes about 1.0 GB on disk, no admin rights"
 
 
 SIZE_NOTE = _size_note()
@@ -174,10 +174,13 @@ OCR_MORE_PACKS = 3          # the packs beyond English that --setup fetches for 
 # The packs --setup fetches for everyone (2026-11-22): the languages with the most web text by Common Crawl's
 # CC-MAIN-2026-43 (pages by their main language: eng 42.6 %, rus 6.3, deu 5.8, jpn 4.9, fra 4.8, spa 4.7, zho 4.4 -
 # both of its scripts -, ita 2.6, por 2.5, ..., kor 0.9), Korean before Italian: English reads Italian at 1.3 % CER
-# (0.5 with its pack) and Korean not at all. 22.8 MiB; osd.traineddata (10.1 MiB) tells a scanned page's script, and
-# each page is read with its script's pack - never with all of them at once (5.2 s a page against 2.15 on the ten
-# languages, and never better than the page's own pack: references/engines.md).
-OCR_DEFAULT_PACKS = ("eng", "rus", "chi_sim", "chi_tra", "jpn", "kor", "deu", "fra", "spa", "por")
+# (0.5 with its pack) and Korean not at all. Then four scripts English reads as nothing, whose pack saves the most CER
+# for its share of the web after those (ara 0.67 % of pages x 83 points, ell 0.51 x 83, tha 0.35 x 98, heb 0.26 x 82),
+# 4.9 MB together. 27.4 MiB; osd.traineddata (10.1 MiB) tells a scanned page's script, and each page is read with its
+# script's pack - never with all of them at once (5.2 s a page against 2.15 on the ten languages, and never better
+# than the page's own pack: references/engines.md).
+OCR_DEFAULT_PACKS = ("eng", "rus", "chi_sim", "chi_tra", "jpn", "kor", "deu", "fra", "spa", "por", "ara", "ell", "tha",
+                     "heb")
 OCR_SCRIPT_PACK = "osd"
 
 

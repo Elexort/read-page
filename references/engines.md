@@ -322,10 +322,10 @@ below runs on the standard library alone, so a machine that never ran `--setup` 
   A format other than VTT (`--sub-format vtt/srt/best`: RuTube's SRT, TTML, ASS ...) is read by `scripts/subtitles.py`.
   yt-dlp runs with `--ignore-errors`: YouTube answers 429 to a machine translation (the user's `en` for a Russian
   talk), and yt-dlp then stopped with no track and no info written.
-- **OCR languages.** `--setup` fetches ten packs for everyone - `eng rus chi_sim chi_tra jpn kor deu fra spa por` -,
-  the packs of the user's languages beside them (at most three, `READ_PAGE_LANG`'s first) and `osd`, tesseract's
-  script detection; `--setup --ocr-langs eng+ara` (a flag every shell runs as it is) names more, kept for the next
-  `--setup`. A page is read with its own packs, chosen by `_ocr_plan`: `READ_PAGE_OCR_LANGS` when the user set it
+- **OCR languages.** `--setup` fetches fourteen packs for everyone - `eng rus chi_sim chi_tra jpn kor deu fra spa por
+  ara ell tha heb` -, the packs of the user's languages beside them (at most three, `READ_PAGE_LANG`'s first) and
+  `osd`, tesseract's script detection; `--setup --ocr-langs eng+hin` (a flag every shell runs as it is) names more,
+  kept for the next `--setup`. A page is read with its own packs, chosen by `_ocr_plan`: `READ_PAGE_OCR_LANGS` when the user set it
   (and the pack of the page text's script beside it); else the pack of the text's script (`chi_sim` or `chi_tra` by
   the characters only one of them has, `jpn` where kana is a real part of the text - a tenth at least - or kanji in
   Japan's own forms are there, `kor` for Hangul, `rus` for Cyrillic; `intl.script_pack`) or of its Latin-script
@@ -365,8 +365,12 @@ Ukrainian 0.8, Swedish 0.7, Arabic 0.7, Persian 0.6, ... Hindi 0.2. By speakers 
 Arabic fifth: little web text for their speakers, who write much of it in English. Chinese is second by speakers and
 underestimated by a crawl from the US (apps, logins, the firewall), and it is both its scripts, whose packs read each
 other's text at 20-33 % CER. The ten: the first nine languages, Chinese as two packs, and Korean in place of Italian -
-English reads an Italian page at 1.3 % CER (0.5 with its pack) and a Korean one not at all. A language outside them is
-the user's own when it is (its pack comes beside them), or named missing when a scan is in its script.
+English reads an Italian page at 1.3 % CER (0.5 with its pack) and a Korean one not at all. Then four scripts English
+reads as nothing, whose pack saves the most CER for its share of the web after those (share of pages x CER points the
+pack saves): Arabic 0.67 x 83, Greek 0.51 x 83, Thai 0.35 x 98, Hebrew 0.26 x 82 - above any Latin-script language
+left out (Vietnamese 0.98 x 21, Turkish 1.14 x 15, Polish 1.89 x 7.5, Italian 2.58 x 0.8) and Hindi (0.21 x 79);
+4.9 MB together. A language outside the fourteen is the user's own when it is (its pack comes beside them), or named
+missing when a scan is in its script.
 
 What a pack buys over English alone, on the synthetic pages below (CER, English alone -> the language's own pack):
 Russian 85.9 -> 0.4 %, Japanese 98.2 -> 1.3, Chinese 91.3 / 93.5 -> 1.6 / 2.0, Korean 88.9 -> 6.6 (with English),
@@ -392,7 +396,7 @@ packs and osd. On the ten languages (40 pages), CER and seconds a page:
 | Chinese, traditional | 93.5 / 1.06 | 6.2 / 10.42 | 2.0 / 3.47 | 2.0 / 1.55 |
 | Japanese | 98.2 / 0.89 | 1.8 / 9.10 | 1.3 / 1.39 | 1.3 / 1.00 |
 | Korean | 88.9 / 0.80 | 35.3 / 6.73 | 6.6 / 1.61 | 6.6 / 1.39 |
-| Arabic, Hindi (no pack here) | 80.5-85.5 / 1.12-1.35 | 81.4-83.6 / 14.5-16.1 | the same as English, the pack named missing | 1.2-2.9 / 1.86-1.99 |
+| Hindi (no pack here) | 80.5 / 1.12 | 81.4 / 14.5 | the same as English, `hin` named missing | 1.2 / 1.86 |
 
 All of them at once was never better than the page's own pack (German the same 0.3 %) and slower: 5.2 s a page on
 average against 2.15, up to 16 s (Arabic). Tesseract reads a word with the first pack and tries the others on the words
@@ -422,8 +426,20 @@ against 5.9-7.4, German 17-29 (old print) against 19-30 -, at 0.8-3.7 s a page a
 vertical Chinese, Japanese and Korean pages (5 of 7) read at 88-100 % every way: tesseract's horizontal packs do not read
 vertical text (`jpn_vert` and its kind are not fetched). OSD took two of them, and a sparse list of Chinese titles, for
 Latin (that list: 98.4 % with English, 60.3 with `chi_tra`, 83.8 with all ten). A horizontal traditional page read at
-21.9 % (all ten 35.2, English 98.0). Arabic pages, whose pack is not among the ten: English's 82-84 %, `ara` named
-missing (15-31 % with it).
+21.9 % (all ten 35.2, English 98.0). Arabic pages, read before `ara` was among the defaults: English's 82-84 %, `ara`
+named missing (15-31 % with it).
+
+**The four more** (Arabic, Greek, Thai, Hebrew; 2026-11-22). With them among the packs, chosen per page, on the
+synthetic scans (CER, seconds a page; English alone before): Arabic 2.9 % / 2.12 s (85.5 / 1.53), Greek 1.1 / 1.84
+(83.7 / 1.25), Hebrew 2.4 / 1.56 (84.2 / 1.50), Thai 0.5 / 1.72 (98.5 / 1.18); Persian, read with `ara`, 20.0 (85.6). The
+ten languages read as before, page by page the same packs and the same CER (68 pages, the two set-ups one after the
+other on each page: 2.31 s a page against 2.29 on the 40 pages of the ten). OSD's Greek is the least sure of the scripts that have a pack of
+their own: on 14 Greek pages in seven fonts it said Greek at 0.5-10.3 (three under 1.0, where those pages read as
+English's 79-82 %) and once Cyrillic (2.9, read as English's); no Latin or Cyrillic page of 112 synthetic and 18 real ones
+was taken for Greek, so Greek counts from 0.4 (`OCR_SCRIPT_TRUST`): 13 of the 14 pages read at 0.7-4.7 %. On 7 real
+scans (Wikisource) OSD was right twice - a Greek page of 1912 at 1.3 (9.8 % with `ell` against 74.6 with English) and
+a Thai one at 8.9 (20.9 against 98.5) -, and took the others for Latin, Cyrillic or Arabic: two Hebrew pages for Arabic,
+one at 0.8 (English's 81 %, 24 with `heb`) and one at 1.0 (read with `ara`, 103 % against English's 95 and `heb`'s 88).
 
 ## Every timeout, retry and fallback: one deadline, a fuse per step
 
@@ -538,8 +554,8 @@ which defuddle's Node entry needs, is one - and says nothing; the files go where
 `node_modules` of the npm folder on Windows and `lib/node_modules` elsewhere, the command in its `node_modules/.bin`,
 which `setup.json` names as `npm_bin`; measured, 2.6-3.2 s from an empty cache against the global install's 3.5-3.7,
 the same 27 versions), Playwright's `chromium-headless-shell`
-(`PLAYWRIGHT_BROWSERS_PATH` = the folder's `browsers`), and ten language packs, the packs of the user's own languages
-and `osd` from tessdata_fast 4.1.0 (`ownenv.OCR_DEFAULT_PACKS`, 34.5 MB with osd: [OCR languages, measured](#ocr-languages-measured);
+(`PLAYWRIGHT_BROWSERS_PATH` = the folder's `browsers`), and fourteen language packs, the packs of the user's own
+languages and `osd` from tessdata_fast 4.1.0 (`ownenv.OCR_DEFAULT_PACKS`, 39.3 MB with osd: [OCR languages, measured](#ocr-languages-measured);
 plus what `--setup --ocr-langs` names, kept in `setup.json` as `ocr_named` for the next run;
 `READ_PAGE_OCR_LANGS` set for the `--setup` is the same), every pack of the release - 125, 339 MB - pinned by SHA256
 in `scripts/tessdata-lock.txt` (`tools/setup_lock.py --tessdata`) and held to it whoever serves it - then a check of every engine
@@ -584,10 +600,10 @@ its end. That is asked of a small child that has broken away (the job it lands i
 lets nothing leave), not read from the job the process is in: a venv's `python.exe` runs its
 interpreter in a job of its own, nested in the harness's, and hides it. A background yt-dlp update has a lock of its own (`ytdlp.lock`); a `--setup` waits for it, up
 to five minutes, and holds it for its run.
-Its first line says what it will download (about 390 MB on Windows, 420 on Linux, 380 on macOS - measured by
+Its first line says what it will download (about 395 MB on Windows, 430 on Linux, 385 on macOS - measured by
 real installs on GitHub's runners, 2026-11-21, with Node from Playwright's wheel: Windows x64 359 MB, Linux x64 393
-and arm64 370, macOS arm64 348, then English's OCR pack alone; the ten packs and osd of 2026-11-22 add 30 MB, 34.5 in
-all; nodejs.org's archive is 36.0, 55.6, 55.4 and 50.6 MB against npm's tarball of 2.9, and its Node and npm take 102, 192, 189 and 188 MB on disk against npm's 11.7 - nothing at all once defuddle is installed) and keep
+and arm64 370, macOS arm64 348, then English's OCR pack alone; the fourteen packs and osd of 2026-11-22 add 35 MB,
+39.3 in all; nodejs.org's archive is 36.0, 55.6, 55.4 and 50.6 MB against npm's tarball of 2.9, and its Node and npm take 102, 192, 189 and 188 MB on disk against npm's 11.7 - nothing at all once defuddle is installed) and keep
 (about 0.9 GB on Windows, 1.0 GB on Linux, 0.85 on macOS, uv's cache hard-linked into it not counted twice), or that
 the folder is up to date and only a check follows. The steps run
 one after another; only the check's engines answer side by side. Side by side was built and

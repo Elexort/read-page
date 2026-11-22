@@ -9,6 +9,7 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
 - **Our EPUB reader reads again in its own process** (KNOWN-ISSUES 226): it failed on every EPUB whose parts declare their encoding - `No module named 'intl'`, for the process starts with `-I` - and the read fell to PyMuPDF or to `empty`. **A home named through an 8.3 short name is under the profile** (KNOWN-ISSUES 227): `--setup` no longer changes its ACL. The OMML check compares strings of one width (the n-ary operator made its text twice as wide as the fraction's: 6.3 times the time on macOS, 1.0 alike).
+- **Arabic, Greek, Thai and Hebrew join the OCR packs `--setup` fetches for everyone** (KNOWN-ISSUES 225): scripts English reads as nothing (84-99 % CER), whose packs save the most for their share of the web after the ten; 4.9 MB more, 39.3 MB of OCR data in all (35.2 more than English alone). Chosen per page they read their synthetic scans at 2.9 % CER and 2.1 s a page (Arabic), 1.1 % and 1.8 s (Greek), 2.4 % and 1.6 s (Hebrew), 0.5 % and 1.7 s (Thai); the ten languages read as before, page by page. Greek counts from OSD's 0.4 (`OCR_SCRIPT_TRUST`): 3 of 14 Greek pages gave it under 1.0, and no Latin or Cyrillic page of 130 was taken for Greek. On 7 real scans OSD named the script of a Greek and a Thai page (9.8 and 20.9 % against 75-99 with English) and took the others for another; `--ocr-langs`' example is `eng+hin` now.
 - **A scanned page is read with the packs of its own script, from ten that `--setup` fetches for everyone**
   (KNOWN-ISSUES 225). `--setup` fetched English and the packs of the user's own languages, and a scan was read with all
   of them: a page in another script read as nothing (Chinese, Japanese, Korean, Arabic, Hindi: 80-98 % CER with
@@ -21,7 +22,7 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   once. On 40 scans in the ten languages: English alone 46.7 % CER at 0.95 s a page, all ten at once 5.6 % at 5.2 s
   (Korean 35 %), chosen per page 1.4 % at 2.15 s - the CER of each page's own pack. OSD adds 0.3 s a page (0.25-0.6); an
   English scan reads the same, 1.19 s against 0.92. A script whose pack is not here is named in `improve`
-  (`readpage.py --setup --ocr-langs eng+ara`). Measured on 94 synthetic scans in 24 languages, 16 Chinese, Japanese and
+  (`readpage.py --setup --ocr-langs eng+hin`). Measured on 94 synthetic scans in 24 languages, 16 Chinese, Japanese and
   Korean ones with English words in them and 27 real ones (references/engines.md). `READ_PAGE_OCR_LANGS` still decides
   when the user sets it: the environment no longer sets it from its packs. An environment set up before reads as it
   did until the next `--setup`.

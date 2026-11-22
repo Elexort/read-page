@@ -255,11 +255,11 @@ the skill's - `.read-page` in the home folder on Windows (not AppData: a package
 Claude's desktop app gets a private copy of what it writes there, and no other agent would see
 the environment), `~/Library/Application Support/read-page` on macOS, `$XDG_DATA_HOME` or
 `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it. It says first what it will fetch:
-about 390 MB to download on Windows (420 on Linux, 380 on macOS) and about 0.9 GB on disk (on
+about 395 MB to download on Windows (430 on Linux, 385 on macOS) and about 0.9 GB on disk (on
 Windows: the Python engines 469 MB; the browser 275; defuddle and npm 30, on the Node Playwright's wheel
-carries; Python 69; the OCR packs 34 - nodejs.org's Node, 36-56 MB to fetch and 90-190 on disk, and pandoc's 226 MB, are
-gone, our own readers read EPUB, ODT and RTF; measured by real installs on GitHub's runners, and the ten OCR packs and
-osd added by their sizes in the lock: 30 MB more than English alone).
+carries; Python 69; the OCR packs 39 - nodejs.org's Node, 36-56 MB to fetch and 90-190 on disk, and pandoc's 226 MB, are
+gone, our own readers read EPUB, ODT and RTF; measured by real installs on GitHub's runners, and the fourteen OCR packs
+and osd added by their sizes in the lock: 35 MB more than English alone).
 From nothing it takes about a minute (65-70 s on a 9 MB/s link, of which ~48 s are downloads; the
 steps side by side were no faster, measured), a check of an environment already up to
 date 8 s. From then on `readpage.py` and the MCP server run under that environment's Python by
@@ -307,7 +307,7 @@ one thing: a video read in the environment looks for a newer yt-dlp every three 
 | `pymupdf`, `pymupdf4llm` | PDF text, its tables as tables (a small layout model, on the pages that look like they hold one), and the scanned-PDF path | 1.28.2 |
 | our EPUB, ODT, ODS, ODP and RTF readers | headings, nested lists, tables with merged cells, notes, links, pictures where they stand (an RTF's too), code, formulas (ODT), a sheet's table and a slide's text and notes (ODS, ODP), code pages (RTF); against pandoc on 52 files they lost nothing it kept, and kept the endnotes, headings, tables and non-Latin RTF it lost | built in: `scripts/docreaders.py`, the standard library alone, in a process of its own (pandoc left `--setup` on 2026-11-21) |
 | `youtube-transcript-api` | a YouTube transcript when yt-dlp has none | 1.2.5 |
-| OCR | scanned PDFs (3 pages a document) and `--ocr N` | tesseract 5.5.4 in `tesserocr` 2.13 with `tessdata_fast` 4.1.0, each pack SHA256 pinned: the ten languages with the most web text (`eng rus chi_sim chi_tra jpn kor deu fra spa por`, 22.8 MiB), the packs of the user's own languages beside them, and `osd` (10.1 MiB), which tells each scanned page's script so that the page is read with its own; `--setup --ocr-langs eng+ara` names more |
+| OCR | scanned PDFs (3 pages a document) and `--ocr N` | tesseract 5.5.4 in `tesserocr` 2.13 with `tessdata_fast` 4.1.0, each pack SHA256 pinned: the ten languages with the most web text (`eng rus chi_sim chi_tra jpn kor deu fra spa por`) and four scripts English reads as nothing (`ara ell tha heb`), 27.4 MiB, the packs of the user's own languages beside them, and `osd` (10.1 MiB), which tells each scanned page's script so that the page is read with its own; `--setup --ocr-langs eng+hin` names more |
 | `yt-dlp` | video subtitles and thumbnails | not pinned: the newest release that has been out three days, looked for again every three days by a video read |
 | `pillow`, `psutil`, `python-docx`, `openpyxl`, `python-pptx` | pictures for MCP, Office files | pinned in `scripts/setup-lock.txt` with all 54 packages |
 
@@ -331,15 +331,17 @@ Where the home folder has letters outside ASCII (a local account `Иван`) OCR
 name of its data folder where the volume makes one, else by the folder's own name from its parent.
 
 OCR languages: `--setup` fetches the ten languages with the most web text (Common Crawl's CC-MAIN-2026-43: English,
-Russian, Chinese in both scripts, Japanese, Korean, German, French, Spanish, Portuguese), the packs of the user's own
-languages beside them - `READ_PAGE_LANG`'s when it is set, else Windows' display languages (its user locale only when
-there are none), else the one the machine is set to (`LC_ALL`/`LANG`) and the others in the user's list (`LANGUAGE`, a
-Mac's AppleLanguages), at most three; Chinese goes by script - and `osd`, tesseract's own script detection. Each
+Russian, Chinese in both scripts, Japanese, Korean, German, French, Spanish, Portuguese) and Arabic, Greek, Thai and
+Hebrew, scripts English reads as nothing whose packs save the most for their share of the web after those; the packs
+of the user's own languages beside them - `READ_PAGE_LANG`'s when it is set, else Windows' display languages (its user
+locale only when there are none), else the one the machine is set to (`LC_ALL`/`LANG`) and the others in the user's
+list (`LANGUAGE`, a Mac's AppleLanguages), at most three; Chinese goes by script - and `osd`, tesseract's own script
+detection. Each
 scanned page is read with the pack of the script OSD sees on it (Chinese and Japanese alone, the others with English
 beside them), a Latin page again with the pack of the language its words are in; a picture with the pack of its
 page's text. Never all of them at once: on 40 scans in the ten languages that read at 5.6 % CER and 5.2 s a page,
 against 1.4 % and 2.2 s chosen per page (English alone: 46.7 %), Korean at 35 %. A page whose script
-needs a pack the machine lacks is named in `improve` with the command: `readpage.py --setup --ocr-langs eng+ara` (a
+needs a pack the machine lacks is named in `improve` with the command: `readpage.py --setup --ocr-langs eng+hin` (a
 flag, the same in every shell; `READ_PAGE_OCR_LANGS` set for the `--setup` does the same) - the next plain `--setup`
 keeps the packs it named; `READ_PAGE_OCR_LANGS` set for a read decides that read's. An environment set up before
 reads as it did (English and the user's packs) until the next `--setup`. Without the environment the skill uses
@@ -439,7 +441,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | `--dir DIR` | write into this folder instead of the cache entry |
 | `--caps` | the same machine facts as the setup report, as JSON, with the environment in use |
 | `--setup` | install every engine into the skill's own environment, or bring it up to date ([Engines](#engines)) |
-| `--ocr-langs eng+ara` | with `--setup`: the OCR packs to fetch besides the ten it fetches for everyone and the user's own languages; kept for the next `--setup` |
+| `--ocr-langs eng+hin` | with `--setup`: the OCR packs to fetch besides the fourteen it fetches for everyone and the user's own languages; kept for the next `--setup` |
 | `--version` | skill version, manifest schema, cache build |
 
 ## Proof

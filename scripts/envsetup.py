@@ -1891,13 +1891,13 @@ class Work:
         # and reads went back to English without a word)
         self.info["ocr_named"] = [x for x in named if x in pins]
         own = [x for x in ownenv.ocr_languages(os.environ) if ownenv.ocr_pack_for(x)]
-        why = " - the %d languages with the most web text%s; osd tells a scanned page's script, and each page is read " \
-              "with its own pack" % (len(ownenv.OCR_DEFAULT_PACKS), (", the user's languages (%s) first" % ", ".join(own))
-                                     if own else "")
+        why = " - the %d packs every environment gets (the languages with the most web text, and scripts English reads " \
+              "as nothing)%s; osd tells a scanned page's script, and each page is read with its own pack" % (
+                  len(ownenv.OCR_DEFAULT_PACKS), (", the user's languages (%s) first" % ", ".join(own)) if own else "")
         more = [x for x in named if x not in mine and x in got]
         kept = ("; named %s, kept for the next --setup: %s" % ("now" if now else "at an earlier --setup", "+".join(more))
                 if more else "")
-        return bool(got), "%s (tessdata_fast 4.1.0, each pack held to its SHA256%s%s; --setup --ocr-langs eng+ara " \
+        return bool(got), "%s (tessdata_fast 4.1.0, each pack held to its SHA256%s%s; --setup --ocr-langs eng+hin " \
                           "names others)" % ("+".join(got), why, kept) + ("; failed: %s" % ", ".join(bad) if bad else "")
 
     def check(self):

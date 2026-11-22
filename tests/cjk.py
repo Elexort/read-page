@@ -894,6 +894,8 @@ if plan is not None:
         ("... and for a Chinese user, the user's pack beside English", every, ("Arabic", 70.0), "zh-CN",
          (["eng", "chi_sim"], ["ara"])),
         ("a Latin page OSD half took for Cyrillic (0.5): English", every, ("Cyrillic", 0.5), "", (["eng"], [])),
+        ("a Greek scan OSD is that little sure of (0.5): ell, English beside it", every + ["ell"], ("Greek", 0.5), "",
+         (["ell", "eng"], [])),
         ("a Latin scan for a Japanese user: English alone, no jpn", every, ("Latin", 4.0), "ja-JP", (["eng"], [])),
         ("... for a German user: English and deu", every, ("Latin", 4.0), "de-DE", (["eng", "deu"], [])),
         ("a scan OSD cannot tell, for a Japanese user: English and jpn", every, ("Latin", 0.8), "ja-JP",
