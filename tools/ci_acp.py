@@ -1,15 +1,23 @@
 """A Windows process with another ANSI code page, for the "Chinese user on Windows" job of install.yml.
 
     python tools/ci_acp.py copy LOCALE SRC.exe DST.exe   a copy of a program whose manifest asks for LOCALE's code page
-    python tools/ci_acp.py patch LOCALE FILE.exe ...     the same, in place (a program that is not running)
-    python tools/ci_acp.py python LOCALE                 the running Python's copy `python-acp.exe` beside it, asserted,
-                                                         exported as ACPY (and Git's curl.exe, patched, first on PATH)
-    python tools/ci_acp.py env-python LOCALE             the environment's own Python (what --setup built), in place
+    python tools/ci_acp.py python LOCALE                 a copy of the running Python's installation in a folder of the
+                                                         job's own (RUNNER_TEMP), its python.exe patched and asserted,
+                                                         exported as ACPY (and a patched copy of Git's curl.exe, first
+                                                         on PATH)
+    python tools/ci_acp.py env-python LOCALE             the environment's own Python (what --setup built), in place,
+                                                         its original kept beside it for `restore`
     python tools/ci_acp.py assert LOCALE PROGRAM...      each program's GetACP() must be LOCALE's, or the job fails
     python tools/ci_acp.py profile LOCALE                a user profile named in that language, for the steps after it
-    python tools/ci_acp.py restore                       the runner's own profile again (before the logs are uploaded)
+    python tools/ci_acp.py restore                       the runner's own profile again (before the logs are uploaded),
+                                                         the environment's Python as it was, the copies removed
     python tools/ci_acp.py encoding NAME                 (any OS) this Python's preferred encoding must be NAME
     python tools/ci_acp.py show                          what a process here sees: code pages, encodings, folders
+
+What changes a machine - python, env-python, profile - runs on a CI runner (GITHUB_ACTIONS=true), which is thrown
+away after the job; elsewhere only with --on-this-machine, and env-python then only on the folder READ_PAGE_HOME
+names, never the user's own environment. No installed program is patched (a copy is), and a manifest keeps what it
+had - longPathAware, its supportedOS list, its dependencies -, the code page put into it beside them.
 
 A Windows application manifest may say `<activeCodePage>zh-CN</activeCodePage>`: that one process then runs with
 the ANSI code page 936 - `GetACP()`, the encoding of every narrow (`*A`) Win32 call, Python's
@@ -26,11 +34,15 @@ can change them.
 """
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+BEFORE = ".before-acp"                         # beside a patched environment Python: the file as it was, for `restore`
+OURS = ".ci-acp-copy"                          # in a folder of copies this tool made: removed by `restore`
 # locale -> (its ANSI code page, a user's folder name with a space, Chinese-script letters of that code page and a
 # character whose trailing byte is 0x5C - a backslash to any code that splits a narrow path on bytes)
 CP = {"zh-CN": 936, "zh-TW": 950, "zh-HK": 950, "ja-JP": 932, "ko-KR": 949, "ru-RU": 1251}
@@ -65,10 +77,65 @@ def profile_name(locale):
     return "".join(chr(c) for c in PROFILE[locale])
 
 
-def set_manifest(path, locale):
-    """Replace the application manifest (RT_MANIFEST, id 1) of a program that is not running."""
+ACP = '<activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">%s</activeCodePage>'
+
+
+def with_code_page(xml, locale):
+    """A program's manifest with `activeCodePage` LOCALE in it, and everything it had kept (it was replaced whole:
+    Python's lost longPathAware, four of its five supportedOS and its Common Controls dependency). Into its
+    windowsSettings where it has one, else into an asm.v3 application element, else a new one before </assembly>;
+    an activeCodePage already there takes the new value. No manifest at all: MANIFEST."""
+    if not xml or "</assembly>" not in xml:
+        return MANIFEST % locale
+    elem = ACP % locale
+    if re.search(r"<(\w+:)?activeCodePage\b", xml):
+        return re.sub(r"<((\w+:)?activeCodePage)\b[^>]*>[^<]*</\1>", elem, xml, count=1)
+    m = re.search(r"<(\w+:)?windowsSettings\b[^>]*?(/?)>", xml)
+    if m and m.group(2) != "/":
+        return xml[:m.end()] + elem + xml[m.end():]
+    m = re.search(r"<(\w+:)?application\b[^>]*urn:schemas-microsoft-com:asm\.v3[^>]*>", xml)
+    if m:
+        return xml[:m.end()] + "<windowsSettings>" + elem + "</windowsSettings>" + xml[m.end():]
+    at = xml.rindex("</assembly>")
+    return (xml[:at] + '<application xmlns="urn:schemas-microsoft-com:asm.v3"><windowsSettings>' + elem
+            + "</windowsSettings></application>" + xml[at:])
+
+
+def read_manifest(path):
+    """A program's application manifest (RT_MANIFEST, id 1) as text, '' where it has none."""
     import ctypes
     from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.LoadLibraryExW.restype = wintypes.HMODULE
+    k.LoadLibraryExW.argtypes = [wintypes.LPCWSTR, wintypes.HANDLE, wintypes.DWORD]
+    k.FindResourceW.restype = ctypes.c_void_p
+    k.FindResourceW.argtypes = [wintypes.HMODULE, ctypes.c_void_p, ctypes.c_void_p]
+    k.LoadResource.restype = ctypes.c_void_p
+    k.LoadResource.argtypes = [wintypes.HMODULE, ctypes.c_void_p]
+    k.LockResource.restype = ctypes.c_void_p
+    k.LockResource.argtypes = [ctypes.c_void_p]
+    k.SizeofResource.argtypes = [wintypes.HMODULE, ctypes.c_void_p]
+    k.FreeLibrary.argtypes = [wintypes.HMODULE]
+    h = k.LoadLibraryExW(path, None, 0x2 | 0x20)          # LOAD_LIBRARY_AS_DATAFILE | AS_IMAGE_RESOURCE: nothing runs
+    if not h:
+        raise OSError("cannot read %s's resources (error %d)" % (path, ctypes.get_last_error()))
+    try:
+        res = k.FindResourceW(h, ctypes.c_void_p(1), ctypes.c_void_p(24))
+        if not res:
+            return ""
+        size = k.SizeofResource(h, res)
+        data = ctypes.string_at(k.LockResource(k.LoadResource(h, res)), size)
+        return data.decode("utf-8-sig", "replace")
+    finally:
+        k.FreeLibrary(h)
+
+
+def set_manifest(path, locale):
+    """Put `activeCodePage` LOCALE into the application manifest (RT_MANIFEST, id 1) of a program that is not running,
+    keeping the rest of it (with_code_page)."""
+    import ctypes
+    from ctypes import wintypes
+    old = read_manifest(path)
     k = ctypes.WinDLL("kernel32", use_last_error=True)
     k.BeginUpdateResourceW.restype = wintypes.HANDLE
     k.BeginUpdateResourceW.argtypes = [wintypes.LPCWSTR, wintypes.BOOL]
@@ -78,7 +145,7 @@ def set_manifest(path, locale):
     h = k.BeginUpdateResourceW(path, False)
     if not h:
         raise OSError("cannot open %s for resources (error %d)" % (path, ctypes.get_last_error()))
-    data = (MANIFEST % locale).encode("utf-8")
+    data = with_code_page(old, locale).encode("utf-8")
     buf = ctypes.create_string_buffer(data, len(data))
     if not k.UpdateResourceW(h, ctypes.c_void_p(24), ctypes.c_void_p(1), 0, buf, len(data)):
         err = ctypes.get_last_error()
@@ -96,17 +163,30 @@ def acp_of(program):
     return int(out) if out.isdigit() else None
 
 
+def on_ci():
+    return os.environ.get("GITHUB_ACTIONS") == "true"
+
+
+def refused(a, what):
+    """Why a command that changes this machine does not run here ('' where it does): off a CI runner only when told
+    plainly (--on-this-machine)."""
+    if on_ci() or getattr(a, "on_this_machine", False):
+        return ""
+    return ("%s changes this machine (%s): it runs on a CI runner (GITHUB_ACTIONS=true), which is thrown away after the "
+            "job; here only with --on-this-machine, and `restore` after it" % (a.cmd, what))
+
+
+def own_folder(name):
+    """A new folder for this tool's copies - in RUNNER_TEMP on a runner, else a new temp one -, marked as ours."""
+    d = tempfile.mkdtemp(prefix="ci-acp-%s-" % name, dir=os.environ.get("RUNNER_TEMP") or None)
+    open(os.path.join(d, OURS), "w").close()
+    return d
+
+
 def cmd_copy(a):
     shutil.copyfile(a.src, a.dst)
     set_manifest(a.dst, a.locale)
     print("%s -> %s (activeCodePage %s)" % (a.src, a.dst, a.locale))
-    return 0
-
-
-def cmd_patch(a):
-    for f in a.files:
-        set_manifest(f, a.locale)
-        print("%s: activeCodePage %s" % (f, a.locale))
     return 0
 
 
@@ -137,41 +217,83 @@ GIT_CURL = r"C:\Program Files\Git\mingw64\bin\curl.exe"        # takes its argum
 
 
 def cmd_python(a):
-    """The Python of the job, copied beside itself as python-acp.exe (a running program cannot be re-manifested; its
-    copy finds the same DLLs and standard library), patched and asserted; Git's curl.exe patched in place and put
-    first on PATH (System32's curl takes wide characters; Git's takes the ANSI code page, which is the one that can
-    fail on a Chinese path)."""
-    dst = os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "python-acp.exe")
-    shutil.copyfile(sys.executable, dst)
+    """A copy of the job's Python - its whole installation, so its python.exe finds its own DLLs and standard library
+    (a running program cannot be re-manifested, and none beside an installed Python is made) - in a folder of the
+    job's own, patched and asserted, exported as ACPY; and a copy of Git's curl.exe with the DLLs it loads, patched
+    and put first on PATH (System32's curl takes wide characters; Git's takes the ANSI code page, which is the one
+    that can fail on a Chinese path). Nothing installed is changed."""
+    why = refused(a, "copies of its Python and of Git's curl, first on the job's PATH")
+    if why:
+        print("REFUSED: " + why)
+        return 2
+    copies = own_folder("python")
+    dst_root = os.path.join(copies, "python")
+    shutil.copytree(sys.base_prefix, dst_root, ignore=shutil.ignore_patterns("__pycache__"))
+    dst = os.path.join(dst_root, os.path.basename(sys.executable))
     set_manifest(dst, a.locale)
     print("%s -> %s (activeCodePage %s)" % (sys.executable, dst, a.locale))
     if os.path.isfile(GIT_CURL):
-        set_manifest(GIT_CURL, a.locale)
-        print("%s: activeCodePage %s" % (GIT_CURL, a.locale))
+        bin_ = own_folder("curl")
+        here = os.path.dirname(GIT_CURL)
+        for n in os.listdir(here):
+            if n.lower().endswith(".dll"):
+                shutil.copy2(os.path.join(here, n), os.path.join(bin_, n))
+        curl = os.path.join(bin_, "curl.exe")
+        shutil.copy2(GIT_CURL, curl)
+        set_manifest(curl, a.locale)
+        print("%s -> %s (activeCodePage %s)" % (GIT_CURL, curl, a.locale))
         path = os.environ.get("GITHUB_PATH")
         if path:
             with open(path, "a", encoding="utf-8") as fh:
-                fh.write(os.path.dirname(GIT_CURL) + "\n")
+                fh.write(bin_ + "\n")
+        export("CI_ACP_COPIES", copies + os.pathsep + bin_)
     else:
         print("no Git curl.exe at %s: the ANSI curl is not tried here" % GIT_CURL)
+        export("CI_ACP_COPIES", copies)
     export("ACPY", dst.replace("\\", "/"))
+    if not on_ci():
+        print("ACPY=%s (`restore` with CI_ACP_COPIES=%s removes the copies)" % (dst, copies))
     return cmd_assert(argparse.Namespace(locale=a.locale, programs=[dst]))
 
 
-def cmd_env_python(a):
-    """The Python --setup built (the one a read goes into, behind the venv's launcher), patched in place: the
-    reads and the suites then run in the code page a Chinese user's environment has."""
+def env_home(a):
+    """The environment env-python patches: ownenv.home() on a runner (the job's own); elsewhere READ_PAGE_HOME's
+    alone - never the user's own environment, which every read of the machine runs in. '' where there is none."""
     sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
     sys.dont_write_bytecode = True
     import ownenv
-    home = ownenv.home()
+    if not on_ci() and not (os.environ.get("READ_PAGE_HOME") or "").strip():
+        return ""
+    return ownenv.home()
+
+
+def env_pythons(home):
     pys = os.path.join(home, "python")
-    found = [os.path.join(pys, n, "python.exe") for n in (sorted(os.listdir(pys)) if os.path.isdir(pys) else [])
-             if os.path.isfile(os.path.join(pys, n, "python.exe")) and not os.path.islink(os.path.join(pys, n))]
+    return [os.path.join(pys, n, "python.exe") for n in (sorted(os.listdir(pys)) if os.path.isdir(pys) else [])
+            if os.path.isfile(os.path.join(pys, n, "python.exe")) and not os.path.islink(os.path.join(pys, n))]
+
+
+def cmd_env_python(a):
+    """The Python --setup built (the one a read goes into, behind the venv's launcher), patched in place - the job's
+    own environment, the file as it was kept beside it for `restore`: the reads and the suites then run in the code
+    page a Chinese user's environment has."""
+    why = refused(a, "the code page of an environment's Python")
+    if why:
+        print("REFUSED: " + why)
+        return 2
+    home = env_home(a)
+    if not home:
+        print("REFUSED: off a CI runner env-python patches only the environment READ_PAGE_HOME names: the user's own "
+              "is the one every read of this machine runs in")
+        return 2
+    import ownenv
+    found = env_pythons(home)
     if not found:
-        print("FAIL: no Python of the environment under %s" % pys)
+        print("FAIL: no Python of the environment under %s" % os.path.join(home, "python"))
         return 1
     for exe in found:
+        if not os.path.isfile(exe + BEFORE):
+            shutil.copy2(exe, exe + BEFORE)
         set_manifest(exe, a.locale)
         print("%s: activeCodePage %s" % (exe, a.locale))
     info = ownenv.load(home)
@@ -180,6 +302,11 @@ def cmd_env_python(a):
 
 
 def cmd_profile(a):
+    why = refused(a, "a user profile folder named in that language, under %s" % (
+        os.environ.get("SystemDrive", "C:") + os.sep + "Users"))
+    if why:
+        print("REFUSED: " + why)
+        return 2
     base = os.environ.get("SystemDrive", "C:") + os.sep + "Users"
     home = os.path.join(base, profile_name(a.locale))
     paths = {"USERPROFILE": home, "HOME": home, "LOCALAPPDATA": os.path.join(home, "AppData", "Local"),
@@ -197,10 +324,23 @@ def cmd_profile(a):
 
 
 def cmd_restore(a):
+    """What the other commands did, undone: the runner's own profile in the job's variables, the environment's
+    Python as it was (where env-python kept it), the copies `python` made removed."""
     for k in ENV_NAMES:
         v = os.environ.get(SAVED + k)
         if v:
             export(k, v)
+    home = env_home(a) if os.name == "nt" else ""
+    for exe in env_pythons(home) if home else []:
+        if os.path.isfile(exe + BEFORE):
+            try:
+                os.replace(exe + BEFORE, exe)
+                print("%s: as it was" % exe)
+            except OSError as e:                       # a process of it still runs
+                print("%s: not put back (%s)" % (exe, e))
+    for d in (os.environ.get("CI_ACP_COPIES") or "").split(os.pathsep):
+        if d and os.path.isfile(os.path.join(d, OURS)):
+            shutil.rmtree(d, ignore_errors=True)
     return 0
 
 
@@ -243,23 +383,17 @@ def main(argv):
     p.add_argument("locale", choices=sorted(CP))
     p.add_argument("src")
     p.add_argument("dst")
-    p = sub.add_parser("python")
-    p.set_defaults(fn=cmd_python)
-    p.add_argument("locale", choices=sorted(CP))
-    p = sub.add_parser("env-python")
-    p.set_defaults(fn=cmd_env_python)
-    p.add_argument("locale", choices=sorted(CP))
-    p = sub.add_parser("patch")
-    p.set_defaults(fn=cmd_patch)
-    p.add_argument("locale", choices=sorted(CP))
-    p.add_argument("files", nargs="+")
+    for name, fn, choices in (("python", cmd_python, CP), ("env-python", cmd_env_python, CP),
+                              ("profile", cmd_profile, PROFILE)):
+        p = sub.add_parser(name)
+        p.set_defaults(fn=fn)
+        p.add_argument("locale", choices=sorted(choices))
+        p.add_argument("--on-this-machine", dest="on_this_machine", action="store_true",
+                       help="run off a CI runner too (it changes this machine until `restore`)")
     p = sub.add_parser("assert")
     p.set_defaults(fn=cmd_assert)
     p.add_argument("locale", choices=sorted(CP))
     p.add_argument("programs", nargs="+")
-    p = sub.add_parser("profile")
-    p.set_defaults(fn=cmd_profile)
-    p.add_argument("locale", choices=sorted(PROFILE))
     p = sub.add_parser("encoding")
     p.set_defaults(fn=cmd_encoding)
     p.add_argument("name")

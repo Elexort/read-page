@@ -369,6 +369,15 @@ check("the folder is one every agent of the user sees (Windows: the home folder,
 # report said nothing is missing, and a scan read as `empty`. The 8.3 short path opens; where it does not
 # (or the pack is broken), OCR is not counted as working, and the read says `missing: ocr` with the reason.
 junk = [home, broken, empty, off, busy]
+
+
+def scratch(prefix):
+    """A temp folder the suite removes at its end."""
+    d_ = tempfile.mkdtemp(prefix=prefix)
+    junk.append(d_)
+    return d_
+
+
 cyr = tempfile.mkdtemp(prefix="rp-Иван-", dir=ascii_base())
 junk.append(cyr)
 cyr_td = os.path.join(cyr, "tessdata")
@@ -549,12 +558,13 @@ if has_tesserocr and os.path.isfile(real_eng):             # (Windows on ARM: an
              "from PIL import Image, ImageDraw, ImageFont\n"
              "img = Image.new('L', (520, 90), 255)\n"
              "ImageDraw.Draw(img).text((20, 20), 'Setup check 2026', fill=0, font=ImageFont.load_default(size=40))\n"
-             "png = os.path.join(tempfile.mkdtemp(), 'x.png')\n"
+             "png = os.path.join(os.environ['RP_PROBE_TMP'], 'x.png')\n"
              "img.save(png)\n"
              "text, info = readpage.ocr_pages([png])\n"
              "print(repr(res.get('ok')), repr(res.get('why')), '2026' in text, info.get('engine'))\n") % SCRIPTS
+    probe_tmp = scratch("rp-env-probe-")                     # the picture it reads
     p = subprocess.run([real_py, "-E", "-B", "-X", "utf8", "-c", probe], capture_output=True, timeout=120,
-                       env=dict(os.environ, READ_PAGE_TESSDATA=cyr_td, READ_PAGE_HOME=cyr,
+                       env=dict(os.environ, READ_PAGE_TESSDATA=cyr_td, READ_PAGE_HOME=cyr, RP_PROBE_TMP=probe_tmp,
                                 READ_PAGE_ENV_CHILD="1", READ_PAGE_CACHE=os.path.join(cyr, "cache2")))
     said = p.stdout.decode("utf-8", "replace").strip()
     check("the real tesserocr, the eng pack under a Cyrillic folder: the check passes and a picture is read",
@@ -562,7 +572,8 @@ if has_tesserocr and os.path.isfile(real_eng):             # (Windows on ARM: an
           (said or p.stderr.decode("utf-8", "replace"))[-200:])
     p_ns = subprocess.run([real_py, "-E", "-B", "-X", "utf8", "-c", probe], capture_output=True, timeout=120,
                           env=dict(os.environ, READ_PAGE_TESSDATA=cyr_td, READ_PAGE_HOME=cyr, RP_NO_SHORT="1",
-                                   READ_PAGE_ENV_CHILD="1", READ_PAGE_CACHE=os.path.join(cyr, "cache3")))
+                                   RP_PROBE_TMP=probe_tmp, READ_PAGE_ENV_CHILD="1",
+                                   READ_PAGE_CACHE=os.path.join(cyr, "cache3")))
     said_ns = p_ns.stdout.decode("utf-8", "replace").strip()
     check("... and on a volume that makes no short names (a runner's D:): the same, from the folder's parent",
           p_ns.returncode == 0 and said_ns.startswith("True ") and said_ns.endswith("True tesserocr"),
@@ -836,7 +847,13 @@ side = subprocess.Popen([sys.executable, "-X", "utf8", SCRIPT, "--setup"], stdou
                                  HTTPS_PROXY="http://127.0.0.1:9", HTTP_PROXY="http://127.0.0.1:9",
                                  https_proxy="http://127.0.0.1:9", http_proxy="http://127.0.0.1:9",
                                  NO_PROXY="", no_proxy=""))
-time.sleep(4)
+# the update ends once the --setup's work is seen waiting for it - a fixed 4 s was a race on a loaded machine (the
+# command, its launcher and its worker are three Python starts; 3.3-3.7 s measured, up to 16 s under load)
+while time.time() - t0 < 60 and "waiting for it" not in (open(os.path.join(bd, "setup.log"), encoding="utf-8",
+                                                               errors="replace").read()
+                                                          if os.path.exists(os.path.join(bd, "setup.log")) else ""):
+    time.sleep(0.2)
+time.sleep(1)
 envsetup._unlock(upd)                                # the update ends
 out_b = side.communicate(timeout=120)[0].decode("utf-8", "replace")
 check("a --setup started while the yt-dlp update works waits for it, then does its own work (and exits 1 offline)",
@@ -1100,7 +1117,7 @@ else:
           and ownenv.system_install("curl", family="", root=True) == "apt install curl"
           and ownenv.system_install("chromium", family="apt", root=False)
           == "sudo apt install chromium-browser  (or sudo snap install chromium)", "")
-wk = envsetup.Work(tempfile.mkdtemp(prefix="rp-env-w-"), "rw", "test")
+wk = envsetup.Work(scratch("rp-env-w-"), "rw", "test")
 wk.env_py = sys.executable
 wk.problems = [{"part": "browser", "why": "playwright has no build", "fix": "none here"}]
 wk.sh = lambda *a, **k: (_ for _ in ()).throw(AssertionError("an installer was run"))
@@ -1570,7 +1587,7 @@ attempt("the user's .npmrc and pip's configuration are named by their registry, 
                                       os.path.join(user142, "pip", "pip.ini")) and "index-url=https://pip.example - " in x
                          for x in lines142), [x[:100] for x in lines142 if "npmrc" in x or "pip." in x]))
 attempt("nothing set, nothing said",
-        lambda: (envsetup.source_overrides({}, user142 + "-none", tempfile.mkdtemp(prefix="rp-env-bare-"),
+        lambda: (envsetup.source_overrides({}, user142 + "-none", scratch("rp-env-bare-"),
                                            system=False) == [], ""))
 os.environ.pop("UV_NO_CONFIG", None)
 os.environ.pop("UV_CONFIG_FILE", None)
@@ -1932,9 +1949,9 @@ try:
     os.environ["READ_PAGE_CACHE"] = os.path.join(yt_home, "cache-test")
     os.environ["READ_PAGE_ENV"] = yt_home
     caps151["cli"]["yt-dlp"] = yt_ours
-    rp151b.video_text("https://example.com/v", caps151, tempfile.mkdtemp(prefix="rp-env-ytw-"))
+    rp151b.video_text("https://example.com/v", caps151, scratch("rp-env-ytw-"))
     caps151["cli"]["yt-dlp"] = "/usr/bin/yt-dlp"
-    rp151b.video_text("https://example.com/v", caps151, tempfile.mkdtemp(prefix="rp-env-ytw-"))
+    rp151b.video_text("https://example.com/v", caps151, scratch("rp-env-ytw-"))
 finally:
     for k_, v_ in (("READ_PAGE_ENV", saved_env_var), ("READ_PAGE_CACHE", saved_cache)):
         if v_ is None:
@@ -2916,6 +2933,133 @@ attempt("`--setup --ocr-langs eng+jpn` names the packs in any shell (a POSIX `VA
                                               "jpn.traineddata: readpage.py --setup --ocr-langs eng+jpn"),
                  "%s %s" % (seen_flag, rp_flag.ocr_pack_fix(["jpn"]))))
 
+# ---------------------------------------------------------------- the CI tools, run by hand (KNOWN-ISSUES 217)
+# ci_proxy.py put mitmproxy's root into the machine's store and never took it out (its key in a fixed temp folder);
+# ci_acp.py patched Git's curl.exe and the environment's Python in place and left a patched copy beside an installed
+# Python; ci_container.sh rewrote /etc/apt/sources.list wherever it ran. Every call below is made with nothing of this
+# machine within the tools' reach: their processes, copies and manifest writes are recorded, never done.
+sys.path.insert(0, os.path.join(SKILL, "tools"))
+import ci_acp                                            # noqa: E402
+import ci_proxy                                          # noqa: E402
+
+
+class Recorded(object):
+    """What a tool tried to start or copy, none of it done (a call fails as a missing program would)."""
+
+    def __init__(self, ok=False):
+        self.tried, self.ok = [], ok
+
+    def __call__(self, name):
+        def call(*a, **k):
+            self.tried.append((name, [str(x) for x in (a[0] if a and isinstance(a[0], (list, tuple)) else a)]))
+            if self.ok and name == "run":
+                return types.SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
+            raise OSError("not on this machine")
+        return call
+
+
+def tool_call(mod, argv, ci=False, ok=False, env=None):
+    """mod.main(argv) off a runner (no GITHUB_ACTIONS, no GITHUB_ENV, no GITHUB_PATH) or on one: (exit code, what it
+    tried, what it printed)."""
+    rec = Recorded(ok)
+    fake_sub = types.SimpleNamespace(run=rec("run"), Popen=rec("Popen"), PIPE=-1, STDOUT=-2, DEVNULL=-3)
+    fake_shutil = types.SimpleNamespace(copyfile=rec("copy"), copy2=rec("copy"), copytree=rec("copytree"),
+                                        rmtree=shutil.rmtree, which=lambda n: "mitmdump-of-the-test",
+                                        ignore_patterns=shutil.ignore_patterns)
+    saved_mods = (mod.subprocess, mod.shutil, getattr(mod, "set_manifest", None), os.makedirs)
+    saved_env = dict((k_, os.environ.pop(k_)) for k_ in ("GITHUB_ACTIONS", "GITHUB_ENV", "GITHUB_PATH", "RUNNER_TEMP",
+                                                         "CI_PROXY_DIR", "CI_ACP_COPIES", "READ_PAGE_HOME") if k_ in os.environ)
+    os.environ.update(env or {})
+    if ci:
+        os.environ["GITHUB_ACTIONS"] = "true"
+    mod.subprocess, mod.shutil = fake_sub, fake_shutil
+    if saved_mods[2] is not None:
+        mod.set_manifest = rec("manifest")
+    os.makedirs = rec("makedirs")
+    out_ = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out_):
+            try:
+                rc_ = mod.main(argv)
+            except Exception as e:                             # noqa: BLE001
+                rc_ = "%s: %s" % (type(e).__name__, e)
+    finally:
+        mod.subprocess, mod.shutil = saved_mods[0], saved_mods[1]
+        if saved_mods[2] is not None:
+            mod.set_manifest = saved_mods[2]
+        os.makedirs = saved_mods[3]
+        for k_ in ("GITHUB_ACTIONS", "CI_PROXY_DIR", "CI_ACP_COPIES", "READ_PAGE_HOME"):
+            os.environ.pop(k_, None)
+        os.environ.update(saved_env)
+    return rc_, rec.tried, out_.getvalue()
+
+
+px_start = tool_call(ci_proxy, ["start"])
+px_stop = tool_call(ci_proxy, ["stop"])
+ac_python = tool_call(ci_acp, ["python", "zh-CN"])
+ac_env = tool_call(ci_acp, ["env-python", "zh-CN"])
+ac_env_told = tool_call(ci_acp, ["env-python", "zh-CN", "--on-this-machine"])
+ac_profile = tool_call(ci_acp, ["profile", "zh-CN"])
+attempt("off a CI runner the CI tools refuse what changes the machine - the proxy's root certificate, copies and patched "
+        "programs, a profile folder - unless told plainly, and touch nothing",
+        lambda: (px_start[0] == 2 and "REFUSED" in px_start[2] and not px_start[1]
+                 and px_stop[0] == 0 and not px_stop[1]
+                 and all(r_[0] == 2 and "REFUSED" in r_[2] and not r_[1] for r_ in (ac_python, ac_env, ac_profile))
+                 and ac_env_told[0] == 2 and "READ_PAGE_HOME" in ac_env_told[2] and not ac_env_told[1],
+                 str([(r_[0], r_[1][:2], r_[2][:60]) for r_ in (px_start, px_stop, ac_python, ac_env, ac_env_told, ac_profile)])[:400]))
+pem_dir = tempfile.mkdtemp(prefix="rp-env-proxy-")
+junk.append(pem_dir)
+pem = os.path.join(pem_dir, "conf", "mitmproxy-ca-cert.pem")
+os.makedirs(os.path.dirname(pem))
+with open(pem, "w", encoding="ascii") as fh_:
+    fh_.write("-----BEGIN CERTIFICATE-----\n%s\n-----END CERTIFICATE-----\n" % base64.b64encode(b"a certificate").decode())
+sha_pem = hashlib.sha1(b"a certificate").hexdigest().upper()
+with open(os.path.join(pem_dir, "state.json"), "w", encoding="utf-8") as fh_:
+    json.dump({"cert": pem, "sha1": sha_pem, "trusted": True, "conf": os.path.dirname(pem)}, fh_)
+undo_cmds = ci_proxy.untrust_commands(pem, sha_pem)            # (macOS's asks for the file, which stop deletes)
+thumb_pem = ci_proxy.thumbprint(pem)
+px_undo = tool_call(ci_proxy, ["stop"], ok=True, env={"CI_PROXY_DIR": pem_dir})
+attempt("`ci_proxy.py stop` takes out what `start` put in: the root certificate - by its SHA-1, this run's and no other "
+        "- out of the store, the CA and its key deleted",
+        lambda: (thumb_pem == sha_pem
+                 and ci_proxy.untrust_commands(pem, sha_pem, "nt") == [["certutil", "-delstore", "Root", sha_pem]]
+                 and ci_proxy.untrust_commands(pem, sha_pem, "darwin")[-1] == ["sudo", "security", "delete-certificate", "-Z",
+                                                                              sha_pem, ci_proxy.MAC_KEYCHAIN]
+                 and ci_proxy.untrust_commands(pem, sha_pem, "linux")[-1] == ["sudo", "update-ca-certificates", "--fresh"]
+                 and px_undo[0] == 0 and [c_ for _n, c_ in px_undo[1]] == undo_cmds
+                 and not os.path.exists(os.path.dirname(pem)), str(px_undo)[:300]))
+PY_MANIFEST = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<assembly xmlns="urn:schemas-microsoft-com:asm.v1" '
+               'manifestVersion="1.0"><trustInfo xmlns="urn:schemas-microsoft-com:asm.v3"><security><requestedPrivileges>'
+               '<requestedExecutionLevel level="asInvoker" uiAccess="false"/></requestedPrivileges></security></trustInfo>'
+               '<compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1"><application>'
+               + "".join('<supportedOS Id="{%d}"/>' % i for i in range(5)) +
+               '</application></compatibility><application xmlns="urn:schemas-microsoft-com:asm.v3"><windowsSettings>'
+               '<longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>'
+               '</windowsSettings></application><dependency><dependentAssembly><assemblyIdentity type="win32" '
+               'name="Microsoft.Windows.Common-Controls" version="6.0.0.0"/></dependentAssembly></dependency></assembly>')
+m_cn = ci_acp.with_code_page(PY_MANIFEST, "zh-CN")
+m_tw = ci_acp.with_code_page(m_cn, "zh-TW")
+attempt("the code page goes into a program's own manifest beside what it had (Python's lost longPathAware, four of "
+        "five supportedOS and Common Controls), once, and a second locale replaces the first",
+        lambda: (m_cn.count("supportedOS") == 5 and "longPathAware" in m_cn and "Common-Controls" in m_cn
+                 and "requestedExecutionLevel" in m_cn and m_cn.count("<activeCodePage") == 1 and ">zh-CN</activeCodePage>" in m_cn
+                 and m_tw.count("<activeCodePage") == 1 and ">zh-TW</activeCodePage>" in m_tw
+                 and "<activeCodePage" in ci_acp.with_code_page("", "ja-JP"), m_cn[-260:]))
+sh_ = shutil.which("sh")
+if sh_ and not os.path.exists("/.dockerenv") and not os.path.exists("/run/.containerenv") and not os.environ.get("container"):
+    no_path = tempfile.mkdtemp(prefix="rp-env-nopath-")       # nothing it could run is on PATH
+    junk.append(no_path)
+    p_ct = subprocess.run([sh_, os.path.join(SKILL, "tools", "ci_container.sh"), "none:0", "0"], capture_output=True,
+                          timeout=60, env=dict(PATH=no_path, **({"SYSTEMROOT": os.environ.get("SYSTEMROOT", "")}
+                                                                 if os.name == "nt" else {})))
+    attempt("ci_container.sh refuses to run outside a container (it rewrites the package sources and installs as root)",
+            lambda: (p_ct.returncode == 2 and b"REFUSED" in p_ct.stderr, (p_ct.stdout + p_ct.stderr)[-200:]))
+else:
+    print("SKIP ci_container.sh's refusal (no sh here, or this is a container)")
+
+import gc                                                # noqa: E402
+for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
+    w_.detail.close()                                    # (Windows deletes no folder with a file open in it)
 for d in junk:
     shutil.rmtree(d, ignore_errors=True)
 print("\n%d ok, %d failed" % (ok, failed))

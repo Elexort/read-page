@@ -9,6 +9,12 @@
 img="$1"
 sha="$2"
 py=python3
+# it rewrites the package manager's sources (Debian 11's), installs packages as root, clones into $HOME: a container's
+# business, never a machine's - it refuses to run outside one (docker's /.dockerenv, podman's /run/.containerenv)
+if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && [ -z "$container" ]; then
+  echo "REFUSED: ci_container.sh runs inside a container of install.yml: it rewrites /etc/apt/sources.list and installs packages as root" >&2
+  exit 2
+fi
 case "$img" in
   alpine*) apk add --no-cache python3 git >/dev/null || exit 1 ;;
   rockylinux:8*|almalinux:8*) dnf install -y -q python39 git >/dev/null && py=python3.9 || exit 1 ;;   # glibc 2.28, the floor

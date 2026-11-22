@@ -177,6 +177,25 @@ jobs:
         if: ${{ !cancelled() }}
         run: ${{ matrix.python }} -X utf8 ci/tools/ci_install.py read --python ${{ matrix.python }} --skill $HOME/.agents/skills/read-page --ocr
 
+      # README's update - the skill's folder brought to a newer commit, then --setup once more - over the environment
+      # main's skill built: the path every user takes, which no other job runs (the second --setup of `setup` is the
+      # same build's)
+      - name: "4. the update a user makes: the pushed commit over main's skill"
+        if: ${{ !cancelled() && matrix.source == 'main' }}
+        run: git -C $HOME/.agents/skills/read-page checkout -q ${{ github.sha }}
+
+      - name: "... --setup over main's environment"
+        if: ${{ !cancelled() && matrix.source == 'main' }}
+        run: ${{ matrix.python }} -X utf8 ci/tools/ci_install.py setup --follow --label update --python ${{ matrix.python }} --skill $HOME/.agents/skills/read-page
+
+      - name: "... what the update built"
+        if: ${{ !cancelled() && matrix.source == 'main' }}
+        run: ${{ matrix.python }} -X utf8 ci/tools/ci_install.py check --skill $HOME/.agents/skills/read-page
+
+      - name: "... and a read after it"
+        if: ${{ !cancelled() && matrix.source == 'main' }}
+        run: ${{ matrix.python }} -X utf8 ci/tools/ci_install.py read --python ${{ matrix.python }} --skill $HOME/.agents/skills/read-page
+
       - name: the folder's contents, and the summary
         if: ${{ always() }}
         run: |

@@ -41,8 +41,20 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   environment by another path to it; npm's tarball falls back to registry.npmjs.org (a registry that wants a token
   ended the step); pip's configuration is read in pip's order; the `--setup` command compiles nothing into the temp
   folder; README, engines.md and this log say what the code does.
-- tests: `environment.py` 213 (175 before); the checks of a source in plain http, of the lock's set against a local
-  index with the real uv, and of the pins against GitHub's listing, PyPI and the npm registry.
+- **The CI tools refuse to change a machine outside CI, and undo what they did** (KNOWN-ISSUES 217):
+  `tools/ci_proxy.py` left mitmproxy's root trusted system-wide with its key in a fixed temp folder; `stop` now takes
+  the certificate out by its SHA-1 and deletes the CA, its state is a folder of its own, and mitmdump ends when
+  trusting fails. `tools/ci_acp.py` patched Git's curl and the environment's Python in place and left a patched copy
+  beside an installed Python, its manifest replaced whole; it patches copies in a folder of the job's own now,
+  keeps a manifest's own content (`longPathAware`, `supportedOS`) beside the code page, and `restore` undoes
+  `env-python`. `tools/ci_container.sh` runs in a container alone. Each, off GitHub Actions, only with
+  `--on-this-machine`.
+- tests: `environment.py` 217 (175 before); the checks of a source in plain http, of the lock's set against a local
+  index with the real uv, of the pins against GitHub's listing, PyPI and the npm registry, and of the CI tools'
+  refusals with nothing of the machine in their reach. It leaves no folder in the temp folder any more (on Windows a
+  folder with a log the suite still held open stayed, some 20 a run), and the check of a --setup that waits for a
+  yt-dlp update holds the update until the work is seen waiting (a fixed 4 s was a race on a loaded machine: the
+  command, its launcher and its worker are three Python starts, 3.3-3.9 s measured, up to 16 s under load).
 
 - **Sign-in, subscription and "not found" words in twenty languages, a soft 404 judged on the final page, and a
   paywall named** (KNOWN-ISSUES 13, 191-193). The wall words covered twenty languages; the login and not-found

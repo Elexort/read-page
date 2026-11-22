@@ -52,7 +52,11 @@ git-ignored, so a contributor may keep a file of their own under that name.
   a Windows whose Python has the code page 936 or 950 in a profile named in Chinese (`tools/ci_acp.py`: an
   application manifest with `activeCodePage`, asserted by `GetACP()`), and the suites under `LC_ALL=zh_CN.GBK`, on
   every free runner (Linux, Windows, macOS; x64 and arm64). `tools/ci_install.py` is what the jobs run; a matrix
-  row's `expect` lists what its platform lacks for want of wheels (a floor), and any other gap is red. A run takes
+  row's `expect` lists what its platform lacks for want of wheels (a floor), and any other gap is red.
+  `tools/ci_proxy.py`, `tools/ci_acp.py` and `tools/ci_container.sh` change the machine they run on (a trusted root
+  certificate, patched copies of programs, the package sources): off GitHub Actions they refuse unless given
+  `--on-this-machine` (the container script runs in a container alone), and `ci_proxy.py stop` and
+  `ci_acp.py restore` undo what they did. A run takes
   about 45 minutes (the suites); a read of a failed job: `gh run view <id> --log-failed` (once the whole run is
   done; `gh api --allow-escape-sequences repos/<owner>/<repo>/actions/jobs/<id>/logs` for a finished job of a
   run still going), or the artifacts `install-logs-*` (setup.log, setup-detail.log, setup.json, each suite's log).
