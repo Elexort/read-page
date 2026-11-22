@@ -102,7 +102,7 @@
         },
         "track": {
           "type": "string",
-          "description": "a video read through yt-dlp: the subtitle track its text is - `subtitles en` (human), `subtitles fr, automatic` (speech recognition), `subtitles zh-Hans, machine-translated from en` (YouTube's translation, read only when the video has nothing else); the answer's first line names it"
+          "description": "a video read through yt-dlp: the subtitle track its text is - `subtitles en` (human), `subtitles fr, automatic` (speech recognition), `subtitles en, automatic, of a dub (original audio zh-Hant)` (the recognition of a dubbed video's default audio, which is not the speaker's words), `subtitles zh-Hans, machine-translated from en` (YouTube's translation, read only when the video has nothing else); the answer's first line names it"
         },
         "quality": {
           "type": "string",

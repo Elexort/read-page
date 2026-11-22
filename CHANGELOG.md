@@ -4,6 +4,7 @@
 
 Two branches: `main` is the skill alone - SKILL.md, README.md, scripts/,
 references/, LICENSE and .gitattributes, 34 files - so a clone, a ZIP or an installer
+references/, LICENSE and .gitattributes, 33 files - so a clone, a ZIP or an installer
 brings an agent nothing else; `dev` carries the code with its tests, CI, notes and this log.
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
@@ -56,6 +57,39 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   yt-dlp update holds the update until the work is seen waiting (a fixed 4 s was a race on a loaded machine: the
   command, its launcher and its worker are three Python starts, 3.3-3.9 s measured, up to 16 s under load).
 
+- **A video's subtitles in any text format, in the speaker's own language, a dub named, and a failure said**
+  (KNOWN-ISSUES 218-223; measured on a census of 222 public videos - 199 whose info could be read - run through the
+  code before and after with a stand-in for yt-dlp, four users, 796 answers, and 41 of them read for real: none is
+  worse). Main carries one file more (`scripts/subtitles.py`: 33 files).
+  - **RuTube's subtitles come as SRT** and the answer said `no subtitles`: yt-dlp is asked for `--sub-format
+    vtt/srt/best`, and `scripts/subtitles.py` turns SRT, SBV, TTML, DFXP, YouTube's srv1-3 and json3, ASS and LRC into the
+    same WEBVTT cues, so the blocks and `transcript.vtt` do not depend on the site. 13 of 13 RuTube videos that
+    have a track read for real (2 100 to 17 400 words); a track whose own name says automatic (`Русский • Авто`) is named so.
+  - **YouTube refuses its machine translations with HTTP 429, and yt-dlp then stopped with nothing written** - found
+    by this measurement, not asked for: the user's `en` is a translation for any video not in English, so 16 of the 41
+    videos an English reader read for real were `no subtitles`, 5 of 6 for a Chinese reader. The call carries
+    `--ignore-errors`: the refused track is a warning, the others and the info arrive. Where YouTube refuses, 470 of
+    796 answers were "no subtitles" and are the recognition now, 44 a human track, 22 a dub's speech.
+  - **A dub's recognition is named a dub's**: the speaker's language is the audio marked original, not yt-dlp's
+    `language` (the default audio, the dub's for 60 of the 163 YouTube videos); the answer says `subtitles en, automatic,
+    of a dub (original audio zh-Hant)`, and the speaker's own track, human or recognition, is read before it - 22 videos
+    (88 answers) were a dub's text where the speaker's own was there (`ar-orig`, the Arabic dub of an English talk). One
+    video whose original audio YouTube takes for English while it is Russian is named a dub's too, the text right.
+  - **The human track in the speaker's language** is asked for once more when the first call brought only a machine's
+    text: an English reader of a Russian or German talk with human subtitles read the recognition. 4-13 s more, the
+    answer names the track (`subtitles ru`); a broadcaster's several caption tracks of a language (`en-uYU-mmqFLq8`,
+    15 s each), the live chat replay and Bilibili's comments are not taken for subtitles.
+  - **A video that has not premiered, a refused request or any other yt-dlp error** said `no subtitles in en (set
+    READ_PAGE_SUB_LANGS to change)`: yt-dlp's last error line decides now - `advice: the video has not started yet (This
+    live event will begin in 38 days.): ... read it again after that, with --refresh`, `try again in a few minutes`, `yt-dlp
+    stopped with: Private video ...`; a read that ran out of time says `read it again, with --refresh`.
+  - **A media file cut in transit** (the connection broke, the server stopped sending, the time ran out) was
+    `media_only` with a short file and no advice: it is `error` or, while it was still arriving, `too_large`, says how much
+    arrived and names `--download`; what arrived is not kept (a cut DASH file plays only as a stream).
+  - Not changed: `.*-orig` still asks every track of a many-dub video (14 of 163): 13-19 s a read. The 403 before a
+    stream address's `available_at` is not met - only subtitles are asked. `tests/reading.py` (+32 checks: a stand-in
+    for yt-dlp that has the tracks a site lists, in the formats it has, and refuses translations as YouTube does) and
+    `tests/timeouts.py` (+3); `references/video.md` has the numbers.
 - **Sign-in, subscription and "not found" words in twenty languages, a soft 404 judged on the final page, and a
   paywall named** (KNOWN-ISSUES 13, 191-193). The wall words covered twenty languages; the login and not-found
   words covered seven. `LOGIN_PHRASES` (a wall's sentence: "sign in to continue", "for subscribers only", "войдите,

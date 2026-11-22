@@ -310,13 +310,18 @@ below runs on the standard library alone, so a machine that never ran `--setup` 
   curl_cffi leaves its impersonation's own header, the same), the browser's locale (`zh-CN`, `en-US` for English: one tag, which
   Chromium also sends as its Accept-Language), the subtitle tracks asked of yt-dlp when `READ_PAGE_SUB_LANGS`
   is not set (`zh-Hans,zh-CN,zh,en`; `ru,en`; `en`; with the track the video speaks in, `<lang>-orig`; a video
-  with none of them is asked once more for the language its own info names) and the OCR language packs
+  with none of them, or only a machine's, is asked once more for the language its own info names) and the OCR language packs
   (below). `READ_PAGE_SUB_LANGS` and `READ_PAGE_OCR_LANGS`, when set, are the user's own word and win.
 - **Which subtitle track.** YouTube offers a machine translation of a video's captions into every language, and
-  yt-dlp lists it beside the real tracks: a human track in the user's languages is read first, then the words as
-  spoken (speech recognition, the video's own language), a machine translation only when there is nothing else.
-  The answer's first line names the track (`subtitles en`, `subtitles fr, automatic`, `subtitles zh-Hans,
-  machine-translated from en`; `content.track`).
+  yt-dlp lists it beside the real tracks: a human track in the user's languages is read first, then the human track
+  in the language the speaker uses, then the words as spoken (speech recognition, the video's own language), then
+  the speech recognition of a dub, a machine translation only when there is nothing else. The speaker's language is
+  the audio track marked original, else yt-dlp's `language` (which, for a dubbed video, names the default audio,
+  the dub's). The answer's first line names the track (`subtitles en`, `subtitles fr, automatic`, `subtitles en,
+  automatic, of a dub (original audio zh-Hant)`, `subtitles zh-Hans, machine-translated from en`; `content.track`).
+  A format other than VTT (`--sub-format vtt/srt/best`: RuTube's SRT, TTML, ASS ...) is read by `scripts/subtitles.py`.
+  yt-dlp runs with `--ignore-errors`: YouTube answers 429 to a machine translation (the user's `en` for a Russian
+  talk), and yt-dlp then stopped with no track and no info written.
 - **OCR languages.** The packs asked for are `READ_PAGE_OCR_LANGS` (`eng`), the pack of the text's script
   (`chi_sim` or `chi_tra` by the characters only one of them has, `jpn` where kana is a real part of the text -
   a tenth at least - or kanji in Japan's own forms are there, `kor` for Hangul, `rus` for Cyrillic) and, unless

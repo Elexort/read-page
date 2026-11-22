@@ -181,6 +181,279 @@ try:
           "VIDEO-SITE-PAGE" in text and m.get("status") == "ok" and (m.get("signals") or {}).get("no_transcript"),
           "%s %s" % (m.get("status"), (m.get("signals") or {}).get("no_transcript")))
 
+    # ------------------------------------------------ a video's subtitle tracks: any text format, the speaker's language
+    # yt-dlp is a stand-in that has the tracks `available` ({track: {format: text}}, the site's list, best last),
+    # writes the ones a call asks for in the format `--sub-format` names first (else its last, as yt-dlp does),
+    # and the info file `info` says
+    import re
+    mod8 = module()
+    c8 = mod8.caps()
+    c8["cli"]["yt-dlp"] = "yt-dlp"             # the runner's machine may not have it installed
+    sub8 = getattr(mod8, "subtitles", None)
+
+    def yt_video(info, available, lang="en", rc=0, err=b"", sub_langs=None, refuse_translated=False):
+        """video_text() on the stand-in: (what it returned, the yt-dlp commands it ran, its folder). With
+        `refuse_translated` a machine translation (its address asks for `tlang=`) answers 429, as YouTube's now do:
+        yt-dlp then stops with nothing written - no track, no info file - unless it was told --ignore-errors."""
+        folder, calls = tempfile.mkdtemp(prefix="rp-vid8-"), []
+        translated8 = set(k for k, v in ((info or {}).get("automatic_captions") or {}).items()
+                          if any("tlang=" in str(x.get("url") or "") for x in v))
+
+        def fake(cmd, timeout=120, **kw):
+            if not (cmd and cmd[0] == "yt-dlp"):
+                return real8(cmd, timeout=timeout, **kw)
+            calls.append(cmd)
+            asked8 = cmd[cmd.index("--sub-langs") + 1].split(",")
+            prefs = cmd[cmd.index("--sub-format") + 1].split("/")
+            wanted = [k for k in available if any(re.fullmatch(p, k) for p in asked8)]
+            refused = [k for k in wanted if refuse_translated and k in translated8]
+            if refused and "--ignore-errors" not in cmd:
+                return 1, b"", ("ERROR: Unable to download video subtitles for '%s': HTTP Error 429: Too Many Requests\n"
+                                % refused[0]).encode()
+            if info is not None and "--write-info-json" in cmd:
+                with open(os.path.join(folder, "video.info.json"), "w", encoding="utf-8") as fh:
+                    json.dump(info, fh)
+            for key in wanted:
+                if key in refused:
+                    continue
+                formats = available[key]
+                ext = next((e for e in prefs if e in formats), list(formats)[-1])
+                with open(os.path.join(folder, "video.%s.%s" % (key, ext)), "w", encoding="utf-8") as fh:
+                    fh.write(formats[ext])
+            if refused:
+                return 0, b"", ("WARNING: Unable to download video subtitles for '%s': HTTP Error 429: Too Many Requests\n"
+                                % refused[0]).encode()
+            return rc, b"", err
+        real8 = mod8.run
+        mod8.run = fake
+        os.environ["READ_PAGE_LANG"] = lang
+        if sub_langs:
+            os.environ["READ_PAGE_SUB_LANGS"] = sub_langs
+        try:
+            got = mod8.video_text("https://example.org/v", c8, folder)
+        except Exception as e:                                    # noqa: BLE001
+            got = ("%s: %s" % (type(e).__name__, e), "", "")
+        finally:
+            mod8.run = real8
+            os.environ.pop("READ_PAGE_LANG", None)
+            os.environ.pop("READ_PAGE_SUB_LANGS", None)
+        return got, calls, folder
+
+    def langs_of(cmd):
+        return cmd[cmd.index("--sub-langs") + 1]
+
+    def cues(*texts):
+        return "WEBVTT\n\n" + "\n\n".join("00:00:%02d.000 --> 00:00:%02d.500\n%s" % (1 + 40 * i, 3 + 40 * i, t)
+                                         for i, t in enumerate(texts)) + "\n"
+
+    # each format, the same two cues (a 40 s gap: two blocks)
+    want8 = "[0:01] Hello, it's world\n\n[0:41] Second block"
+    formats8 = {
+        "srt": "﻿1\n00:00:01,000 --> 00:00:03,500\n{\\an8}<i>Hello</i>, it's world\n\n2\n00:00:41,000 --> 00:00:43,500\nSecond block\n",
+        "sbv": "0:00:01.000,0:00:03.500\nHello, it's world\n\n0:00:41.000,0:00:43.500\nSecond block\n",
+        "ttml": ('<?xml version="1.0"?><tt xmlns="http://www.w3.org/ns/ttml"><body><div>'
+                 '<p begin="00:00:01.000" end="00:00:03.500">Hello,<br/>it&apos;s <span>world</span></p>'
+                 '<p begin="41s" dur="2.5s">Second block</p></div></body></tt>'),
+        "srv1": ('<?xml version="1.0"?><transcript><text start="1" dur="2.5">Hello, it&amp;#39;s world</text>'
+                 '<text start="41" dur="2.5">Second block</text></transcript>'),
+        "srv3": ('<timedtext format="3"><body><p t="1000" d="2500">Hello, it&#39;s <s>world</s></p>'
+                 '<p t="41000" d="2500">Second block</p></body></timedtext>'),
+        "json3": json.dumps({"events": [{"tStartMs": 1000, "dDurationMs": 2500, "segs": [{"utf8": "Hello, it's "}, {"utf8": "world"}]},
+                                        {"tStartMs": 30000, "dDurationMs": 100},
+                                        {"tStartMs": 41000, "dDurationMs": 2500, "segs": [{"utf8": "Second block"}]}]}),
+        "ass": ("[Script Info]\nTitle: x\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+                "Dialogue: 0,0:00:01.00,0:00:03.50,Default,,0,0,0,,{\\i1}Hello, it's{\\i0}\\Nworld\n"
+                "Dialogue: 0,0:00:41.00,0:00:43.50,Default,,0,0,0,,Second block\n"),
+        "lrc": "[ti:x]\n[00:01.00]Hello, it's world\n[00:41.00]Second block\n",
+    }
+    formats8["dfxp"] = formats8["ttml"]
+    formats8["srv2"] = formats8["srv3"].replace("<timedtext format=\"3\">", "<timedtext>")
+    if sub8 is None:
+        check("subtitle formats: scripts/subtitles.py", False, "no readpage.subtitles")
+    else:
+        wrong = []
+        for ext, raw in sorted(formats8.items()):
+            got = mod8.vtt_to_text(sub8.to_vtt(raw, ext))
+            if got != want8:
+                wrong.append("%s: %r" % (ext, got[:70]))
+        check("%d subtitle formats (SRT, SBV, TTML, DFXP, srv1-3, json3, ASS, LRC) read as the same two blocks" % len(formats8),
+              not wrong, "; ".join(wrong[:2]))
+        vtt8 = sub8.to_vtt(formats8["srt"], "srt")
+        check("an SRT becomes a WEBVTT text (dotted times, no index lines): what transcript.vtt holds",
+              vtt8.startswith("WEBVTT") and "00:00:01.000 --> 00:00:03.500" in vtt8 and "," not in vtt8.split("\n\n")[1].split("\n")[0],
+              vtt8[:80].replace("\n", "/"))
+        check("a file of no known format and no cue is no transcript", sub8.to_vtt("{}", "json") == "" and sub8.to_vtt("", "srt") == ""
+              and sub8.track_of("video.zh-Hans.vtt") == ("zh-Hans", "vtt") and sub8.track_of("video.info.json") == ("", "")
+              and sub8.track_of("transcript.vtt") == ("", "") and sub8.track_of("video.en.json3") == ("en", "json3"),
+              str([sub8.track_of(n) for n in ("video.zh-Hans.vtt", "video.info.json", "transcript.vtt")]))
+    names8 = ["video.ru.srt", "video.ru.vtt", "video.en.ttml", "video.info.json", "transcript.vtt", "page.md"]
+    check("a language with a VTT and an SRT is read in the VTT; a folder's other files are no tracks",
+          getattr(mod8, "pick_subtitle", lambda *a: "")(names8, ["ru"]) == "video.ru.vtt"
+          and getattr(mod8, "pick_subtitle", lambda *a: "")(["video.info.json", "transcript.vtt"], ["en"]) == "", "")
+
+    # RuTube: its automatic subtitles come as SRT only ("No subtitle format found matching vtt ... using srt")
+    RU_SRT = "1\n00:00:01,000 --> 00:00:03,500\nДобрый день, коллеги\n\n2\n00:00:04,000 --> 00:00:06,000\nСегодня говорим о субтитрах\n"
+    rutube = {"title": "Лекция", "uploader": "Канал", "subtitles": {"ru": [{"ext": "srt", "name": "Русский • Авто"}]},
+              "automatic_captions": {}, "formats": [{"format_id": "default-247-0"}]}
+    got, calls, folder = yt_video(rutube, {"ru": {"srt": RU_SRT}}, lang="ru")
+    vtt8 = open(os.path.join(folder, "transcript.vtt"), encoding="utf-8").read() if os.path.isfile(
+        os.path.join(folder, "transcript.vtt")) else ""
+    check("RuTube: a track that comes as SRT is read, named automatic (its own name says so), kept as VTT",
+          "Добрый день, коллеги" in got[0] and got[0].startswith("[0:01]") and got[2] == "subtitles ru, automatic"
+          and vtt8.startswith("WEBVTT") and "00:00:01.000 --> 00:00:03.500" in vtt8 and len(calls) == 1,
+          "%s | %s | %d calls" % (got[0][:50], got[2], len(calls)))
+    got, calls, folder = yt_video(rutube, {"ru": {"srt": RU_SRT}}, lang="en")
+    check("... for an English reader too: the video's own language is asked for once more",
+          "Добрый день" in got[0] and len(calls) == 2 and langs_of(calls[1]) == "ru", "%s | %d calls" % (got[0][:40], len(calls)))
+    got, calls, _ = yt_video({"title": "T", "language": "de", "subtitles": {"de": [{"ext": "ttml", "name": "Deutsch"}]}},
+                             {"de": {"ttml": formats8["ttml"]}}, lang="en")
+    check("a site that has TTML only: its track is read all the same", "Hello," in got[0] and got[2] == "subtitles de",
+          "%s | %s" % (got[0][:40], got[2]))
+
+    # a dubbed video: yt-dlp's `language` names the default audio track, and the automatic track is that audio's speech
+    ASR = "https://www.youtube.com/api/timedtext?v=x&caps=asr&hl=en&kind=asr&lang=en&fmt=vtt"
+    dub = {"title": "新聞", "language": "en", "subtitles": {},
+           "formats": [{"format_id": "249-0", "language": "en-US", "format_note": "English (US), low", "acodec": "opus"},
+                       {"format_id": "249-1", "language": "zh-Hant", "format_note": "Chinese (Traditional) original (default), low",
+                        "acodec": "opus"}],
+           "automatic_captions": {"en": [{"url": ASR}], "en-orig": [{"url": ASR}],
+                                  "zh-Hant": [{"url": ASR + "&tlang=zh-Hant"}], "zh-Hans": [{"url": ASR + "&tlang=zh-Hans"}]}}
+    on8 = {"en": {"vtt": cues("the English dub speaks")}, "en-orig": {"vtt": cues("the English dub speaks")},
+           "zh-Hant": {"vtt": cues("機器翻譯")}, "zh-Hans": {"vtt": cues("机器翻译")}}
+    got, calls, _ = yt_video(dub, on8, lang="en")
+    check("a dub's automatic track is named for what it is: the dub's speech, and the original language",
+          "the English dub speaks" in got[0] and "dub" in got[2] and "zh-Hant" in got[2] and "en" in got[2], got[2])
+    def kinds_of(info):
+        try:
+            return mod8.subtitle_kinds(info)
+        except Exception as e:                                    # noqa: BLE001
+            return {"error": "%s: %s" % (type(e).__name__, e)}
+    kinds8 = kinds_of(dub)
+    check("... and it is no track of the speaker's: a machine translation of it is worse still",
+          kinds8.get("en-orig", "").startswith("dub") and kinds8.get("zh-Hant", "").startswith("translated")
+          and kinds_of(dict(dub, formats=[])).get("en-orig") == "auto", str(kinds8))
+    got, calls, _ = yt_video(dict(dub, language="zh-Hant"), on8, lang="en")
+    check("... the same when yt-dlp's `language` is already the original's", "dub" in got[2], got[2])
+    plain = dict(dub, formats=[], language="en")
+    got, calls, _ = yt_video(plain, on8, lang="en")
+    check("... but an English talk is still `subtitles en, automatic`", got[2] == "subtitles en, automatic", got[2])
+    human_zh = dict(dub, subtitles={"zh-Hant": [{"ext": "vtt", "name": "Chinese (Traditional)"}]})
+    on_zh = dict(on8, **{"zh-Hant": {"vtt": cues("人工字幕")}})
+    got, calls, _ = yt_video(human_zh, on_zh, lang="en")
+    check("a dubbed video's human track in the original language is asked for and read before the dub's speech",
+          "人工字幕" in got[0] and got[2] == "subtitles zh-Hant" and len(calls) == 2 and langs_of(calls[1]) == "zh-Hant",
+          "%s | %s | %d calls" % (got[0][:30], got[2], len(calls)))
+    got, calls, _ = yt_video(human_zh, on_zh, lang="zh-TW")
+    check("... and a reader of Chinese has it at once", "人工字幕" in got[0] and len(calls) == 1, "%d calls" % len(calls))
+    # the Arabic dub of an English talk is no more the talk than the English dub of a Chinese one
+    multi = {"title": "Keynote", "language": "en-US", "subtitles": {},
+             "formats": [{"format_id": "139-0", "language": "ar", "format_note": "Arabic, low", "acodec": "x"},
+                         {"format_id": "139-1", "language": "ru", "format_note": "Russian, low", "acodec": "x"},
+                         {"format_id": "139-2", "language": "en-US", "format_note": "English (US) original (default), low",
+                          "acodec": "x"}],
+             "automatic_captions": {k: [{"url": ASR.replace("lang=en", "lang=" + k.split("-")[0])}] for k in
+                                    ("ar-orig", "ru-orig", "en-orig")}}
+    got, calls, _ = yt_video(multi, {"ar-orig": {"vtt": cues("arabic")}, "ru-orig": {"vtt": cues("russian dub")},
+                                     "en-orig": {"vtt": cues("the talk itself")}}, lang="ru")
+    check("a talk dubbed into the reader's language is read in its own words, not in the dub's",
+          "the talk itself" in got[0] and got[2] == "subtitles en, automatic", "%s | %s" % (got[0][:30], got[2]))
+
+    # a human track in the language spoken is better than YouTube's recognition, whoever asks
+    ru_info = {"title": "Лекция", "language": "ru", "subtitles": {"ru": [{"ext": "vtt", "name": "Russian"}]},
+               "automatic_captions": {"ru-orig": [{"url": ASR.replace("lang=en", "lang=ru")}]}}
+    ru_tracks = {"ru-orig": {"vtt": cues("распознано машиной")}, "ru": {"vtt": cues("написано человеком")}}
+    got, calls, _ = yt_video(ru_info, ru_tracks, lang="en")
+    check("a Russian talk with human subtitles, read by an English user: the human track, named, not the recognition",
+          "написано человеком" in got[0] and got[2] == "subtitles ru" and len(calls) == 2 and langs_of(calls[1]) == "ru",
+          "%s | %s | %d calls" % (got[0][:30], got[2], len(calls)))
+    got, calls, _ = yt_video(ru_info, ru_tracks, lang="ru")
+    check("... a Russian reader has it at once, with one call", "написано человеком" in got[0] and len(calls) == 1, "%d calls" % len(calls))
+    machine_only = dict(ru_info, subtitles={})
+    got, calls, _ = yt_video(machine_only, ru_tracks, lang="en")
+    check("... without a human track the recognition is read, and no second call is made",
+          "распознано машиной" in got[0] and got[2] == "subtitles ru, automatic" and len(calls) == 1, "%s | %d calls" % (got[2], len(calls)))
+    en_info = {"title": "Talk", "language": "en", "subtitles": {"fr": [{"ext": "vtt"}]},
+               "automatic_captions": {"en": [{"url": ASR}], "en-orig": [{"url": ASR}]}}
+    got, calls, _ = yt_video(en_info, {"en": {"vtt": cues("english words")}, "en-orig": {"vtt": cues("english words")},
+                                       "fr": {"vtt": cues("mots")}}, lang="en")
+    check("... nor for an English talk whose only human track is a translation", got[2] == "subtitles en, automatic" and len(calls) == 1,
+          "%s | %d calls" % (got[2], len(calls)))
+    news = {"title": "Headlines", "language": "en", "automatic_captions": {"en": [{"url": ASR}], "en-orig": [{"url": ASR}]},
+            "subtitles": {"en-uYU-mmqFLq8": [{"ext": "vtt", "name": "English - CC1"}], "en-JkeT_87f4cc": [{"ext": "vtt", "name": "English - DTVCC1"}]}}
+    got, calls, _ = yt_video(news, {"en": {"vtt": cues("recognised")}, "en-orig": {"vtt": cues("recognised")},
+                                    "en-uYU-mmqFLq8": {"vtt": cues("CC ONE")}}, lang="en")
+    check("... nor for a broadcaster's several caption tracks of the language (CC1, DTVCC1: 15 s each to fetch)",
+          "recognised" in got[0] and len(calls) == 1, "%s | %d calls" % (got[2], len(calls)))
+    pt = {"title": "Fala", "language": "pt-BR", "automatic_captions": {"pt-orig": [{"url": ASR.replace("lang=en", "lang=pt")}]},
+          "subtitles": {"pt-PT": [{"ext": "vtt", "name": "Portuguese (Portugal)"}]}}
+    got, calls, _ = yt_video(pt, {"pt-orig": {"vtt": cues("reconhecido")}, "pt-PT": {"vtt": cues("legendado")}}, lang="en")
+    check("... but a regional variant of the language spoken is its human track (pt-BR spoken, pt-PT subtitles)",
+          "legendado" in got[0] and got[2] == "subtitles pt-PT" and len(calls) == 2, "%s | %d calls" % (got[2], len(calls)))
+    got, calls, _ = yt_video(ru_info, ru_tracks, lang="en", sub_langs="en")
+    check("READ_PAGE_SUB_LANGS is the user's own word: no second call is made for the speaker's track",
+          len(calls) == 1 and "распознано машиной" not in got[0] and "написано человеком" not in got[0], "%d calls" % len(calls))
+
+    # YouTube answers 429 to a machine translation, and the user's `en` is one for a Russian talk: yt-dlp stopped there
+    # with nothing written, so every video not in the user's own language was "no subtitles"
+    ru_tr = {"title": "Лекция", "language": "ru", "subtitles": {},
+             "automatic_captions": {"ru-orig": [{"url": ASR.replace("lang=en", "lang=ru")}],
+                                    "en": [{"url": ASR.replace("lang=en", "lang=ru") + "&tlang=en"}]}}
+    tr_tracks = {"ru-orig": {"vtt": cues("распознано машиной")}, "en": {"vtt": cues("machine translation")}}
+    got, calls, _ = yt_video(ru_tr, tr_tracks, lang="en", refuse_translated=True)
+    check("a Russian talk read by an English user, YouTube refusing its machine translation: the recognition is read",
+          "распознано машиной" in got[0] and got[2] == "subtitles ru, automatic" and "--ignore-errors" in calls[0],
+          "%s | %s" % (got[0][:30], got[2]))
+    got, calls, _ = yt_video(dict(ru_info, automatic_captions=ru_tr["automatic_captions"]), dict(tr_tracks, ru=ru_tracks["ru"]),
+                             lang="en", refuse_translated=True)
+    check("... and the human track of the speaker's language is still asked for", "написано человеком" in got[0] and got[2] == "subtitles ru",
+          "%s | %s | %d calls" % (got[0][:30], got[2], len(calls)))
+    only_tr = {"title": "T", "language": "ru", "subtitles": {}, "automatic_captions": {"en": ru_tr["automatic_captions"]["en"]}}
+    got, calls, _ = yt_video(only_tr, {"en": {"vtt": cues("machine translation")}}, lang="en", refuse_translated=True)
+    check("... and when the refusal leaves nothing, the answer says so, not `no subtitles`",
+          "refused" in got[2] and "429" in got[2] and getattr(mod8, "_VIDEO", {}).get("kind") == "limit", got[2])
+
+    # a video that has not started yet, and a refusal: what happened, and what to do
+    upcoming = b"ERROR: [youtube] 1hEmuJOxNTI: This live event will begin in 38 days.\n"
+    got, calls, _ = yt_video(None, {}, rc=1, err=upcoming)
+    check("a video that has not premiered: the note says so, with what YouTube said",
+          "has not started yet" in got[2] and "38 days" in got[2] and "READ_PAGE_SUB_LANGS" not in got[2]
+          and getattr(mod8, "_VIDEO", {}).get("kind") == "upcoming" and "--refresh" in getattr(mod8, "_VIDEO", {}).get("advice", ""), got[2])
+    got, calls, _ = yt_video(None, {}, rc=1, err=b"ERROR: [youtube] abc: Premieres in 2 hours\n")
+    check("... a premiere too", "has not started yet" in got[2] and "2 hours" in got[2], got[2])
+    got, calls, _ = yt_video(None, {}, rc=1, err=b"ERROR: Unable to download video subtitles for 'en': HTTP Error 429: Too Many Requests\n")
+    check("a refused request for subtitles is said, not 'no subtitles'",
+          "refused" in got[2] and "429" in got[2] and getattr(mod8, "_VIDEO", {}).get("kind") == "limit", got[2])
+    got, calls, _ = yt_video(None, {}, rc=1, err=b"ERROR: [youtube] abc: Private video. Sign in if you've been granted access\n")
+    check("any other error yt-dlp stops with is said in its words", "Private video" in got[2] and getattr(mod8, "_VIDEO", {}).get("kind") == "error", got[2])
+    got, calls, _ = yt_video({"title": "T", "language": "en"}, {}, rc=0)
+    check("no error and no track is `no subtitles`, with the way to ask for another language",
+          got[2].startswith("no subtitles in en") and "READ_PAGE_SUB_LANGS" in got[2] and getattr(mod8, "_VIDEO", {}).get("kind") == "", got[2])
+
+    got, calls, _ = yt_video({"title": "T", "language": "zh-Hant", "subtitles": {"live_chat": [{"ext": "json"}]}},
+                             {"live_chat": {"json": "{}"}}, lang="en")
+    check("a live chat replay is no subtitle track: a video that has only that is not asked again for it",
+          len(calls) == 1 and got[2].startswith("no subtitles in en"), "%d calls | %s" % (len(calls), got[2]))
+
+    # the answer: the advice, the missing line, and no road tried that cannot have a track
+    mod9 = module()
+    mod9.VIDEO_URL = re.compile(r"/watch-page")
+    c9 = mod9.caps()
+    c9["cli"]["yt-dlp"] = "yt-dlp"
+    mod9.caps = lambda *a, **k: c9
+    real9 = mod9.run
+    mod9.run = lambda cmd, timeout=120, **kw: ((1, b"", upcoming) if cmd and cmd[0] == "yt-dlp" else real9(cmd, timeout=timeout, **kw))
+    tried9 = []
+    mod9.transcript_video = lambda url, workdir: (tried9.append("transcript-api"), ("", ""))[1]
+    mod9.markitdown_video = lambda url, c: (tried9.append("markitdown"), ("", ""))[1]
+    m, text = inproc(mod9, [s.public.url("/watch-page")])
+    miss9 = [x for x in m.get("missing") or [] if x.get("what") == "transcript"]
+    check("a video that has not started: the page is read, the advice says why there is no text and when to come back",
+          m.get("status") == "ok" and "VIDEO-SITE-PAGE" in text and (m.get("advice") or "").startswith("the video has not started yet")
+          and "38 days" in (m.get("advice") or "") and "--refresh" in (m.get("advice") or ""), (m.get("advice") or "")[:140])
+    check("... the missing line has no `set READ_PAGE_SUB_LANGS`, and no other road to a track is tried",
+          bool(miss9) and "READ_PAGE_SUB_LANGS" not in json.dumps(miss9) and "--refresh" in miss9[0].get("fix", "") and not tried9,
+          "%s %s" % (miss9, tried9))
+
     # ------------------------------------------------ Jina gets the address in a POST body
     import http.server
     import socketserver

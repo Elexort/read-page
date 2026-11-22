@@ -128,6 +128,28 @@ def flowing_pdf(h):
     h.close_connection = True
 
 
+def cut_media(ctype, head, mode):
+    """A media file that promises 2 000 000 bytes: `mode` "break" sends 12 000 and closes the connection, "flow" keeps
+    arriving at ~8 KB/s (above the speed floor, too big for the read's time)."""
+    def handler(h):
+        h.send_response(200)
+        h.send_header("Content-Type", ctype)
+        h.send_header("Content-Length", "2000000")
+        h.send_header("Connection", "close")
+        h.end_headers()
+        try:
+            h.wfile.write(head + b"\x01" * 11980)
+            h.wfile.flush()
+            for _ in range(120 if mode == "flow" else 0):
+                h.wfile.write(b"\x02" * 4096)
+                h.wfile.flush()
+                time.sleep(0.5)
+        except OSError:
+            pass
+        h.close_connection = True
+    return handler
+
+
 def module():
     os.environ["READ_PAGE_TEST_PUBLIC_HOST"] = PUBLIC
     os.environ["READ_PAGE_CACHE"] = tempfile.mkdtemp(prefix="rp-time-")
@@ -181,6 +203,9 @@ slow_arch, slow_arch_url = slow_server(SlowArchive)
 s.public.routes.update({
     "/slow.pdf": slow_pdf,
     "/flowing.pdf": flowing_pdf,
+    "/broken.mp4": cut_media("video/mp4", b"\x00\x00\x00\x18ftypdash\x00\x00\x00\x00iso6dash", "break"),
+    "/broken.mp3": cut_media("audio/mpeg", b"ID3\x03\x00\x00\x00\x00\x00\x00", "break"),
+    "/flowing.mp4": cut_media("video/mp4", b"\x00\x00\x00\x18ftypdash\x00\x00\x00\x00iso6dash", "flow"),
     "/pics": (200, H, page("Pictures", "<article><h1>Pictures</h1><p>PICS-MARKER " + WORDS + "</p>"
                            + "".join("<img src='%s/p%d.png' alt='p%d'>" % (slow_url, i, i) for i in range(5))
                            + "</article>")),
@@ -238,6 +263,28 @@ try:
     check("a PDF still arriving at the read's deadline is too_large, with the reason",
           r.manifest.get("status") == "too_large" and "still arriving" in reason
           and "--download" in (r.manifest.get("advice") or "") and dt < 30,
+          "%.1f s %s: %s" % (dt, r.manifest.get("status"), reason[:70]))
+
+    # ------------------------------------------------ a media file cut in transit is not a file read (it was `media_only`)
+    # a fragmented MP4 (YouTube's DASH) cut short plays only as a stream, and the answer called it a file with no
+    # word of the cut
+    r, dt = timed(run_read, s.public.url("/broken.mp4"))
+    reason = str((r.manifest.get("signals") or {}).get("status_reason") or "")
+    adv = r.manifest.get("advice") or ""
+    kept = [n for n in os.listdir(r.dir) if n.endswith(".mp4")] if os.path.isdir(r.dir) else []
+    check("a video whose connection broke after 12K is an error, with how much arrived and what to do, and no file kept",
+          r.manifest.get("status") == "error" and "connection broke" in reason and "video file" in reason
+          and "--download" in adv and not (r.manifest.get("files") or {}).get("media") and not kept,
+          "%s: %s | %s | %s" % (r.manifest.get("status"), reason[:90], adv[:60], kept))
+    r, dt = timed(run_read, s.public.url("/broken.mp3"))
+    reason = str((r.manifest.get("signals") or {}).get("status_reason") or "")
+    check("... an audio file the same", r.manifest.get("status") == "error" and "audio file" in reason,
+          "%s: %s" % (r.manifest.get("status"), reason[:90]))
+    r, dt = timed(run_read, s.public.url("/flowing.mp4"), env={"READ_PAGE_TEST_DEADLINE": "20"})
+    reason = str((r.manifest.get("signals") or {}).get("limit") or "")
+    check("a video still arriving at the read's deadline is too_large, with the reason, and --download",
+          r.manifest.get("status") == "too_large" and "still arriving" in reason and "video file" in reason
+          and "--download" in (r.manifest.get("advice") or "") and not (r.manifest.get("files") or {}).get("media") and dt < 30,
           "%.1f s %s: %s" % (dt, r.manifest.get("status"), reason[:70]))
 
     # ------------------------------------------------ pictures: a stuck one 4 s, then the answer

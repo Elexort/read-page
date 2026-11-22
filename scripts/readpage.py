@@ -115,6 +115,7 @@ import pictures                                                     # noqa: E402
 import screens                                                      # noqa: E402
 import settle                                                       # noqa: E402
 import siteapi                                                      # noqa: E402
+import subtitles                                                    # noqa: E402
 from engines import (crude_text, html2text_full, readability_text,  # noqa: E402,F401
                      trafilatura_text, visible_len, visible_text)
 
@@ -2255,6 +2256,29 @@ def cut_said(f, size=None):
             "step": "the time for the page ran out after %s",
             "disk": "the disk has less than 1 GB free, so the download stopped after %s"}.get(
         f.get("cut") or "", "the connection broke after %s") % got
+
+
+def cut_transfer(manifest, f, what):
+    """A file cut in transit, said as a status. Why it was cut decides it: a file still arriving when the time for it
+    ran out is too big for one call (`too_large`: --download takes it whole); a server that stopped sending, or a
+    connection that broke, is a failure (`error`) - a file stuck at 1 KB is not "too large". `what` names the
+    file in the reason ("PDF", "video file")."""
+    got, whole = int(f.get("size") or 0), int(f.get("expected") or 0)
+    of = " of %s" % human_bytes(whole) if whole else ""
+    if f.get("cut") == "step":
+        manifest["status"] = "too_large"
+        manifest["signals"]["limit"] = ("the %s was still arriving when the time for it ran out "
+                                        "(%d s): %s%s" % (what, int(round((f.get("ms") or 0) / 1000.0)),
+                                                          human_bytes(got), of))
+        manifest["advice"] = "rerun with --download: no time limit, the file arrives whole"
+    else:
+        manifest["status"] = "error"
+        manifest["signals"]["status_reason"] = (
+            "the server stopped sending the %s after %s%s" if f.get("cut") == "slow" else
+            "the connection broke after %s%s of the %s") % (
+            (what, human_bytes(got), of) if f.get("cut") == "slow" else (human_bytes(got), of, what))
+        manifest["advice"] = ("try again in a minute; --download waits as long as the server "
+                              "takes, with no time limit")
 
 
 def cut_reason(message):
@@ -6906,12 +6930,18 @@ def vtt_to_text(vtt, block_seconds=30):
     return "\n\n".join(rendered)
 
 
+SUB_FORMATS = "vtt/srt/best"      # a site without VTT gives SRT (RuTube), else the best it has: subtitles.py reads them
+_VIDEO = {"kind": "", "advice": "", "fix": ""}     # what video_text() learned about a failure, for the answer's advice
+
+
 def video_text(url, c, workdir):
     """Subtitle transcript via yt-dlp (works for YouTube, TikTok, VK, Vimeo, RuTube, ...): (text, title, note) -
     the note says why there is no text, or which track the text is (`en`, `fr, automatic`, `zh-Hans,
     machine-translated from en`). The user's languages are asked for, and the track the video speaks in
     (`<lang>-orig`, YouTube's speech recognition): YouTube offers a machine translation into every language,
-    which is read only when the video has nothing else (pick_vtt)."""
+    which is read only when the video has nothing else (pick_subtitle). A human track in the language the speaker
+    uses is asked for once more when the first call brought only a machine's (own_tracks)."""
+    _VIDEO.update(kind="", advice="", fix="")
     yt = c["cli"].get("yt-dlp")
     if not yt:
         return "", "", "yt-dlp is not installed"
@@ -6939,69 +6969,149 @@ def video_text(url, c, workdir):
     if ours and os.path.normcase(yt).startswith(os.path.normcase(ours)):
         # its own cache (the player's solved challenges) in the one folder, not in ~/.cache/yt-dlp
         extra = ["--cache-dir", os.path.join(ours, "cache", "yt-dlp")] + extra
-    rc, so, se = run([yt, "--skip-download", "--write-subs", "--write-auto-subs",
-                      "--sub-langs", sub_arg, "--sub-format", "vtt", "--write-info-json"]
+    # --ignore-errors: a track that cannot be fetched is a warning, not the end of the call. YouTube answers 429 to
+    # a machine translation (the user's `en` for a Russian talk is one), and yt-dlp then stopped with nothing
+    # written - no track of the others, no info file: a Russian talk read by an English user was "no subtitles"
+    rc, so, se = run([yt, "--skip-download", "--ignore-errors", "--write-subs", "--write-auto-subs",
+                      "--sub-langs", sub_arg, "--sub-format", SUB_FORMATS, "--write-info-json"]
                      + extra + ["-o", os.path.join(workdir, "video.%(ext)s"), url],
                      timeout=video_secs)
     files = os.listdir(workdir)
-    kinds = subtitle_kinds(workdir, files)
-    vtt = pick_vtt(files, asked, kinds)
-    if (not vtt or kinds.get(_vtt_lang(vtt), "").startswith("translated")) and rc != -1 \
-            and not os.environ.get("READ_PAGE_SUB_LANGS"):
-        # none of the user's tracks and English, or only a machine translation: the video's own language,
+    info = read_info(workdir, files)
+    kinds = subtitle_kinds(info)
+    spoken = spoken_language(info)
+    sub = pick_subtitle(files, asked, kinds, spoken)
+    kind = kinds.get(subtitles.track_of(sub)[0], "")
+    if info and rc != -1 and kind != "human" and not os.environ.get("READ_PAGE_SUB_LANGS"):
+        # no track of the user's and none in English, only a machine translation or a dub's speech, or only
+        # speech recognition while the speaker's own language has a human track: the video's own language,
         # when its info names one
-        own = own_tracks(workdir, files, asked)
+        own = own_tracks(info, kinds, asked, track_langs(files), human_only=bool(sub) and kind in ("", "auto"))
         left = video_secs - (now() - t_yt)
         if own and left > 3:
-            run([yt, "--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", own,
-                 "--sub-format", "vtt"] + extra + ["-o", os.path.join(workdir, "video.%(ext)s"), url],
-                timeout=max(1.0, left))
+            rc2, so2, se2 = run([yt, "--skip-download", "--ignore-errors", "--write-subs", "--write-auto-subs",
+                                 "--sub-langs", own, "--sub-format", SUB_FORMATS] + extra
+                                + ["-o", os.path.join(workdir, "video.%(ext)s"), url], timeout=max(1.0, left))
+            se = (se or b"") + b"\n" + (se2 or b"")
             files = os.listdir(workdir)
-            got = pick_vtt(files, own.split(",") + asked, kinds)
-            if got and got != vtt:
-                vtt = got
-                langs = "%s, then %s" % (langs, own)
-    budget.record("yt-dlp", t_yt, budget.ended(VIDEO_TIMEOUT, video_secs) if rc == -1 else "ok" if vtt else "fail",
-                  own=VIDEO_TIMEOUT, given=video_secs, note="subtitles" if vtt else "no subtitles")
-    title = ""
-    info = next((f for f in files if f.endswith(".info.json")), "")
-    if info:
-        try:
-            d = json.load(open(os.path.join(workdir, info), encoding="utf-8"))
-            title = (d.get("title") or "") + (" — " + d["uploader"] if d.get("uploader") else "")
-        except Exception:                                     # noqa: BLE001
-            pass
-    if not vtt:
+            got = pick_subtitle(files, own.split(",") + asked, kinds, spoken)
+            if got and got != sub:
+                sub = got
+            langs = "%s, then %s" % (langs, own)
+    budget.record("yt-dlp", t_yt, budget.ended(VIDEO_TIMEOUT, video_secs) if rc == -1 else "ok" if sub else "fail",
+                  own=VIDEO_TIMEOUT, given=video_secs, note="subtitles" if sub else "no subtitles")
+    title = (info.get("title") or "") + (" — " + info["uploader"] if info.get("uploader") else "") if info else ""
+    if not sub:
         if rc == -1:
             # killed by the time bound before any subtitle file was written: that is not "this
             # video has no subtitles", and saying so would send the caller the wrong way
+            _VIDEO.update(kind="timeout", fix="read it again, with --refresh",
+                          advice="yt-dlp did not finish in %d s, so this video's subtitles are not known: read it "
+                                 "again, with --refresh" % video_secs)
             return "", title, "yt-dlp did not finish in %d s; no subtitles arrived yet" % video_secs
+        why, msg = ytdlp_why(se)
+        if why == "upcoming":
+            # YouTube answers a video that has not started yet with an error and no track at all
+            _VIDEO.update(kind=why, fix="read it again after it has started, with --refresh",
+                          advice="the video has not started yet (%s): it has no subtitles until it has aired; read "
+                                 "it again after that, with --refresh" % msg)
+            return "", title, "the video has not started yet (%s)" % msg
+        if why == "limit":
+            _VIDEO.update(kind=why, fix="try again in a few minutes, with --refresh",
+                          advice="the site refused the request for subtitles (%s): try again in a few minutes, with "
+                                 "--refresh" % msg)
+            return "", title, "the site refused the request for subtitles (%s)" % msg
+        if why == "error":
+            _VIDEO.update(kind=why, advice="yt-dlp stopped with: %s; this video's subtitles are not known" % msg)
+            return "", title, "yt-dlp stopped with: %s" % msg
         return "", title, "no subtitles in %s (set READ_PAGE_SUB_LANGS to change)" % langs
-    raw = open(os.path.join(workdir, vtt), encoding="utf-8", errors="replace").read()
+    lang, ext = subtitles.track_of(sub)
+    with open(os.path.join(workdir, sub), encoding="utf-8-sig", errors="replace") as fh:
+        raw = fh.read()
+    vtt = subtitles.to_vtt(raw, ext)
     try:
-        shutil.copyfile(os.path.join(workdir, vtt), os.path.join(workdir, "transcript.vtt"))
+        if ext == "vtt":
+            shutil.copyfile(os.path.join(workdir, sub), os.path.join(workdir, "transcript.vtt"))
+        elif vtt:
+            with open(os.path.join(workdir, "transcript.vtt"), "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(vtt)
     except OSError:
         pass
-    text = vtt_to_text(raw)
-    return text, title, track_note(_vtt_lang(vtt), kinds) if text else "subtitles were empty"
+    text = vtt_to_text(vtt)
+    return text, title, track_note(lang, kinds) if text else "subtitles were empty"
 
 
-def _vtt_lang(name):
-    """`video.zh-Hans.vtt` -> "zh-Hans"."""
-    return (name or "")[:-4].rsplit(".", 1)[-1] if (name or "").endswith(".vtt") else ""
+def ytdlp_why(se):
+    """What yt-dlp's last error line says: (kind, message). kind: "upcoming" (a premiere or a live event that has
+    not started: no stream and no track exist yet), "limit" (the site refused for too many requests: an error, or the
+    warning of a track it would not give), "error" (anything else it said), "" when it said nothing of the kind."""
+    text = (se or b"").decode("utf-8", "replace").splitlines()
+    lines = [x.strip() for x in text if x.strip().startswith(("ERROR:", "yt-dlp: error:"))]
+    if not lines:
+        lines = [x.strip() for x in text if x.strip().startswith("WARNING: Unable to download video subtitles")
+                 and re.search(r"\b429\b|(?i:too many requests)", x)]
+    if not lines:
+        return "", ""
+    msg = re.sub(r"^(?:ERROR:|WARNING:|yt-dlp: error:)\s*(?:\[[^\]]*\]\s*)?(?:[^\s:]+:\s+)?", "", lines[-1])
+    msg = re.sub(r"\s+", " ", msg).strip()[:200]
+    if re.search(r"(?i)premieres? (?:in|on|will)\b|will begin\b|is_upcoming", msg):
+        return "upcoming", msg
+    if re.search(r"(?i)\b429\b|too many requests", msg):
+        return "limit", msg
+    return "error", msg
 
 
-def subtitle_kinds(workdir, files):
-    """{language: kind} of the tracks yt-dlp's info file lists: "human" (the video's own subtitles), "auto"
-    (speech recognition in the language spoken), "translated from <lang>" (YouTube's machine translation:
-    its address asks for `tlang=`). {} without the info file."""
-    info = next((f for f in files if f.endswith(".info.json")), "")
+def read_info(workdir, files):
+    """yt-dlp's info file for the video as a dict; {} without it, or one that does not read."""
+    name = next((f for f in files if f.endswith(".info.json")), "")
     try:
-        with open(os.path.join(workdir, info), encoding="utf-8") as fh:
+        with open(os.path.join(workdir, name), encoding="utf-8") as fh:
             d = json.load(fh)
     except (OSError, ValueError):
         return {}
+    return d if isinstance(d, dict) else {}
+
+
+def track_langs(files):
+    """The languages of the subtitle files in the folder."""
+    return set(subtitles.track_of(f)[0] for f in files if subtitles.track_of(f)[0])
+
+
+def _base_lang(tag):
+    return (tag or "").split("-")[0].lower()
+
+
+def spoken_language(d):
+    """The language the speaker uses, from yt-dlp's info. A dubbed video offers audio in several languages, one marked
+    original, and `language` names the default track, which can be a dub's (`en` for a Chinese news video whose
+    original is `zh-Hant`): the original's language wins, else `language`."""
+    for f in d.get("formats") or []:
+        if isinstance(f, dict) and f.get("language") and "original" in str(f.get("format_note") or "").lower():
+            return str(f["language"])
+    return str(d.get("language") or "")
+
+
+def is_dubbed(d):
+    """True when the video's audio comes in more than one language: some of it is a dub."""
+    return len(set(_base_lang(f["language"]) for f in d.get("formats") or []
+                   if isinstance(f, dict) and f.get("language"))) > 1
+
+
+_AUTO_NAME = re.compile(r"(?i)\b(?:auto|авто)\b|automatic|автоматич|自动|自動")
+# what yt-dlp lists among a video's subtitles that is no subtitles: YouTube's live chat replay, Bilibili's comments
+NOT_SUBTITLES = ("live_chat", "danmaku")
+
+
+def subtitle_kinds(d):
+    """{language: kind} of the tracks yt-dlp's info lists: "human" (the video's own subtitles), "auto" (speech
+    recognition in the language spoken), "dub <language>" (speech recognition of a dub: the audio the track was made
+    from is not the speaker's `<language>`), "translated from <lang>" (YouTube's machine translation: its address
+    asks for `tlang=`). {} without the info. A site's own subtitles that are named automatic (RuTube: `Русский • Авто`)
+    are speech recognition too."""
     out = {}
+    if not isinstance(d, dict):
+        return out
+    spoken, dubbed = spoken_language(d), is_dubbed(d)
     autos = d.get("automatic_captions") if isinstance(d.get("automatic_captions"), dict) else {}
     for lang, fmts in autos.items():
         urls = [str(x.get("url") or "") for x in (fmts if isinstance(fmts, list) else []) if isinstance(x, dict)]
@@ -7009,56 +7119,91 @@ def subtitle_kinds(workdir, files):
         if tr:
             src = (re.search(r"[?&]lang=([^&#]+)", tr) or [None, d.get("language") or ""])[1]
             out[str(lang)] = "translated" + (" from " + urllib.parse.unquote(src) if src else "")
-        else:
-            out[str(lang)] = "auto"
+            continue
+        m = re.search(r"[?&]lang=([^&#]+)", next((u for u in urls if u), ""))
+        src = urllib.parse.unquote(m.group(1)) if m else (str(lang)[:-5] if str(lang).endswith("-orig") else str(lang))
+        out[str(lang)] = "dub " + spoken if dubbed and spoken and _base_lang(src) != _base_lang(spoken) else "auto"
     subs = d.get("subtitles") if isinstance(d.get("subtitles"), dict) else {}
-    for lang in subs:
-        out[str(lang)] = "human"                     # yt-dlp takes a language's own subtitles over its automatic ones
+    for lang, fmts in subs.items():
+        if lang in NOT_SUBTITLES:
+            continue
+        names = [str(x.get("name") or "") for x in (fmts if isinstance(fmts, list) else []) if isinstance(x, dict)]
+        # yt-dlp takes a language's own subtitles over its automatic ones
+        out[str(lang)] = "auto" if names and all(_AUTO_NAME.search(n) for n in names) else "human"
     return out
 
 
 def track_note(lang, kinds):
-    """How the answer names the track it read: `en`, `fr, automatic`, `zh-Hans, machine-translated from en`."""
+    """How the answer names the track it read: `en`, `fr, automatic`, `en, automatic, of a dub (original audio
+    zh-Hant)`, `zh-Hans, machine-translated from en`."""
     kind = (kinds or {}).get(lang, "")
+    name = lang[:-5] if lang.endswith("-orig") else lang
     if kind == "auto":
-        return "subtitles %s, automatic" % (lang[:-5] if lang.endswith("-orig") else lang)
+        return "subtitles %s, automatic" % name
+    if kind.startswith("dub"):
+        return "subtitles %s, automatic, of a dub (original audio %s)" % (name, kind[4:])
     if kind.startswith("translated"):
         return "subtitles %s, machine-translated%s" % (lang, kind[len("translated"):])
     return "subtitles %s" % lang
 
 
-def pick_vtt(files, langs, kinds=None):
-    """The subtitle file to read of those yt-dlp wrote (`video.<lang>.vtt`): a human track, in the order of `langs`;
-    else the words as spoken - speech recognition in one of `langs`, then the video's own (`-orig`); a machine
-    translation only when there is nothing else (YouTube makes one into every language: the user's first
-    language was taken, an English talk read in YouTube's Chinese). With no kinds known, by `langs` alone."""
-    vtts = sorted(f for f in files if f.endswith(".vtt") and f != "transcript.vtt")
+def pick_subtitle(files, langs, kinds=None, spoken=""):
+    """The subtitle file to read of those yt-dlp wrote (`video.<lang>.<ext>`, subtitles.EXTS): a human track, in the
+    order of `langs`; else the words as spoken - speech recognition in one of `langs`, then the video's own
+    (`-orig`), the speaker's language first; else the speech recognition of a dub; a machine translation only when
+    there is nothing else (YouTube makes one into every language: the user's first language was taken, an English
+    talk read in YouTube's Chinese). A language with several files is read in the best format. With no kinds known,
+    by `langs` alone."""
+    best = {}
+    for f in sorted(files):
+        lang, ext = subtitles.track_of(f)
+        if lang and (lang not in best or subtitles.EXTS.index(ext) < subtitles.EXTS.index(subtitles.track_of(best[lang])[1])):
+            best[lang] = f
     want = [x.lower() for x in langs]
     kinds = dict((str(k).lower(), v) for k, v in (kinds or {}).items())
 
-    def order(f):
-        lang = _vtt_lang(f).lower()
-        kind = kinds.get(lang, "")
-        tier = 0 if kind == "human" else 2 if kind.startswith("translated") else 1
-        pos = want.index(lang) if lang in want else len(want) + (0 if lang.endswith("-orig") else 1)
-        return tier, pos, f
-    return min(vtts, key=order) if vtts else ""
+    def order(lang):
+        low = lang.lower()
+        kind = kinds.get(low, "")
+        tier = 0 if kind == "human" else 2 if kind.startswith("dub") else 3 if kind.startswith("translated") else 1
+        pos = want.index(low) if low in want else len(want) + (0 if low.endswith("-orig") else 1)
+        theirs = 0 if spoken and _base_lang(low[:-5] if low.endswith("-orig") else low) == _base_lang(spoken) else 1
+        return tier, pos, theirs, lang
+    return best[min(best, key=order)] if best else ""
 
 
-def own_tracks(workdir, files, asked):
-    """The subtitle track named for the video itself in yt-dlp's info file - its language, its first
-    manual track, an automatic track in the original language - when the user's list did not ask for
-    it; "" when there is none. A Chinese video said `no subtitles in en,ru`."""
-    info = next((f for f in files if f.endswith(".info.json")), "")
-    try:
-        with open(os.path.join(workdir, info), encoding="utf-8") as fh:
-            d = json.load(fh)
-    except (OSError, ValueError):
+def track_for(keys, spoken):
+    """Which of `keys`, the names of a video's tracks, is the language `spoken`: the name itself, a name that language
+    goes by on a video site (`zh-Hant` -> `zh-TW`, `en-US` -> `en`), else a regional or script variant of it
+    (`en-GB`, `pt-BR`). Not one of several named tracks of a language (`en-uYU-mmqFLq8`: a broadcaster's CC1,
+    DTVCC1 - each a long live-caption track, 15 s to fetch, no way to tell which)."""
+    keys = [str(k) for k in keys]
+    if not spoken:
         return ""
+    for n in [spoken] + intl.track_names(spoken):
+        if n in keys:
+            return n
+    return next((k for k in keys if _base_lang(k) == _base_lang(spoken)
+                 and re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,4})?", k)), "")
+
+
+def own_tracks(d, kinds, asked, have=(), human_only=False):
+    """The subtitle tracks named for the video itself in yt-dlp's info - the human track in the language the speaker
+    uses, the track in that language, the first human track, speech recognition in the original language - that
+    the user's list did not ask for and the folder does not have yet; "" when there are none. A Chinese video said
+    `no subtitles in en,ru`. `human_only`: just the human track in the speaker's language (the first call brought
+    speech recognition, and a human track is better than a machine's). Never a machine translation or a dub's."""
+    subs = d.get("subtitles") if isinstance(d.get("subtitles"), dict) else {}
+    autos = d.get("automatic_captions") if isinstance(d.get("automatic_captions"), dict) else {}
+    spoken = spoken_language(d)
+    cands = [track_for([k for k in subs if kinds.get(str(k)) == "human"], spoken)]
+    if not human_only:
+        cands += [spoken if kinds.get(spoken) in ("human", "auto") else ""]
+        cands += [k for k in subs if str(k) in kinds][:1]           # the first of the video's own subtitles
+        cands += [k for k in autos if str(k).endswith("-orig") and kinds.get(str(k)) == "auto"][:1]
     found = []
-    subs, autos = d.get("subtitles") or {}, d.get("automatic_captions") or {}
-    for k in [d.get("language")] + list(subs)[:1] + [k for k in autos if str(k).endswith("-orig")][:1]:
-        if k and isinstance(k, str) and k not in asked and k not in found and (k in subs or k in autos):
+    for k in cands:
+        if k and isinstance(k, str) and k not in asked and k not in have and k not in found and (k in subs or k in autos):
             found.append(k)
     return ",".join(found[:2])
 
@@ -8883,6 +9028,7 @@ def read(args):
 
     # ---------------------------------------------------------------- video
     page_http = None                       # the page's own request, started beside a slower tier
+    video_advice = ""                      # a video that gave no subtitles for a reason of its own: what to do
     if VIDEO_URL.search(url):
         # the watch page (its cover, or the page itself when there are no subtitles) comes in
         # while yt-dlp works: 1-2 s of a video read, no longer one after the other
@@ -8892,9 +9038,10 @@ def read(args):
         v_engine = "video:yt-dlp"
         track = note if text else ""                   # which subtitle track: the answer's first line names it
         ownenv.refresh_ytdlp()        # its own update, every few days, apart from this read (never pinned)
-        if not text:
+        if not text and _VIDEO["kind"] != "upcoming":
             # YouTube's own caption track by another road when yt-dlp got none or is not
-            # installed - youtube-transcript-api (--setup's), else a machine's own markitdown
+            # installed - youtube-transcript-api (--setup's), else a machine's own markitdown. Not for a
+            # video that has not started: no road has a track yet, and each costs seconds
             mt, why = transcript_video(url, workdir)
             if why or mt:
                 manifest["chain"]["tried"].append("video:transcript-api")
@@ -8939,9 +9086,10 @@ def read(args):
         # no subtitles: the page is still a page - a description, comments, a channel page.
         # It is read like any other below, and the manifest says why there is no transcript.
         manifest["signals"]["no_transcript"] = note
-        manifest["missing"].append({"what": "transcript", "note": note,
-                                    "fix": ownenv.fix("yt-dlp", "pip install yt-dlp") if not c["cli"].get("yt-dlp")
-                                           else "set READ_PAGE_SUB_LANGS"})
+        video_advice = _VIDEO["advice"]
+        fix = (ownenv.fix("yt-dlp", "pip install yt-dlp") if not c["cli"].get("yt-dlp")
+               else _VIDEO["fix"] if _VIDEO["kind"] else "set READ_PAGE_SUB_LANGS")
+        manifest["missing"].append(dict({"what": "transcript", "note": note}, **({"fix": fix} if fix else {})))
 
     # ---------------------------------------------------------------- the site's own API
     # Only where the ordinary path fails in measurements: Stack Exchange and npm answer with a wall,
@@ -9084,6 +9232,16 @@ def read(args):
              if not network_fail and not (f["status"] or 0) >= 400 else "")
     if mkind:
         manifest["content"] = {"kind": mkind, "engine": "file", "chars": 0}
+        if f.get("partial"):
+            # a file cut in transit is not a file read: saved as `media_only` it was taken for the whole one, and a
+            # video's cut ends where its bytes end (a fragmented MP4 - YouTube's DASH - then plays only as a
+            # stream, the rest not at all). Said as a document's cut is, with what to do; what arrived is not kept
+            cut_transfer(manifest, f, "image" if mkind == "image" else "%s file" % mkind)
+            trace("media", kind=mkind, bytes=size, cut=f.get("cut") or "broken")
+            if f.get("path") and os.path.exists(f["path"]):
+                os.unlink(f["path"])
+            manifest["elapsed_ms"] = int((now() - t0) * 1000)
+            return finish(workdir, manifest, t0, args, None)
         if size > MEDIA_LIMIT and not args.download:
             content_path = os.path.join(workdir, "content.md")
             write_text(content_path, "This URL is a file of %s (%s, %s) and it is above the %s "
@@ -9129,23 +9287,7 @@ def read(args):
         # file still arriving when the 20 s ran out is too big for one call (`too_large`); a
         # server that stopped sending, or a connection that broke, is a failure (`error`) - a
         # document stuck at 1 KB is not "too large".
-        got, whole = int(f.get("size") or 0), int(f.get("expected") or 0)
-        what = "PDF" if kind == "pdf" else "document"
-        of = " of %s" % human_bytes(whole) if whole else ""
-        if f.get("cut") == "step":
-            manifest["status"] = "too_large"
-            manifest["signals"]["limit"] = ("the %s was still arriving when the time for it ran out "
-                                            "(%d s): %s%s" % (what, int(round((f.get("ms") or 0) / 1000.0)),
-                                                              human_bytes(got), of))
-            manifest["advice"] = "rerun with --download: no time limit, the file arrives whole"
-        else:
-            manifest["status"] = "error"
-            manifest["signals"]["status_reason"] = (
-                "the server stopped sending the %s after %s%s" if f.get("cut") == "slow" else
-                "the connection broke after %s%s of the %s") % (
-                (what, human_bytes(got), of) if f.get("cut") == "slow" else (human_bytes(got), of, what))
-            manifest["advice"] = ("try again in a minute; --download waits as long as the server "
-                                  "takes, with no time limit")
+        cut_transfer(manifest, f, "PDF" if kind == "pdf" else "document")
         if f.get("path") and os.path.exists(f["path"]):
             os.unlink(f["path"])
         manifest["elapsed_ms"] = int((now() - t0) * 1000)
@@ -9900,6 +10042,9 @@ def read(args):
         manifest["advice"] = "the page mentions signing in; the text may be partial"
     elif manifest["status"] == "ok" and tables_said and tables_advice(_PDF):
         manifest["advice"] = tables_advice(_PDF)            # the read's own lists, not the ranges
+    if video_advice:
+        # why the video gave no subtitles comes first: what follows is only what its page says
+        manifest["advice"] = video_advice + ("; " + manifest["advice"] if manifest["advice"] else "")
     if _COOKIE_STATS["sent"] or _COOKIE_STATS["stored"]:
         manifest["signals"]["cookies"] = {"sent": _COOKIE_STATS["sent"],
                                           "stored": _COOKIE_STATS["stored"]}
