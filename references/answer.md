@@ -55,8 +55,8 @@ so a file tool that stops at 2 000 still sees every word.
 |---|---|---|
 | `ok` | text is there, and the tier that gave it got a successful answer | answer from the text |
 | `blocked` | an anti-bot wall: a challenge header or markup, a wall's words (20 languages), or HTTP 403/419/429/451 | follow `advice`: `--allow-external` for a public URL; once the readers were stopped too, no flag opens it (`--alternate` opened none of 8 measured walls) - another source, or the user |
-| `login_required` | an account is needed (password form, redirect to /login, 401/407) | not this skill: the user's own browser, or their paste |
-| `not_found` | 404 or a soft 404; the archive was tried with `--allow-external` | report it |
+| `login_required` | an account is needed (a password form with its sign-in label on a short page, a sentence of a wall - "sign in to continue", "for subscribers only" - in 20 languages, redirect to /login, 401/407) | not this skill: the user's own browser, or their paste |
+| `not_found` | 404 or a soft 404 (a 200 page that says it is not there, in 20 languages: in its title or heading, or with few words; the browser's page counts); the archive was tried with `--allow-external` | report it |
 | `empty` | no usable text: an app shell, an error stub, or a binary body | follow `advice`: `--alternate` when the browser has not rendered it, `--screenshots` when it has |
 | `media_only` | the URL *is* a file (image/audio/video); it is saved, not converted | the text names the file: open it |
 | `too_large` | the file or page is over the cap, or a document was still arriving when its time ran out | the `reason:` line names the cap; `--download` lifts policy limits |
@@ -67,7 +67,11 @@ tables and they were put back where they stood; `outside the text: 6.2 KB … - 
 `page.md` has (menus, link lists, fragments). `fragment` in the first line is not a status: the
 text is real but shorter than the page, so the answer shows `page.md`. `partial` there means the
 transfer was cut (a timeout, a broken connection): the text may stop early, and the advice says how
-to get the rest. `charset gb18030 (guessed)` there means the page named no encoding and its text was read by
+to get the rest. `signals.paywall` (and an advice saying so) is a page that says it is paywalled - schema.org's
+`isAccessibleForFree: false` in its JSON-LD or microdata, with the `cssSelector` of the hidden part when it names one -
+while the status stays `ok`: the text is what the server sent, the whole article a script hides or only the part open
+to everyone, and the page cannot tell which; a container named `paywall` is no such word (free pages carry them).
+`charset gb18030 (guessed)` there means the page named no encoding and its text was read by
 what its characters are (`guessed, doubtful` when little text or two readings alike make it a close call: some
 characters may be wrong; the same is `signals.charset_guess`). Status words describe the *text*, not its length: a five-line status page is `ok`,
 a page that quotes "access denied" in prose is `ok`. Any status but `ok` comes with a `reason:` line
