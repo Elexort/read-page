@@ -386,44 +386,45 @@ try:
           "wrong: %s" % articles_hit)
 
     # ------------------------------------------------ a sign-in wall in twenty languages
-    walls_missed = [lang for lang in SIGNIN if status(run_read(s.public.url("/signin/" + lang))) != "login_required"]
+    NO_BROWSER = {"READ_PAGE_SKIP": "browser"}    # these pages are judged on their HTTP text; one read below needs the browser
+    walls_missed = [lang for lang in SIGNIN if status(run_read(s.public.url("/signin/" + lang), env=NO_BROWSER)) != "login_required"]
     check("\"sign in to continue\" is login_required in all %d languages" % len(SIGNIN), not walls_missed,
           "missed: %s" % walls_missed)
     walls_missed = [lang for lang in SUBSCRIBE
-                    if status(run_read(s.public.url("/subscribe/" + lang))) != "login_required"]
+                    if status(run_read(s.public.url("/subscribe/" + lang), env=NO_BROWSER)) != "login_required"]
     check("\"for subscribers only\" is login_required in %d languages" % len(SUBSCRIBE), not walls_missed,
           "missed: %s" % walls_missed)
     # Facebook's form is 55-66 words and Instagram's 40-48: a password field and the form's own sign-in
     # label, on a page of a few dozen words. Two of them in the twenty languages read as `ok` before.
-    walls_missed = [lang for lang in FORM if status(run_read(s.public.url("/form/" + lang))) != "login_required"]
+    walls_missed = [lang for lang in FORM if status(run_read(s.public.url("/form/" + lang), env=NO_BROWSER)) != "login_required"]
     check("a password form and its sign-in label are login_required in all %d languages" % len(FORM), not walls_missed,
           "missed: %s" % walls_missed)
     for path, what in (("/form-other", "a password field and a page about newsletter settings"),
                        ("/form-other-ja", "a password field and Japanese prose that does not say sign in"),
                        ("/form-long", "a shop's page with a login box in its header")):
-        r = run_read(s.public.url(path))
+        r = run_read(s.public.url(path), env=NO_BROWSER)
         check("%s is a page, not a sign-in wall" % what, status(r) == "ok", "%s: %s" % (status(r), reason(r)[:60]))
     for lang in ("en", "zh"):
-        r = run_read(s.public.url("/signin-article/" + lang))
+        r = run_read(s.public.url("/signin-article/" + lang), env=NO_BROWSER)
         check("an article that quotes \"%s\" is ok (%s)" % (SIGNIN[lang][0], lang), status(r) == "ok",
               "%s: %s" % (status(r), reason(r)[:60]))
 
     # ------------------------------------------------ a page that says it is not there, twenty languages and Chinese
-    missed = [lang for lang in NOTFOUND if status(run_read(s.public.url("/missing/" + lang))) != "not_found"]
+    missed = [lang for lang in NOTFOUND if status(run_read(s.public.url("/missing/" + lang), env=NO_BROWSER)) != "not_found"]
     check("a soft 404 (200, a few words, \"page not found\") is not_found in all %d languages" % len(NOTFOUND),
           not missed, "missed: %s" % missed)
-    missed = [p for p in ZH_NOTFOUND if status(run_read(s.public.url("/missing-zh/%d" % ZH_NOTFOUND.index(p)))) != "not_found"]
+    missed = [p for p in ZH_NOTFOUND if status(run_read(s.public.url("/missing-zh/%d" % ZH_NOTFOUND.index(p)), env=NO_BROWSER)) != "not_found"]
     check("Chinese soft 404s (找不到页面, 您访问的页面不存在, 404 页面, 頁面不存在, ...) are not_found", not missed,
           "missed: %s" % missed)
     for lang in ("ru", "zh", "ar"):
-        r = run_read(s.public.url("/missing-menu/" + lang))
+        r = run_read(s.public.url("/missing-menu/" + lang), env=NO_BROWSER)
         check("a 404 template under its menu (140 words) is not_found when its title says so (%s)" % lang,
               status(r) == "not_found", "%s: %s" % (status(r), reason(r)[:60]))
     for lang in ("en", "ja"):
-        r = run_read(s.public.url("/missing-article/" + lang))
+        r = run_read(s.public.url("/missing-article/" + lang), env=NO_BROWSER)
         check("an article that quotes \"%s\" is ok" % NOTFOUND[lang], status(r) == "ok",
               "%s: %s" % (status(r), reason(r)[:60]))
-    r = run_read(s.public.url("/missing-long-title"))
+    r = run_read(s.public.url("/missing-long-title"), env=NO_BROWSER)
     check("a long article titled \"Page not found: ...\" is an article", status(r) == "ok",
           "%s: %s" % (status(r), reason(r)[:60]))
     # a shell the server sends with no words: the page is "not found" only once a script has drawn it
@@ -454,23 +455,23 @@ try:
     # ------------------------------------------------ a paywall written in JavaScript
     for path, want in (("/pw-ld", ""), ("/pw-string", ""), ("/pw-part", ".paywall"), ("/pw-graph", ""), ("/pw-micro", ""),
                        ("/pw-teaser", "")):
-        r = run_read(s.public.url(path))
+        r = run_read(s.public.url(path), env=NO_BROWSER)
         sig = str((r.manifest.get("signals") or {}).get("paywall") or "")
         check("%s: the article is there (ok), and the answer says the page is paywalled" % path,
               status(r) == "ok" and "isAccessibleForFree" in sig and want in sig
               and "paywalled" in (r.manifest.get("advice") or ""),
               "%s | %s | %s" % (status(r), sig[:70], (r.manifest.get("advice") or "")[:50]))
-    r = run_read(s.public.url("/pw-fragment"))
+    r = run_read(s.public.url("/pw-fragment"), env=NO_BROWSER)
     check("a paywalled page that is also a fragment of its page: the advice says both",
           "paywalled" in (r.manifest.get("advice") or "") and "of the visible text" in (r.manifest.get("advice") or ""),
           (r.manifest.get("advice") or "")[:120])
-    r = run_read(s.public.url("/pw-ld"))
+    r = run_read(s.public.url("/pw-ld"), env=NO_BROWSER)
     check("a paywalled page keeps its text: content.md has the article, not a stub",
           "servers lie about what they send" in r.file("content.md"), r.file("content.md")[:60])
     for path, what in (("/pw-free", "isAccessibleForFree: true"), ("/pw-event", "a ticketed event (isAccessibleForFree: false)"),
                        ("/pw-code", "an article that prints the markup in a <pre>"),
                        ("/pw-class", "a container named paywall and no schema")):
-        r = run_read(s.public.url(path))
+        r = run_read(s.public.url(path), env=NO_BROWSER)
         check("%s is no paywall" % what, status(r) == "ok" and not (r.manifest.get("signals") or {}).get("paywall")
               and "paywall" not in (r.manifest.get("advice") or ""),
               "%s | %s" % (status(r), (r.manifest.get("signals") or {}).get("paywall")))
