@@ -8,6 +8,7 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **Our EPUB reader reads again in its own process** (KNOWN-ISSUES 226): it failed on every EPUB whose parts declare their encoding - `No module named 'intl'`, for the process starts with `-I` - and the read fell to PyMuPDF or to `empty`. **A home named through an 8.3 short name is under the profile** (KNOWN-ISSUES 227): `--setup` no longer changes its ACL. The OMML check compares strings of one width (the n-ary operator made its text twice as wide as the fraction's: 6.3 times the time on macOS, 1.0 alike).
 - **A scanned page is read with the packs of its own script, from ten that `--setup` fetches for everyone**
   (KNOWN-ISSUES 225). `--setup` fetched English and the packs of the user's own languages, and a scan was read with all
   of them: a page in another script read as nothing (Chinese, Japanese, Korean, Arabic, Hindi: 80-98 % CER with

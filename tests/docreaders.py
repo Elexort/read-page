@@ -829,9 +829,13 @@ for name, fact in (("book.epub", "ENDNOTE-TEXT"), ("doc.odt", "ODT-NOTE"), ("doc
                    ("sheet.ods", "ONE-COLUMN-NOTE"), ("deck.odp", "SPEAKER-NOTE")):
     r = run_read(path(name), env={"READ_PAGE_SKIP": "browser", "READ_PAGE_TRACE": "1"})
     text = r.file("content.md")
+    # our reader's own words: another engine that reads the file must not pass for it (a reader that failed on
+    # every EPUB passed here where PyMuPDF read the book)
     check("cli: %s is read by our reader, its notes too" % name,
-          r.manifest.get("status") == "ok" and fact in text and b"event=document.own" in r.err,
-          "%s %r" % (r.manifest.get("status"), text[:60]))
+          r.manifest.get("status") == "ok" and fact in text and re.search(rb"event=document\.own \S+ words=[1-9]",
+                                                                          r.err) is not None,
+          "%s %r %s" % (r.manifest.get("status"), text[:60], (re.findall(rb"event=document\.own [^\n]*", r.err)
+                                                            or [b""])[0][:120]))
 
 # ------------------------------------------------ the readers in a process of their own, on one clock
 readpage.budget.start(readpage.budget.SECONDS)
@@ -840,6 +844,13 @@ DOCS["spent"] = 0.0
 got = attempt(readpage.own_doc, path("doc.rtf"), "rtf")
 check("a document is read in a process of its own", isinstance(got, tuple) and "RTF-NOTE" in got[0],
       repr(got)[:120])
+# its process starts with -I, without this folder on its path: a part that declares its encoding (nearly every
+# EPUB's, `<?xml ... encoding="utf-8"?>`) had the reader fail on `import intl`, and the read fell to another
+# engine or to nothing (2026-11-22)
+got = attempt(readpage.own_doc, path("book.epub"), "epub")
+check("an EPUB whose parts declare their encoding is read in the reader's own process (was: No module named "
+      "'intl')", isinstance(got, tuple) and "ENDNOTE-TEXT" in got[0] and "reader failed" not in got[1],
+      repr(got)[:160])
 os.environ["READ_PAGE_TEST_DOC_SLEEP"] = "30"
 DOCS["spent"] = readpage.CONVERTER_TIMEOUT - 1.5
 got, secs = timed(attempt, readpage.own_doc, path("doc.rtf"), "rtf")
@@ -1194,7 +1205,10 @@ if hasattr(docreaders, "omml_text"):
         "<m:r><m:t>2</m:t></m:r></m:sup></m:sSup>" * 50), 125000, 500000)
     check("OMML: a run of 1 MB 50 levels deep is read in linear time (each level looked at its whole part)",
           linear and got.count("a+") == 500000, note)
-    run = "<m:r><m:t>%s</m:t></m:r>" % ("x" * 4000000)
+    # one letter past ASCII in the run, as a formula has: the operator (∫) makes the n-ary's text a string of two
+    # bytes a character, and a run of ASCII alone left the fraction's one byte wide - half the bytes to copy at
+    # each level (2.0 times here, 6.3 on macOS; 1.0 with both wide). The body searched at each level costs 20 times.
+    run = "<m:r><m:t>%s</m:t></m:r>" % ("x" * 3999999 + "α")
     nary = omml("<m:nary><m:e>" * 99 + run + "</m:e></m:nary>" * 99)
     frac = omml("<m:f><m:num><m:r><m:t>1</m:t></m:r></m:num><m:den>" * 99 + run + "</m:den></m:f>" * 99)
     _n, t_nary = timed(docreaders.omml_text, nary)

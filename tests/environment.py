@@ -1978,6 +1978,20 @@ else:
                      and envsetup.others_write(acl_dir) is False and acl_warn.startswith("warning") and "icacls" in acl_warn
                      and envsetup.others_write(acl_other) is True and envsetup.secure_home(acl_other) == "",
                      "%s %s | %s | %s" % (acl_before, acl_opened, acl_said[:60], acl_warn[:60])))
+    # a home that names the profile by its 8.3 name (C:\Users\RUNNER~1\..., as GitHub's runners give TEMP) is under
+    # it all the same: it was taken for a folder outside the profile, its ACL changed or warned about
+    import ctypes
+    long_profile = tempfile.mkdtemp(prefix="rp-env-longprofile-name-")
+    junk.append(long_profile)
+    long_home = os.path.join(long_profile, "home")
+    os.makedirs(long_home)
+    subprocess.run(["icacls", long_profile, "/grant", "*S-1-5-11:(OI)(CI)M", "/Q"], capture_output=True, timeout=60)
+    sbuf = ctypes.create_unicode_buffer(1024)
+    short_home = sbuf.value if ctypes.windll.kernel32.GetShortPathNameW(long_home, sbuf, 1024) else ""
+    short_said = envsetup.secure_home(short_home, profile=long_profile) if short_home != long_home and short_home else None
+    attempt("Windows: a home named through the profile's short 8.3 name is under the profile, and left as it is",
+            lambda: (short_said is None or (short_said == "" and envsetup.others_write(long_home) is True),
+                     "no 8.3 names on this volume" if short_said is None else "%s | %r" % (short_home, short_said[:80])))
 yt_home = tempfile.mkdtemp(prefix="rp-env-ytc-")
 junk.append(yt_home)
 rp151b = load_rp("ytcache")
