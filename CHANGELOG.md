@@ -8,6 +8,7 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **`--setup` says why uv did not come, and Node that it needs uv** (KNOWN-ISSUES 231): the uv step named pip's failure alone (`No module named pip`, musl's Python has none) where pypi.org's answer was what failed, and the Node step on musl said `'Work' object has no attribute 'uv_exe'`.
 - **On Windows `--setup` refuses a home too long for the environment's DLLs, before it fetches anything**
   (KNOWN-ISSUES 230): Windows refuses a DLL that carries a manifest - every `.pyd`, curl_cffi's and tesserocr's
   libraries - by a path over 250 characters (measured with small DLLs copied to folders of each length, imported, by

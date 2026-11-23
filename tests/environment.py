@@ -3097,6 +3097,43 @@ attempt("musl's Node from PyPI is installed with --require-hashes, against the S
                  and nw_req.startswith("nodejs-wheel-binaries==%s " % envsetup.NODE_WHEEL)
                  and all(h in nw_req for h in envsetup.NODE_WHEEL_SHA256.values())
                  and any("musllinux" in k for k in envsetup.NODE_WHEEL_SHA256), str(nw_cmds)[:200]))
+# KNOWN-ISSUES 231: on musl the Node step's only way is PyPI's wheel, which uv installs; where uv's own step failed,
+# the step said "no Node: 'Work' object has no attribute 'uv_exe'"
+d_nu, w_nu = work_in("rp-env-nodenouv-")
+nu_cmds = []
+w_nu.sh = lambda cmd, timeout=900, env=None, cwd=None: (nu_cmds.append(list(cmd)) or (0, ""))
+try:
+    w_nu._node_wheel()
+    nu_err = ""
+except Exception as e:                                         # noqa: BLE001
+    nu_err = "%s: %s" % (type(e).__name__, e)
+attempt("musl's Node from PyPI where uv did not install: the reason says so (not an AttributeError), and nothing runs",
+        lambda: (nu_err.startswith("ValueError") and "uv" in nu_err and "attribute" not in nu_err and not nu_cmds,
+                 nu_err[:200]))
+# ... and the uv step named pip's failure alone ("No module named pip", musl's Python has no pip) where pypi.org's
+# answer was what failed
+d_um, w_um = work_in("rp-env-uvmsg-")
+w_um.sh = lambda cmd, timeout=900, env=None, cwd=None: (1, "/usr/bin/python3: No module named pip")
+um_dl = os.path.join(d_um, "dl")
+os.makedirs(um_dl, exist_ok=True)
+real_fj6 = envsetup.fetch_json
+
+
+def fj_timed_out(url, timeout=30):
+    raise TimeoutError("The read operation timed out")
+
+
+envsetup.fetch_json = fj_timed_out
+try:
+    w_um._uv_wheel(um_dl)
+    um_err = ""
+except ValueError as e:
+    um_err = str(e)
+finally:
+    envsetup.fetch_json = real_fj6
+attempt("uv from neither pypi.org nor pip: the reason names both, pypi.org's first (it was in the log alone)",
+        lambda: ("timed out" in um_err and "No module named pip" in um_err
+                 and um_err.index("timed out") < um_err.index("No module named pip") and len(um_err) <= 160, um_err[:200]))
 try:
     pypi_nw = envsetup.fetch_json("https://pypi.org/pypi/nodejs-wheel-binaries/%s/json" % envsetup.NODE_WHEEL, timeout=20)
 except Exception as e:                                         # noqa: BLE001
