@@ -521,7 +521,11 @@ wherever it installs them, else the machine's own command:
 **`--setup`** (`scripts/envsetup.py`) installs all of them but the keys into the skill's own
 environment, a folder of the user's that every agent on the machine sees (`ownenv.home()`:
 `.read-page` in the home folder on Windows, `~/Library/Application Support/read-page` on macOS,
-`$XDG_DATA_HOME` or `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it). Not AppData on
+`$XDG_DATA_HOME` or `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it). On Windows that folder's path
+is at most 120 characters (`WIN_HOME_MAX`): Windows refuses a DLL that carries a manifest - every `.pyd`, curl_cffi's
+and tesserocr's libraries - by a path over 250 (WinError 206, measured), the environment's deepest, curl_cffi's
+libcurl-impersonate, lies 116 inside the folder, and 14 are left for pins that move it; `--setup` refuses a longer
+one before it makes or fetches anything, and says how long it is. Not AppData on
 Windows: a packaged app (MSIX - Claude's desktop app is one) gets a private copy of whatever its
 processes write there, so an environment an agent built inside such an app did not exist for a
 terminal or for the next agent ("not set up" in that agent's shell, every read in the machine's
@@ -594,6 +598,11 @@ The work runs detached (its parent, a launcher, is gone at once), so a harness t
 long command does not kill it; the command shows its progress for 100 s (in a terminal, to the
 end), then says it goes on in the background, and a second `--setup` follows the one at work - a run
 that is not done, whose process is alive and whose `setup.lock` is held; nothing else counts as one.
+The command follows the work's `setup.state`, which the work replaces whole (a temp file, then a rename). A read that
+finds nothing is no news - on Windows one made while the file is replaced cannot open it - so what was seen last
+stands: only a run never seen within 20 s is one that did not start, and where the work's lock is let go, or a run
+holds it as the command starts, the state is read again till a read finds it. A reader that keeps the file open
+stops the rename (WinError 5) and not a write in place: past 2 s of tries the work writes its state in place.
 Where a Windows job around the command kills on close and lets nothing leave (a harness that runs
 each command in one), the work would end with the command: `--setup` then says so and follows it to
 its end. That is asked of a small child that has broken away (the job it lands in is the first that

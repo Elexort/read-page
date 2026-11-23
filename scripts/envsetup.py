@@ -172,6 +172,18 @@ NPM_LOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "defuddle-lo
 TESSDATA_LOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tessdata-lock.txt")
 ENV_LOCK = "setup-lock.txt"          # inside an environment's folder: the lock it was built from
 FOLLOW_SECONDS = 100                # --setup shows the work this long, then leaves it in the background
+# Windows refuses a DLL that carries a manifest (every .pyd; curl_cffi's and tesserocr's libraries) by a path over
+# WIN_DLL_PATH_MAX characters: measured on Windows 11, long paths on, inside a packaged app and outside it alike - 250
+# loads, 251 is "The filename or extension is too long" (WinError 206), whether imported, loaded by ctypes or found
+# in a folder of os.add_dll_directory; one without a manifest loads by 400. The environment's deepest DLL is
+# ENV_DLL_DEPTH characters inside the home (curl_cffi's libcurl-impersonate, with the pins of 2026-11-23), and
+# DLL_DEPTH_MARGIN is room for pins that move it (tests/environment.py walks a real environment and fails when they eat
+# it). A longer home is refused before anything is fetched: curl_cffi and OCR would not load from it, and the check
+# would say so after minutes of downloads.
+WIN_DLL_PATH_MAX = 250
+ENV_DLL_DEPTH = 116
+DLL_DEPTH_MARGIN = 14
+WIN_HOME_MAX = WIN_DLL_PATH_MAX - ENV_DLL_DEPTH - DLL_DEPTH_MARGIN       # 120
 NOT_PASSED_ON = ("UV_NO_VERIFY_HASHES",)     # settings of the user's that would switch off the lock's hash check
 STALE_CACHE_BYTES = 150 * 1024 * 1024         # uv's cache beyond this in no environment is stale (a fresh install: 14-21 MB)
 # what an installer says (uv, npm, Playwright, pip) when it cannot verify who answers
@@ -185,6 +197,10 @@ def setup(script, skill_version):
     """Start the work in the background (or join one already running), show it for up to
     FOLLOW_SECONDS - till the end in a terminal - and print the report when it is done."""
     d = home()
+    too_long = home_too_long(d)
+    if too_long:
+        print("read-page --setup: " + too_long)
+        return 1
     try:
         new = not os.path.isdir(d)
         os.makedirs(d, exist_ok=True)
@@ -212,6 +228,8 @@ def setup(script, skill_version):
         print("read-page --setup: %s - %s" % (d, SIZE_NOTE))
     sys.stdout.flush()
     st0 = _read_json(state)
+    if not st0 and _locked(lock):
+        st0 = _read_again(state, {})           # made while the run at work replaced it (Windows): read it again
     attached = False
     if _locked(lock) and st0.get("done") is False and _pid_alive(st0.get("pid")):
         # only a run still at work is followed: the lock alone, or a state of a run that ended, is
@@ -233,9 +251,11 @@ def setup(script, skill_version):
         limit = float(wait) if wait else (1e9 if (_tty() or attached) else FOLLOW_SECONDS)
     except ValueError:
         limit = FOLLOW_SECONDS
-    seen = 0
+    seen, last = 0, {}
     while True:
-        st = _read_json(state)
+        # a read that finds nothing is no news (on Windows the file cannot be opened for the moment the worker replaces
+        # it): what was seen last stands, and only a run never seen at all did not start
+        st = last = _read_json(state) or last
         if st.get("run") != target and float(st.get("started") or 0) >= t0 - 1:
             target = st.get("run")             # another --setup's work started first: that one
         mine = st.get("run") == target
@@ -245,7 +265,7 @@ def setup(script, skill_version):
                 break
             if not _locked(lock):
                 time.sleep(0.5)                # the state may be one write behind the lock
-                st = _read_json(state)
+                st = last = _read_again(state, st)
                 if not st.get("done"):
                     _show_log(d, seen)
                     print("the work stopped after %s of %s steps, before its end (its log: %s); run --setup "
@@ -274,6 +294,23 @@ def setup(script, skill_version):
         except (OSError, subprocess.SubprocessError) as e:
             print("the setup report did not come: %s" % e)
     return 0 if st.get("ok") else 1
+
+
+def home_too_long(d, windows=None):
+    """What --setup says, and stops at, where the home's path is too long for the environment's DLLs to load (Windows,
+    WIN_HOME_MAX); '' where it is not, and anywhere off Windows. A length is Windows' own (UTF-16 units)."""
+    def units(p):
+        return len(p.encode("utf-16-le", "surrogatepass")) // 2
+
+    if not (os.name == "nt" if windows is None else windows) or units(d) <= WIN_HOME_MAX:
+        return ""
+    default = os.path.join(os.path.expanduser("~"), ".read-page")
+    other = (" (the default, %s, is %d)" % (default, units(default))
+             if (os.environ.get("READ_PAGE_HOME") or "").strip() and units(default) <= WIN_HOME_MAX else "")
+    return ("%s is %d characters long: on Windows the environment's DLLs do not load from a folder over %d characters "
+            "(Windows refuses a DLL by a path over %d, and the deepest lies %d inside the folder). Nothing was "
+            "downloaded: set READ_PAGE_HOME to a shorter folder%s and run --setup again."
+            % (d, units(d), WIN_HOME_MAX, WIN_DLL_PATH_MAX, ENV_DLL_DEPTH, other))
 
 
 def _done(st):
@@ -508,17 +545,35 @@ def _read_json(path):
         return {}
 
 
+def _read_again(path, last, tries=20):
+    """setup.state read till a read finds it, 0.1 s apart (on Windows one made while the file is replaced, or while
+    something else holds it, finds nothing); where none does, what was seen last stands."""
+    for _ in range(tries):
+        st = _read_json(path)
+        if st:
+            return st
+        time.sleep(0.1)
+    return last
+
+
 def _write_json(path, data):
+    """The file whole or not at all: a temp file, then os.replace. On Windows a reader that has the file open stops the
+    replace (WinError 5) for as long as it holds it: it is tried for 2 s, then the error is raised (the temp file gone)."""
     tmp = "%s.%d.tmp" % (path, os.getpid())
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=1, ensure_ascii=False)
-    for _ in range(40):                       # a reader on Windows holds it for a moment
+    for i in range(41):
         try:
             os.replace(tmp, path)
             return
         except PermissionError:
+            if i == 40:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
             time.sleep(0.05)
-    os.replace(tmp, path)
 
 
 def _lock_state(path):
@@ -1396,7 +1451,19 @@ class Work:
                   "steps": len(self.STEPS), "finished": len(self.parts),
                   "step": len(self.parts) + 1, "name": ", ".join(self.running) or "starting"}
             st.update(kw)
-            _write_json(os.path.join(self.d, "setup.state"), st)
+            path = os.path.join(self.d, "setup.state")
+            try:
+                _write_json(path, st)
+            except OSError as e:
+                # past the retries a reader that keeps the file open (Windows) still stops a replace, not a write in
+                # place (measured); a read made while that is half written finds nothing, which the command takes for
+                # no news. The last state is what the command waits for. Where even this is refused the work goes on:
+                # each state is the whole of it, and the next one carries this one
+                try:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        json.dump(st, fh, indent=1, ensure_ascii=False)
+                except OSError as e2:
+                    self.log("setup.state was not written: %s; in place: %s" % (e, e2))
 
     def step(self, name, fn, need=None):
         """One step: it runs, or is skipped when the step it needs did not succeed; its line goes
@@ -2526,6 +2593,16 @@ def package_problem(name, full):
     return part, "%s did not install: %s" % (name, first_error(full)[:200]), _system_fix(part)
 
 
+def reason(e, room=400):
+    """An error's text for the check, whole and on one line: its end is usually the part that says why (a cut at 60
+    characters left "DLL load failed while importing _wrapper: The filename or ex"). One longer than `room` keeps its
+    start and its end; "; " inside it is ", " - it is what the check puts between engines (engines_covered)."""
+    text = " ".join(str(e).split()).replace("; ", ", ") or type(e).__name__
+    if len(text) > room:
+        text = text[:room // 4] + " ... " + text[-(room - room // 4 - 5):]
+    return text
+
+
 def engines_covered(why, problems):
     """Whether every package the check found broken ("dist (reason); dist (reason)") has its problem already:
     each is said once, when it did not install, not again as "engines"."""
@@ -2576,7 +2653,7 @@ def check(d, out_path, info_path=""):
             importlib.import_module(mod)
             libs[dist] = md.version(dist) if md else "?"
         except Exception as e:                                 # noqa: BLE001
-            broken.append("%s (%s)" % (dist, str(e)[:60]))
+            broken.append("%s (%s)" % (dist, reason(e)))
     res["engines"] = {"ok": not broken, "versions": libs, "why": "; ".join(broken)}
     for t in side:
         t.join(240)
