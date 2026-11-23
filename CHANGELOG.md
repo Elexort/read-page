@@ -8,6 +8,16 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **On Windows `--setup` refuses a home too long for the environment's DLLs, before it fetches anything**
+  (KNOWN-ISSUES 230): Windows refuses a DLL that carries a manifest - every `.pyd`, curl_cffi's and tesserocr's
+  libraries - by a path over 250 characters (measured with small DLLs copied to folders of each length, imported, by
+  ctypes and found through `os.add_dll_directory`, inside a packaged app and from WSL alike: 250 loads, 251 is
+  WinError 206, "The filename or extension is too long"; one without a manifest loads by 400), and curl_cffi's
+  libcurl-impersonate lies 116 characters inside the home. From a home of 135 characters curl_cffi did not load,
+  from 138 tesserocr, and `--setup` said so at its check, after minutes of downloads. A home over 120 characters (250,
+  less 116, less 14 for pins that move it) is refused now before anything is made or fetched, with its length, the
+  limit and the fix - a shorter `READ_PAGE_HOME`; off Windows nothing changes. The check at the end keeps an engine's
+  whole reason: it cut "DLL load failed while importing _wrapper: The filename or ex" at 60 characters.
 - **`--setup` no longer takes a read of its state that finds nothing for a run that never started** (KNOWN-ISSUES
   229): on Windows a read made while the work replaces `setup.state` cannot open the file for that moment (20-27 of
   about 38 000 reads in 5 s against a writer replacing it as fast as it can), and once 20 s had passed the command said

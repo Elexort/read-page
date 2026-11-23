@@ -172,6 +172,18 @@ NPM_LOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "defuddle-lo
 TESSDATA_LOCK = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tessdata-lock.txt")
 ENV_LOCK = "setup-lock.txt"          # inside an environment's folder: the lock it was built from
 FOLLOW_SECONDS = 100                # --setup shows the work this long, then leaves it in the background
+# Windows refuses a DLL that carries a manifest (every .pyd; curl_cffi's and tesserocr's libraries) by a path over
+# WIN_DLL_PATH_MAX characters: measured on Windows 11, long paths on, inside a packaged app and outside it alike - 250
+# loads, 251 is "The filename or extension is too long" (WinError 206), whether imported, loaded by ctypes or found
+# in a folder of os.add_dll_directory; one without a manifest loads by 400. The environment's deepest DLL is
+# ENV_DLL_DEPTH characters inside the home (curl_cffi's libcurl-impersonate, with the pins of 2026-11-23), and
+# DLL_DEPTH_MARGIN is room for pins that move it (tests/environment.py walks a real environment and fails when they eat
+# it). A longer home is refused before anything is fetched: curl_cffi and OCR would not load from it, and the check
+# would say so after minutes of downloads.
+WIN_DLL_PATH_MAX = 250
+ENV_DLL_DEPTH = 116
+DLL_DEPTH_MARGIN = 14
+WIN_HOME_MAX = WIN_DLL_PATH_MAX - ENV_DLL_DEPTH - DLL_DEPTH_MARGIN       # 120
 NOT_PASSED_ON = ("UV_NO_VERIFY_HASHES",)     # settings of the user's that would switch off the lock's hash check
 STALE_CACHE_BYTES = 150 * 1024 * 1024         # uv's cache beyond this in no environment is stale (a fresh install: 14-21 MB)
 # what an installer says (uv, npm, Playwright, pip) when it cannot verify who answers
@@ -185,6 +197,10 @@ def setup(script, skill_version):
     """Start the work in the background (or join one already running), show it for up to
     FOLLOW_SECONDS - till the end in a terminal - and print the report when it is done."""
     d = home()
+    too_long = home_too_long(d)
+    if too_long:
+        print("read-page --setup: " + too_long)
+        return 1
     try:
         new = not os.path.isdir(d)
         os.makedirs(d, exist_ok=True)
@@ -278,6 +294,23 @@ def setup(script, skill_version):
         except (OSError, subprocess.SubprocessError) as e:
             print("the setup report did not come: %s" % e)
     return 0 if st.get("ok") else 1
+
+
+def home_too_long(d, windows=None):
+    """What --setup says, and stops at, where the home's path is too long for the environment's DLLs to load (Windows,
+    WIN_HOME_MAX); '' where it is not, and anywhere off Windows. A length is Windows' own (UTF-16 units)."""
+    def units(p):
+        return len(p.encode("utf-16-le", "surrogatepass")) // 2
+
+    if not (os.name == "nt" if windows is None else windows) or units(d) <= WIN_HOME_MAX:
+        return ""
+    default = os.path.join(os.path.expanduser("~"), ".read-page")
+    other = (" (the default, %s, is %d)" % (default, units(default))
+             if (os.environ.get("READ_PAGE_HOME") or "").strip() and units(default) <= WIN_HOME_MAX else "")
+    return ("%s is %d characters long: on Windows the environment's DLLs do not load from a folder over %d characters "
+            "(Windows refuses a DLL by a path over %d, and the deepest lies %d inside the folder). Nothing was "
+            "downloaded: set READ_PAGE_HOME to a shorter folder%s and run --setup again."
+            % (d, units(d), WIN_HOME_MAX, WIN_DLL_PATH_MAX, ENV_DLL_DEPTH, other))
 
 
 def _done(st):
@@ -2560,6 +2593,16 @@ def package_problem(name, full):
     return part, "%s did not install: %s" % (name, first_error(full)[:200]), _system_fix(part)
 
 
+def reason(e, room=400):
+    """An error's text for the check, whole and on one line: its end is usually the part that says why (a cut at 60
+    characters left "DLL load failed while importing _wrapper: The filename or ex"). One longer than `room` keeps its
+    start and its end; "; " inside it is ", " - it is what the check puts between engines (engines_covered)."""
+    text = " ".join(str(e).split()).replace("; ", ", ") or type(e).__name__
+    if len(text) > room:
+        text = text[:room // 4] + " ... " + text[-(room - room // 4 - 5):]
+    return text
+
+
 def engines_covered(why, problems):
     """Whether every package the check found broken ("dist (reason); dist (reason)") has its problem already:
     each is said once, when it did not install, not again as "engines"."""
@@ -2610,7 +2653,7 @@ def check(d, out_path, info_path=""):
             importlib.import_module(mod)
             libs[dist] = md.version(dist) if md else "?"
         except Exception as e:                                 # noqa: BLE001
-            broken.append("%s (%s)" % (dist, str(e)[:60]))
+            broken.append("%s (%s)" % (dist, reason(e)))
     res["engines"] = {"ok": not broken, "versions": libs, "why": "; ".join(broken)}
     for t in side:
         t.join(240)

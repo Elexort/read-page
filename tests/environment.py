@@ -913,13 +913,16 @@ class PlayedWork:
 pw_home = scratch("rp-env-torn-")
 
 
-def played(work):
-    """envsetup.setup() following a played worker: (exit code, what it printed)."""
-    with open(os.path.join(pw_home, "setup.log"), "w", encoding="utf-8") as fh_:
-        fh_.write(finished_log)
+def played(work, home_=None):
+    """envsetup.setup() following a played worker, in pw_home or `home_` (made by --setup where it is not there): (exit
+    code, what it printed)."""
+    home_ = home_ or pw_home
+    if os.path.isdir(home_):
+        with open(os.path.join(home_, "setup.log"), "w", encoding="utf-8") as fh_:
+            fh_.write(finished_log)
     saved_ = (envsetup.time, envsetup._read_json, envsetup._locked, envsetup._launch)
     old_env = dict((k, os.environ.get(k)) for k in ("READ_PAGE_HOME", "READ_PAGE_SETUP_WAIT"))
-    os.environ.update(READ_PAGE_HOME=pw_home, READ_PAGE_SETUP_WAIT="1000")
+    os.environ.update(READ_PAGE_HOME=home_, READ_PAGE_SETUP_WAIT="1000")
     envsetup.time, envsetup._read_json, envsetup._locked, envsetup._launch = work, work.read, work.locked, work.launch
     buf_ = io.StringIO()
     try:
@@ -1001,6 +1004,57 @@ check("a reader that keeps setup.state open past the retries loses no state: it 
 check("... and where even that is refused the work goes on (the next state carries it), and the log says so",
       not wr_errs and "setup.state was not written" in io.open(os.path.join(wr_home, "setup-detail.log"),
                                                                encoding="utf-8").read(), str(wr_errs[2:]))
+
+# ---------------------------------------------------------------- a home too long for the environment's DLLs (Windows)
+# Windows refuses a DLL that carries a manifest (every .pyd, curl_cffi's and tesserocr's libraries) by a path over 250
+# characters - WinError 206, measured - and curl_cffi's lies 116 inside the home: from a home of 135 characters it did
+# not load, from 138 tesserocr, found by the check after minutes of downloads, its reason cut at 60 (KNOWN-ISSUES 230)
+lh_max = getattr(envsetup, "WIN_HOME_MAX", 120)
+lh_base = scratch("rp-env-lh-")
+lh_over, lh_at = [os.path.join(lh_base, "h" * (n_ - len(lh_base) - 1)) for n_ in (lh_max + 1, lh_max)]
+pw_over, pw_at = PlayedWork(ends=0.0), PlayedWork(ends=0.0)
+rc_over, out_over = played(pw_over, lh_over)
+rc_at, out_at = played(pw_at, lh_at)
+if os.name == "nt":
+    check("a home over %d characters is refused before anything is fetched (Windows): its length, the limit and the "
+          "fix said, exit 1, nothing launched or made" % lh_max,
+          rc_over == 1 and not pw_over.launched and not os.path.exists(lh_over)
+          and "is %d characters long" % (lh_max + 1) in out_over and "over %d" % lh_max in out_over
+          and "READ_PAGE_HOME" in out_over, out_over.replace("\n", " | ")[-220:])
+else:
+    check("off Windows a home over %d characters changes nothing: --setup goes on" % lh_max,
+          rc_over == 0 and len(pw_over.launched) == 1, out_over.replace("\n", " | ")[-160:])
+check("... and one of %d characters goes on" % lh_max, rc_at == 0 and len(pw_at.launched) == 1 and os.path.isdir(lh_at),
+      out_at.replace("\n", " | ")[-160:])
+# the check at the end of --setup, in a bare Python, against a curl_cffi whose import fails as it did from a long home
+ck_site, ck_home = scratch("rp-env-cksite-"), scratch("rp-env-ck-")
+os.makedirs(os.path.join(ck_site, "curl_cffi"))
+with open(os.path.join(ck_site, "curl_cffi", "__init__.py"), "w", encoding="utf-8") as fh:
+    fh.write('raise ImportError("DLL load failed while importing _wrapper: The filename or extension is too long.")\n')
+p_ck = subprocess.run([sys.executable, "-I", "-S", "-B", "-X", "utf8", "-c",
+                       "import sys; sys.path[:0] = [%r, %r]; import envsetup; envsetup.check(%r, %r)"
+                       % (ck_site, SCRIPTS, ck_home, os.path.join(ck_home, "setup-check.json"))],
+                      capture_output=True, timeout=300)
+why_ck = (real_read_json(os.path.join(ck_home, "setup-check.json")).get("engines") or {}).get("why") or ""
+check("the check at the end of --setup keeps an engine's whole reason (the end of an error is what says why)",
+      "curl_cffi (DLL load failed while importing _wrapper: The filename or extension is too long.)" in why_ck,
+      (why_ck or p_ck.stderr.decode("utf-8", "replace"))[:200])
+# the margin, where a real environment is here: the install workflow runs the suites under one on Windows
+lh_home = ownenv.home()
+if os.name == "nt" and ownenv.load(lh_home).get("env"):
+    lh_dlls = [(len(os.path.join(r_, f_)) - len(lh_home), os.path.relpath(os.path.join(r_, f_), lh_home))
+               for t_ in os.listdir(lh_home) if t_ != "cache" and os.path.isdir(os.path.join(lh_home, t_))
+               for r_, _d, fs_ in os.walk(os.path.join(lh_home, t_))
+               for f_ in fs_ if f_.lower().endswith((".dll", ".pyd"))]
+    lh_deep = max(lh_dlls) if lh_dlls else (0, "")
+    lh_bound = getattr(envsetup, "WIN_DLL_PATH_MAX", 250)
+    check("the environment here: its deepest DLL leaves room for a home of %d (%d + %d characters; Windows refuses a "
+          "DLL by a path over %d) - a pin that moves it past the margin fails here"
+          % (lh_max, lh_max, lh_deep[0], lh_bound),
+          lh_deep[0] > 0 and lh_max + lh_deep[0] <= lh_bound, "%d files; %s" % (len(lh_dlls), lh_deep[1]))
+else:
+    print("SKIP the deepest DLL of a real environment (%s)" % ("no environment here" if os.name == "nt" else
+                                                                "a DLL's path is bound on Windows alone"))
 ro = tempfile.mkdtemp(prefix="rp-env-ro-")
 junk.append(ro)
 real_open = open

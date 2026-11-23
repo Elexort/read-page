@@ -254,8 +254,9 @@ every machine. It goes into one folder of the user's that every agent on the mac
 the skill's - `.read-page` in the home folder on Windows (not AppData: a packaged app such as
 Claude's desktop app gets a private copy of what it writes there, and no other agent would see
 the environment), `~/Library/Application Support/read-page` on macOS, `$XDG_DATA_HOME` or
-`~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it. It says first what it will fetch:
-about 395 MB to download on Windows (430 on Linux, 385 on macOS) and about 0.9 GB on disk (on
+`~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it (on Windows to a folder of at most 120 characters:
+the environment's DLLs do not load from a longer one, and `--setup` refuses it before it fetches anything). It says
+first what it will fetch: about 395 MB to download on Windows (430 on Linux, 385 on macOS) and about 0.9 GB on disk (on
 Windows: the Python engines 469 MB; the browser 275; defuddle and npm 30, on the Node Playwright's wheel
 carries; Python 69; the OCR packs 39 - nodejs.org's Node, 36-56 MB to fetch and 90-190 on disk, and pandoc's 226 MB, are
 gone, our own readers read EPUB, ODT and RTF; measured by real installs on GitHub's runners, and the fourteen OCR packs
@@ -454,7 +455,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | The 226-page check (2026-11-06), pages picked to be hard | **202 ok, 6 blocked, 4 login_required, 5 not_found, 7 error, 2 empty**, each with its reason; p50 2.1 s, max 22.9 s on a fast machine, p50 4.8 s, max 30.9 s on an emulated weak laptop |
 | A set read the way `SKILL.md` says (2026-11-07): `--allow-external` first, advice followed, the outline to jump | a 34-page set **34 of 34**, 37 held-out pages no rule was tuned on **37 of 37** (each fact taken from a real Chrome; walls and paywalls by an honest status or through a reader); **1.10 calls** a question; every answer within 9 911 bytes and 309 lines, no CR; from the cache p50 0.22 s, max 0.26; UTF-8 whole in cmd, PowerShell 5.1 and 7, Git Bash and WSL under five code pages |
 | Contract | every manifest in the suite validated against `references/manifest-schema.json` (17 manifests, 0 errors) |
-| Tests | answer contract **84**, statuses **75**, timeouts **18**, deadline **22**, formats **108** (105 off Windows), reading **58**, sources **42**, blocks **26**, images **54**, speed **8**, MCP parallel **14**, security **53** (49 on Windows), props **82**, fixes **154**, channel **9**, setup audit **40**, environment **229** (221 off Windows; 2 fewer where no uv is found, 1 fewer with an environment set up before 2026-11-22), MCP **28**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **159** (157 on macOS), Chinese, Japanese and Korean input **196** (189 off Windows, 161 without curl_cffi and charset_normalizer), browser live **32**; against the real services: sources live **20** |
+| Tests | answer contract **84**, statuses **75**, timeouts **18**, deadline **22**, formats **108** (105 off Windows), reading **58**, sources **42**, blocks **26**, images **54**, speed **8**, MCP parallel **14**, security **53** (49 on Windows), props **82**, fixes **154**, channel **9**, setup audit **40**, environment **233** (224 off Windows; 2 fewer where no uv is found, 1 fewer with an environment set up before 2026-11-22), MCP **28**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **159** (157 on macOS), Chinese, Japanese and Korean input **196** (189 off Windows, 161 without curl_cffi and charset_normalizer), browser live **32**; against the real services: sources live **20** |
 | CI | the offline suites on ubuntu (3.9 and 3.12), windows, macOS; a browser job on all three; and a real install - `--setup` from nothing into a folder with a space and Cyrillic in its path, every engine checked, the suites and a scanned PDF read through OCR under the environment's Python, `--setup` again with nothing to fetch - on Linux, Windows and macOS, x64 and arm64, a user's own clone-and-read, a bare Python, and containers of Alpine, Ubuntu 20.04 and 24.04, Debian 11, Rocky Linux 8, Fedora, Arch and openSUSE, a proxy that inspects TLS (Linux, Windows, macOS), a Windows whose Python has the code page 936 or 950 in a profile named in Chinese, README's ZIP, and the suites in a GBK locale on Linux (`install.yml`) |
 | Coverage | 65 % of the engine's statements |
 
@@ -493,7 +494,7 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (228 rows: 182 fixed, 3 planned, 43 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (228 rows: 183 fixed, 2 planned, 43 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License

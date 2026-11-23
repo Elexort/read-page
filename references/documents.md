@@ -134,7 +134,7 @@ read all ask it, not a listing of the folder). Where it is installed and does no
 profile folder with characters outside ASCII (`Иван`), which tesserocr cannot hand tesseract in the
 ANSI code page, goes by its 8.3 short name and, with none, cannot start; a pack cut short - a scan
 reads `missing: ocr` with the reason (`signals.ocr_error`), not a bare `empty`, and the fix named for
-a path is `READ_PAGE_HOME` on an ASCII folder, then `--setup` there.
+a path is `READ_PAGE_HOME` on an ASCII folder (on Windows of at most 120 characters), then `--setup` there.
 
 ## Exact quotes
 

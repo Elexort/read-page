@@ -521,7 +521,11 @@ wherever it installs them, else the machine's own command:
 **`--setup`** (`scripts/envsetup.py`) installs all of them but the keys into the skill's own
 environment, a folder of the user's that every agent on the machine sees (`ownenv.home()`:
 `.read-page` in the home folder on Windows, `~/Library/Application Support/read-page` on macOS,
-`$XDG_DATA_HOME` or `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it). Not AppData on
+`$XDG_DATA_HOME` or `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it). On Windows that folder's path
+is at most 120 characters (`WIN_HOME_MAX`): Windows refuses a DLL that carries a manifest - every `.pyd`, curl_cffi's
+and tesserocr's libraries - by a path over 250 (WinError 206, measured), the environment's deepest, curl_cffi's
+libcurl-impersonate, lies 116 inside the folder, and 14 are left for pins that move it; `--setup` refuses a longer
+one before it makes or fetches anything, and says how long it is. Not AppData on
 Windows: a packaged app (MSIX - Claude's desktop app is one) gets a private copy of whatever its
 processes write there, so an environment an agent built inside such an app did not exist for a
 terminal or for the next agent ("not set up" in that agent's shell, every read in the machine's
