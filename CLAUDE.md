@@ -39,6 +39,8 @@ git-ignored, so a contributor may keep a file of their own under that name.
   shape (`PYTHONNOUSERSITE=1`) and with the engines on the path; `fixes`, `deadline` and `cjk` are the ones that
   need it. `scripts/intl.py` holds the decoding, the IRI-to-URI step and the user's languages.
 - While working, run the suites a change touches; before a commit, all of them (about 13 minutes).
+- Binary fixtures go in `tests/ocr/` (small 1-bit PNGs cut from public-domain scans, for the real-tesserocr checks of
+  `tests/environment.py`); `tests/fixtures/` is git-ignored (the offline corpus's pages belong to their sites).
 - Lint as CI does: `python -m ruff check --no-cache --select F scripts tests tools` (no `.ruff_cache` in
   the skill's folder) and
   `uvx vermin --target=3.8- --violations --no-tips --eval-annotations scripts tests tools`.

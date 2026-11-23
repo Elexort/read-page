@@ -324,7 +324,7 @@
         },
         "ocr_langs": {
           "type": "string",
-          "description": "the language packs the scan's pages were read with, joined by + (each page's own: the script tesseract's OSD saw on it, its Latin language; or READ_PAGE_OCR_LANGS)"
+          "description": "the language packs the scan's pages were read with, joined by + (each page's own: the script tesseract's OSD saw on it, its Latin language, a vertical pack such as jpn_vert for a page printed in columns, frk for Fraktur, or the pack of the likeliest script where OSD was unsure; or READ_PAGE_OCR_LANGS)"
         },
         "ocr_missing_langs": {
           "type": "array",

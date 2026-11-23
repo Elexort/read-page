@@ -8,6 +8,30 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **OCR of real scans: a page on its side or upside down is turned upright, a page printed in columns is read with
+  the vertical packs, a page whose script OSD is unsure of with the likeliest scripts' packs, Fraktur with its own**
+  (KNOWN-ISSUES 232-236). Measured on a corpus of real pages - 92 proofread Wikisource pages with their scans (34 of
+  before; 22 Chinese, Japanese and Korean pages printed vertically, 4 horizontal Chinese ones, 17 German pages in
+  Fraktur and 15 in Antiqua) and 42 copies of 14 pages turned 90, 180 and 270 degrees - and on the 176 synthetic pages
+  of before and 10 new vertical ones, the code as it was and the change one after the other on each page. **Turned**
+  (232): OSD's orientation turns the page from 5.0 and OSD tells its script again upright; a page read turned and
+  unsure of itself is read as it lay too (OSD took two upright pages of a Fraktur magazine for upside down, at 6.9 and
+  9.4) - the 42 copies 67.0 -> 21.6 % CER, no upright page of 278 read turned. **Vertical** (233): `--setup` fetches
+  `jpn_vert chi_tra_vert chi_sim_vert kor_vert` (7.9 MB); tesseract's layout finds a page's text written top to bottom,
+  and such a page is read again with the vertical packs, its script's first - 27 real pages 103.5 -> 67.4 % (Japanese
+  95 -> 53), 10 synthetic ones 95 -> 14. **Unsure** (234): a page whose script OSD is under its trust for, or one it
+  calls Latin whose reading is unsure of itself, is read with at most three likeliest other scripts' packs (OSD's own
+  answer's, then the scripts OSD was seen to take for it), the most confident kept - 6 of 29 real horizontal pages 90.2
+  -> 46.4 %. **Fraktur** (235): `--setup` fetches `frk` (6.4 MB); OSD's own Fraktur (from 2.5) has the page read with
+  it, and it is the first script tried for a Latin reading unsure of itself - 17 pages 31.5 -> 20.7 %. Every other
+  page reads as before: the synthetic pages in 24 languages, the real horizontal ones in a script OSD is sure of, the
+  German Antiqua ones - the same CER, the same time. The pages that need it take longer: 2.2-4.8 s a page against
+  1.3-1.9 on this machine; on an emulated Celeron (4 GB) a three-page scan of ordinary pages reads in the same 9.2-10 s,
+  and three pages that all need the extra readings in 15-33 s (8-18 before, unread), within the read's 55 s, no page
+  late (the OCR step of the hardest up to 29.6 of its 30 s: there the last tries end by time) - where the turned reading of a page left no time to check OSD's turn the check was skipped and a Fraktur page
+  read upside down: it is made whatever time is left. 14.3 MB more to download (53.7 MB of OCR data in all). Measured
+  and left out (236): one block of vertical text assumed (PSM 5), every script tried on five lines first, OSD asked
+  again to confirm a turn.
 - **`--setup` says why uv did not come, and Node that it needs uv** (KNOWN-ISSUES 231): the uv step named pip's failure alone (`No module named pip`, musl's Python has none) where pypi.org's answer was what failed, and the Node step on musl said `'Work' object has no attribute 'uv_exe'`.
 - **On Windows `--setup` refuses a home too long for the environment's DLLs, before it fetches anything**
   (KNOWN-ISSUES 230): Windows refuses a DLL that carries a manifest - every `.pyd`, curl_cffi's and tesserocr's

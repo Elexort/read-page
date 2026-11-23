@@ -634,6 +634,31 @@ if has_tesserocr and os.path.isfile(real_eng):             # (Windows on ARM: an
                   p4.returncode == 0 and said4 == "rus+eng True", (said4 or p4.stderr.decode("utf-8", "replace"))[-200:])
     else:
         print("SKIP a Russian scan through OSD (the environment has no osd or rus: set up before 2026-11-22)")
+    # pages as they are scanned, cut from public-domain scans of Wikisource (tests/ocr, 1 bit, 150 dpi): a few lines
+    # of an English book of 1854 upside down, which OSD turns upright; five columns of a Japanese court judgment printed
+    # vertically, which jpn_vert reads (OSD calls it Latin; its English reading is unsure of itself); and a few lines of
+    # German verse of the 1830s in Fraktur, which frk reads (English and deu read "Aufgeschichtet" as "ARufgefchidter")
+    for fixture, packs, words, what in (
+            ("upside-down.png", ("osd", "eng"), ("Himalaya", "Tibet"), "an upside-down page is turned upright and read"),
+            ("vertical-ja.png", ("osd", "eng", "jpn_vert"), ("想定すること自体", "述べるまでもない", "jpn_vert"),
+             "a page in vertical Japanese columns is read with jpn_vert"),
+            ("fraktur.png", ("osd", "eng", "frk"), ("Johannisabend", "Aufgeschichtet", "frk"),
+             "a German page in Fraktur is read with frk")):
+        lacking = [p_ for p_ in packs if not os.path.isfile(os.path.join(real_td, p_ + ".traineddata"))]
+        if lacking:
+            print("SKIP the environment's OCR of %s (no %s: an environment set up before 2026-11-23)" % (
+                fixture, "+".join(lacking)))
+            continue
+        probe_fix = ("import sys\nsys.path.insert(0, %r)\nimport readpage\n"
+                     "text, info = readpage.ocr_pages([%r])\n"
+                     "print('+'.join(info.get('used') or []))\nprint(''.join(text.split()).replace('\\u017f', 's'))\n"
+                     ) % (SCRIPTS, os.path.join(HERE, "ocr", fixture))
+        p5 = subprocess.run([real_py, "-E", "-B", "-X", "utf8", "-c", probe_fix], capture_output=True, timeout=120,
+                            env=dict(os.environ, READ_PAGE_TESSDATA=real_td, READ_PAGE_LANG="en", READ_PAGE_ENV_CHILD="1",
+                                     READ_PAGE_CACHE=os.path.join(cyr, "cache5")))
+        said5 = p5.stdout.decode("utf-8", "replace")
+        check("the environment's tesserocr: %s" % what, p5.returncode == 0 and all(w in said5 for w in words),
+              (said5 or p5.stderr.decode("utf-8", "replace"))[-200:])
 else:
     print("SKIP the real tesserocr under a Cyrillic folder (no environment here)")
 
@@ -2524,8 +2549,10 @@ attempt("the language's OCR pack: Chinese by script, the others by language, Eng
                      "", "", "", ""], ""))
 # the OCR packs --setup fetches for everyone: the ten with the most web text (Common Crawl), four scripts English reads
 # as nothing (Arabic, Greek, Thai, Hebrew), and osd, which tells the script of a scanned page so that each page is read
-# with its own pack (2026-11-22)
-DEFAULTS = ["eng", "rus", "chi_sim", "chi_tra", "jpn", "kor", "deu", "fra", "spa", "por", "ara", "ell", "tha", "heb"]
+# with its own pack (2026-11-22); the vertical packs of Chinese, Japanese and Korean, for pages printed in columns, and
+# Fraktur's (2026-11-23)
+DEFAULTS = ["eng", "rus", "chi_sim", "chi_tra", "jpn", "kor", "deu", "fra", "spa", "por", "ara", "ell", "tha", "heb",
+            "jpn_vert", "chi_tra_vert", "chi_sim_vert", "kor_vert", "frk"]
 
 
 def ocr_set(*own):
@@ -2537,9 +2564,9 @@ attempt("the machine's language is read from the environment where the OS has no
         lambda: (ownenv.system_language({"LC_ALL": "zh_CN.GBK", "LANG": "en_US.UTF-8"}) == "zh_CN.GBK"
                  and ownenv.system_language({"LC_ALL": "C", "LANG": "ja_JP.eucJP"}) == "ja_JP.eucJP"
                  and ownenv.system_language({"LANGUAGE": "ko:en"}) == "ko" and ownenv.system_language({"LANG": "POSIX"}) == "", ""))
-attempt("--setup's OCR packs: the fourteen (the ten with the most web text, four scripts English reads as nothing) "
-        "and osd for everyone, the user's own language's first "
-        "(a Polish user's beside them)",
+attempt("--setup's OCR packs: the fourteen (the ten with the most web text, four scripts English reads as nothing), "
+        "the vertical packs of Chinese, Japanese and Korean, Fraktur's, and osd for everyone, the user's own language's "
+        "first (a Polish user's beside them)",
         lambda: (ownenv.ocr_default_packs({"LANG": "en_US.UTF-8"}) == ocr_set()
                  and ownenv.ocr_default_packs({"LANG": "zh_CN.UTF-8"}) == ocr_set("chi_sim")
                  and ownenv.ocr_default_packs({"LANG": "pl_PL.UTF-8"}) == ocr_set("pol"),
@@ -2607,7 +2634,7 @@ finally:
         ownenv._os_languages = real_os3
     if saved_language3 is not None:
         os.environ["LANGUAGE"] = saved_language3
-attempt("--setup fetches the fourteen packs and osd for everyone, the user's own language's first",
+attempt("--setup fetches the default packs and osd for everyone, the user's own language's first",
         lambda: (results3["zh"][0] == [p + ".traineddata" for p in ocr_set("chi_sim")]
                  and results3["zh"][1] == ocr_set("chi_sim")[:-1]
                  and results3["en"][0] == [p + ".traineddata" for p in ocr_set()] and results3["en"][1] == DEFAULTS

@@ -901,7 +901,12 @@ if plan is not None:
         ("a scan OSD cannot tell, for a Japanese user: English and jpn", every, ("Latin", 0.8), "ja-JP",
          (["eng", "jpn"], [])),
         ("no OSD at all (an environment built before): as before", ["eng", "chi_sim"], None, "zh-CN",
-         (["eng", "chi_sim"], [])))
+         (["eng", "chi_sim"], [])),
+        ("a German page in Fraktur (OSD's Fraktur, 8.3): frk alone", every + ["frk"], ("Fraktur", 8.3), "",
+         (["frk"], [])),
+        ("... without frk here: English, and frk named", every, ("Fraktur", 8.3), "", (["eng"], ["frk"])),
+        ("an Italian print in italics OSD half took for Fraktur (1.8): English", every + ["frk"], ("Fraktur", 1.8), "",
+         (["eng"], [])))
     wrong = [(label, attempt(plan_scan, have, script, lang)) for label, have, script, lang, want in cases
              if attempt(plan_scan, have, script, lang) != want]
     check("OCR packs: a scan is read with the pack of the script OSD saw, %d cases" % len(cases), not wrong, str(wrong))
@@ -1013,6 +1018,213 @@ check("... and a Japanese page OSD took for Han (kanji-heavy), unsure with both 
       ocr_runs["kanji"][0] == ["osd:osd", "chi_sim", "chi_tra", "jpn"] and ocr_runs["kanji"][1] == JA
       and ocr_runs["kanji"][2] == ["jpn"], str(ocr_runs["kanji"])[:200])
 
+# a page scanned on its side or upside down: OSD's orientation - the quarter turn it sees and its confidence - turns
+# the page upright before it is read, when OSD is that sure of it; an upright page, or one OSD is unsure of, is read
+# from its file as before. A mark in the picture's top left corner tells where the turn took it.
+turn_seen = []
+
+
+class FakeTurn(FakeOsd):
+    ORIENT = {}
+    BY = {}                       # how the page came ("file", "picture"): (its reading, the reading's confidence)
+
+    def SetImageFile(self, p):
+        turn_seen.append(("file", self.lang))
+        self.how = "file"
+
+    def SetImage(self, img):
+        from PIL import ImageOps
+        turn_seen.append(("picture", self.lang, img.size, ImageOps.invert(img.convert("L")).getbbox()))
+        self.how = "picture"
+
+    def GetUTF8Text(self):
+        return FakeTurn.BY.get(getattr(self, "how", ""), (FakeOsd.GetUTF8Text(self), 0))[0]
+
+    def MeanTextConf(self):
+        return FakeTurn.BY.get(getattr(self, "how", ""), ("", FakeOsd.MeanTextConf(self)))[1]
+
+    def Recognize(self, ms=0):
+        time.sleep(FakeTurn.SLOW if getattr(self, "how", "") == "picture" else 0)
+
+    def DetectOrientationScript(self):
+        return dict(FakeOsd.SCRIPT, **FakeTurn.ORIENT)
+
+
+FakeTurn.SLOW = 0                 # seconds a reading of the page turned takes (a slow machine)
+
+
+turn_png = os.path.join(next((d for d in (ROOT, tempfile.gettempdir()) if d.isascii()), ROOT), "rp-turn-%d.png" % os.getpid())
+if importlib.util.find_spec("PIL") is None:
+    check.skip("OCR: a page scanned turned is turned upright before it is read", "no Pillow here")
+else:
+    from PIL import Image as _Image
+    _mark = _Image.new("L", (40, 20), 255)
+    _mark.putpixel((0, 0), 0)
+    _mark.save(turn_png, dpi=(150, 150))
+    mod6 = module()
+    turns = {}
+    os.environ["READ_PAGE_LANG"] = "en"
+    try:
+        for label, orient, by in (("upside down", {"orient_deg": 180, "orient_conf": 12.0}, {}),
+                                  ("turned right", {"orient_deg": 90, "orient_conf": 12.0}, {}),
+                                  ("turned left", {"orient_deg": 270, "orient_conf": 12.0}, {}),
+                                  ("unsure", {"orient_deg": 180, "orient_conf": 2.0}, {}),
+                                  ("upright", {"orient_deg": 0, "orient_conf": 15.0}, {}),
+                                  ("taken for upside down", {"orient_deg": 180, "orient_conf": 9.0},
+                                   {"picture": ("Iqoqo ppun ono", 33), "file": (LATIN["eng"], 50)})):
+            mod6._tesserocr = lambda: (types.SimpleNamespace(PyTessBaseAPI=FakeTurn), ROOT, ["eng", "osd"])
+            FakeOsd.SCRIPT, FakeOsd.READS, FakeOsd.CONF = {"script_name": "Latin", "script_conf": 5.0}, {}, {}
+            FakeTurn.ORIENT, FakeTurn.BY = orient, by
+            del turn_seen[:]
+            res = attempt(mod6.ocr_pages, [turn_png])
+            turns[label] = [x for x in turn_seen if x[1] != "osd"]
+            turns[label + ": text"] = res[0] if isinstance(res, tuple) else ""
+    finally:
+        os.environ.pop("READ_PAGE_LANG", None)
+        FakeTurn.BY = {}
+    check("OCR: a page scanned upside down (OSD: 180, sure of it) is turned before it is read",
+          turns["upside down"] == [("picture", "eng", (40, 20), (39, 19, 40, 20))], str(turns["upside down"]))
+    check("... a page on its side the right way back (OSD's 90: a quarter turn to the left; 270: to the right)",
+          turns["turned right"] == [("picture", "eng", (20, 40), (0, 39, 1, 40))]
+          and turns["turned left"] == [("picture", "eng", (20, 40), (19, 0, 20, 1))],
+          str((turns["turned right"], turns["turned left"])))
+    check("... and an upright page, or one OSD is unsure of (2.0), is read from its file as before",
+          turns["upright"] == [("file", "eng")] and turns["unsure"] == [("file", "eng")],
+          str((turns["upright"], turns["unsure"])))
+    check("... an upright page OSD took for upside down (9.0), read unsure of itself turned (33), is read as it is too, "
+          "and that surer reading (50) is the text",
+          [x[0] for x in turns["taken for upside down"]] == ["picture", "file"]
+          and turns["taken for upside down: text"] == LATIN["eng"],
+          str((turns["taken for upside down"], turns["taken for upside down: text"][:40])))
+    # ... and so it is on a slow machine, whose turned reading took most of the page's time (an emulated Celeron)
+    mod6b = module()
+    mod6b.OCR_TIMEOUT = 2.0
+    mod6b._tesserocr = lambda: (types.SimpleNamespace(PyTessBaseAPI=FakeTurn), ROOT, ["eng", "osd"])
+    FakeOsd.SCRIPT, FakeOsd.READS, FakeOsd.CONF = {"script_name": "Latin", "script_conf": 5.0}, {}, {}
+    FakeTurn.ORIENT = {"orient_deg": 180, "orient_conf": 9.0}
+    FakeTurn.BY, FakeTurn.SLOW = {"picture": ("Iqoqo ppun ono", 33), "file": (LATIN["eng"], 50)}, 1.2
+    del turn_seen[:]
+    os.environ["READ_PAGE_LANG"] = "en"
+    try:
+        res_slow = attempt(mod6b.ocr_pages, [turn_png])
+    finally:
+        os.environ.pop("READ_PAGE_LANG", None)
+        FakeTurn.BY, FakeTurn.SLOW = {}, 0
+    slow_seen = [x[0] for x in turn_seen if x[1] != "osd"]
+    check("... even where the turned reading took most of the page's time (1.2 of 2 s): the page as it lies is read "
+          "in what is left, and kept", slow_seen == ["picture", "file"]
+          and isinstance(res_slow, tuple) and res_slow[0] == LATIN["eng"], str((slow_seen, res_slow))[:200])
+
+
+# a page printed in vertical columns: tesseract's layout finds its text written top to bottom (the iterator's writing
+# direction), and the page is read again with the vertical packs, its script's first, the most confident kept; a
+# script OSD is unsure of, or a Latin reading unsure of itself, is read again with the likeliest other scripts' packs
+class FakeLayout(FakeOsd):
+    """FakeOsd whose readings have a layout: VERTICAL[the packs] is the share of the text written top to bottom."""
+    VERTICAL = {}
+
+    def GetIterator(self):
+        lang = self.lang
+
+        class Blocks(object):
+            def GetUTF8Text(self, level):
+                return "abcdefghij"
+
+            def Orientation(self):
+                return (0, 2 if FakeLayout.VERTICAL.get(lang, 0) >= 0.5 else 0, 0, 0.0)
+
+            def Next(self, level):
+                return False
+        return Blocks()
+
+
+VJA = "吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。"
+GARBAGE = "Sp ie Bt rn oe ai Hoi iT Ae nn ra er"
+layout_runs = {}
+mod8 = module()
+os.environ["READ_PAGE_LANG"] = "en"
+layout_png = os.path.join(next((d for d in (ROOT, tempfile.gettempdir()) if d.isascii()), ROOT), "rp-lay-%d.png" % os.getpid())
+with open(layout_png, "wb") as f:
+    f.write(png(40, 40))
+every_v = ["eng", "osd", "chi_sim", "chi_tra", "jpn", "kor", "rus", "ell", "heb", "ara", "tha", "jpn_vert",
+           "chi_tra_vert", "chi_sim_vert", "kor_vert"]
+try:
+    for label, script, reads, conf, vertical in (
+            ("vertical", {"script_name": "Japanese", "script_conf": 2.0}, {"jpn": GARBAGE, "jpn_vert": VJA},
+             {"jpn": 25, "jpn_vert": 75}, {"jpn": 1.0}),
+            ("vertical, taken for Latin", {"script_name": "Latin", "script_conf": 2.3}, {"eng": GARBAGE, "jpn_vert": VJA},
+             {"eng": 20, "jpn_vert": 72}, {"eng": 1.0}),
+            ("vertical han", {"script_name": "Han", "script_conf": 1.2},
+             {"chi_sim": GARBAGE, "chi_sim_vert": ZH_S, "chi_tra_vert": ZH_T},
+             {"chi_sim": 20, "chi_sim_vert": 85, "chi_tra_vert": 84}, {"chi_sim": 1.0}),
+            ("horizontal", {"script_name": "Japanese", "script_conf": 2.0}, {"jpn": JA}, {"jpn": 91}, {}),
+            ("on its side", {"script_name": "Cyrillic", "script_conf": 7.8}, {"rus+eng": GARBAGE},
+             {"rus+eng": 31, "jpn_vert": 15, "chi_tra_vert": 12, "kor_vert": 10, "chi_sim_vert": 11},
+             {"rus+eng": 1.0}),
+            ("hebrew taken for arabic", {"script_name": "Arabic", "script_conf": 0.8}, {"eng": GARBAGE, "heb+eng": HE},
+             {"eng": 32, "ara+eng": 40, "heb+eng": 77}, {}),
+            ("greek taken for latin", {"script_name": "Latin", "script_conf": 0.2}, {"eng": GARBAGE, "ell+eng": EL},
+             {"eng": 33, "ell+eng": 75}, {}),
+            ("chinese taken for latin", {"script_name": "Latin", "script_conf": 1.1},
+             {"eng": GARBAGE, "chi_sim": ZH_S, "chi_tra": ZH_T}, {"eng": 29, "ell+eng": 31, "chi_sim": 55, "chi_tra": 63,
+                                                                  "jpn": 46}, {}),
+            ("latin, sure of itself", {"script_name": "Cyrillic", "script_conf": 0.4}, {"eng": LATIN["eng"]},
+             {"eng": 90}, {}),
+            ("fraktur taken for latin", {"script_name": "Latin", "script_conf": 4.6},
+             {"eng": GARBAGE, "frk": LATIN["deu"]}, {"eng": 45, "frk": 85}, {}),
+            ("fraktur", {"script_name": "Fraktur", "script_conf": 8.3}, {"frk": LATIN["deu"]}, {"frk": 85}, {})):
+        have_v = every_v + (["frk"] if label.startswith("fraktur") else [])
+        mod8._tesserocr = lambda have_v=have_v: (types.SimpleNamespace(PyTessBaseAPI=FakeLayout), ROOT, have_v)
+        FakeOsd.SCRIPT, FakeOsd.READS, FakeOsd.CONF = script, reads, dict(conf)
+        FakeLayout.VERTICAL = vertical
+        for k in every_v:                                 # an unnamed reading is the least sure
+            FakeOsd.CONF.setdefault(k, 5)
+            FakeOsd.CONF.setdefault(k + "+eng", 5)
+        del osd_calls[:]
+        res = attempt(mod8.ocr_pages, [layout_png])
+        text, info = res if isinstance(res, tuple) else ("", {"used": res})
+        layout_runs[label] = (list(osd_calls), text, info.get("used"))
+finally:
+    os.environ.pop("READ_PAGE_LANG", None)
+    os.unlink(layout_png)
+check("OCR: a page in vertical columns (its layout written top to bottom) is read with its script's vertical pack",
+      layout_runs["vertical"][0] == ["osd:osd", "jpn", "jpn_vert"] and layout_runs["vertical"][1] == VJA
+      and layout_runs["vertical"][2] == ["jpn_vert"], str(layout_runs["vertical"])[:200])
+check("... a vertical page OSD took for Latin too (an unsure English reading): jpn_vert first, sure of it",
+      layout_runs["vertical, taken for Latin"][0] == ["osd:osd", "eng", "jpn_vert"]
+      and layout_runs["vertical, taken for Latin"][2] == ["jpn_vert"], str(layout_runs["vertical, taken for Latin"])[:200])
+check("... a Han page in columns in the Han packs' order: chi_sim_vert, chi_tra_vert while it is under 90, the more "
+      "confident kept (chi_tra_vert is as sure of a simplified page it misreads)",
+      layout_runs["vertical han"][0] == ["osd:osd", "chi_sim", "chi_sim_vert", "chi_tra_vert"]
+      and layout_runs["vertical han"][1] == ZH_S and layout_runs["vertical han"][2] == ["chi_sim_vert"],
+      str(layout_runs["vertical han"])[:200])
+check("... a horizontal page is read once; a page on its side the vertical packs read less surely keeps its own",
+      layout_runs["horizontal"][0] == ["osd:osd", "jpn"] and layout_runs["on its side"][0] == ["osd:osd", "rus+eng",
+                                                                                              "jpn_vert"]
+      and layout_runs["on its side"][2] == ["rus", "eng"], str((layout_runs["horizontal"], layout_runs["on its side"]))[:300])
+check("OCR: a Hebrew page OSD took for Arabic, unsure (0.8): ara, then heb, the most confident kept",
+      layout_runs["hebrew taken for arabic"][0] == ["osd:osd", "eng", "ara+eng", "heb+eng"]
+      and layout_runs["hebrew taken for arabic"][1] == HE and layout_runs["hebrew taken for arabic"][2] == ["heb", "eng"],
+      str(layout_runs["hebrew taken for arabic"])[:200])
+check("... a Greek page OSD took for Latin (0.2): ell, sure of it, ends the tries",
+      layout_runs["greek taken for latin"][0] == ["osd:osd", "eng", "ell+eng"]
+      and layout_runs["greek taken for latin"][2] == ["ell", "eng"], str(layout_runs["greek taken for latin"])[:200])
+check("... a Chinese page OSD was sure was Latin, whose English reading is unsure of itself: Greek, then Han in the Han "
+      "packs' order (chi_sim, chi_tra), the most confident kept",
+      layout_runs["chinese taken for latin"][0] == ["osd:osd", "eng", "ell+eng", "chi_sim", "chi_tra", "jpn"]
+      and layout_runs["chinese taken for latin"][1] == ZH_T and layout_runs["chinese taken for latin"][2] == ["chi_tra"],
+      str(layout_runs["chinese taken for latin"])[:300])
+check("... and a page OSD was unsure of whose reading is sure of itself is read once",
+      layout_runs["latin, sure of itself"][0] == ["osd:osd", "eng"], str(layout_runs["latin, sure of itself"])[:200])
+check("OCR: a German page in Fraktur OSD took for Latin, read unsure in English: Fraktur first of the likeliest (frk), "
+      "and its reading is kept, not read again with deu",
+      layout_runs["fraktur taken for latin"][0] == ["osd:osd", "eng", "frk"]
+      and layout_runs["fraktur taken for latin"][1] == LATIN["deu"]
+      and layout_runs["fraktur taken for latin"][2] == ["frk"], str(layout_runs["fraktur taken for latin"])[:200])
+check("... and a page OSD names Fraktur is read with frk alone, once",
+      layout_runs["fraktur"][0] == ["osd:osd", "frk"] and layout_runs["fraktur"][2] == ["frk"],
+      str(layout_runs["fraktur"])[:200])
+
 # the tesseract command: its OSD report, then the page's packs
 mod5 = module()
 mod5.which = lambda name: "tesseract" if name == "tesseract" else None
@@ -1037,6 +1249,75 @@ finally:
 check("OCR with the tesseract command: its OSD (--psm 0), then the Cyrillic page with rus+eng",
       len(asked5) == 2 and "--psm" in asked5[0] and "-l" in asked5[1] and asked5[1][asked5[1].index("-l") + 1] == "rus+eng",
       str(asked5)[:200])
+
+# ... and a page its OSD report sees upside down: the command reads a copy turned upright
+osd_turn = getattr(mod, "_osd_turn", None)
+check("OCR: the command's OSD report gives the turn that sets a page upright, when it is that sure",
+      osd_turn is not None and attempt(osd_turn, "Orientation in degrees: 90\nRotate: 270\nOrientation confidence: 12.0\n")
+      == 270 and attempt(osd_turn, "Orientation in degrees: 180\nRotate: 180\nOrientation confidence: 1.2\n") == 0
+      and attempt(osd_turn, "Too few characters. Skipping this page") == 0,
+      str(osd_turn and attempt(osd_turn, "Orientation in degrees: 90\nRotate: 270\nOrientation confidence: 12.0\n")))
+if importlib.util.find_spec("PIL") is not None and os.path.isfile(turn_png):
+    mod7 = module()
+    mod7.which = lambda name: "tesseract" if name == "tesseract" else None
+    mod7.tesseract_langs = lambda exe=None: ["eng", "osd"]
+    mod7._tesserocr = lambda: None
+    seen7 = []
+
+    def cli_turn(cmd, timeout=120):
+        if "--psm" in cmd and cmd[cmd.index("--psm") + 1] == "0":
+            return 0, (b"Page number: 0\nOrientation in degrees: 180\nRotate: 180\nOrientation confidence: 12.00\n"
+                       b"Script: Latin\nScript confidence: 5.00\n"), b""
+        from PIL import Image, ImageOps
+        with Image.open(cmd[1]) as im:
+            seen7.append((os.path.abspath(cmd[1]) == os.path.abspath(turn_png), im.size,
+                          ImageOps.invert(im.convert("L")).getbbox()))
+        return 0, b"page text", b""
+
+    mod7.run_tool = cli_turn
+    os.environ["READ_PAGE_LANG"] = "en"
+    try:
+        attempt(lambda: mod7.ocr_pages([turn_png]))
+    finally:
+        os.environ.pop("READ_PAGE_LANG", None)
+    check("OCR with the tesseract command: a page it sees upside down is read from a copy turned upright",
+          seen7 == [(False, (40, 20), (39, 19, 40, 20))], str(seen7))
+
+    # ... and where that copy reads unsure of itself (the command's TSV gives its words' confidences), the page is read
+    # as it lay too, and the surer reading kept
+    def tsv_of(words, conf):
+        head = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n"
+        return (head + "".join("5\t1\t1\t1\t1\t%d\t0\t0\t9\t9\t%d\t%s\n" % (i, conf, w)
+                               for i, w in enumerate(words.split(), 1))).encode("utf-8")
+
+    seen9 = []
+
+    def cli_check(cmd, timeout=120):
+        if "--psm" in cmd and cmd[cmd.index("--psm") + 1] == "0":
+            return 0, (b"Orientation in degrees: 180\nRotate: 180\nOrientation confidence: 9.00\nScript: Latin\n"
+                       b"Script confidence: 5.00\n"), b""
+        turned = os.path.abspath(cmd[1]) != os.path.abspath(turn_png)
+        seen9.append((turned, "tsv" in cmd))
+        return 0, tsv_of("Iqoqo ppun ono" if turned else "The town lies on the bank", 30 if turned else 50), b""
+
+    mod9 = module()
+    mod9.which = lambda name: "tesseract" if name == "tesseract" else None
+    mod9.tesseract_langs = lambda exe=None: ["eng", "osd"]
+    mod9._tesserocr = lambda: None
+    mod9.run_tool = cli_check
+    os.environ["READ_PAGE_LANG"] = "en"
+    try:
+        res9 = attempt(lambda: mod9.ocr_pages([turn_png]))
+    finally:
+        os.environ.pop("READ_PAGE_LANG", None)
+    check("... and where that copy reads unsure of itself (its TSV, 30), the page is read as it lay too and the surer "
+          "reading (50) kept", seen9 == [(True, True), (False, True)]
+          and isinstance(res9, tuple) and res9[0] == "The town lies on the bank", str((seen9, res9))[:200])
+else:
+    check.skip("OCR with the tesseract command: a page it sees turned is read from a copy turned upright",
+               "no Pillow here")
+if os.path.isfile(turn_png):
+    os.unlink(turn_png)
 
 # ---------------------------------------------------------------- 7. tools with narrow arguments
 # a Python program the skill runs (yt-dlp, markitdown) writes its output in the ANSI code page on Windows, a
