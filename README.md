@@ -62,7 +62,7 @@ python $HOME/.agents/skills/read-page/scripts/readpage.py --setup
 ```
 
 (`python3` where `python` is not found, as on macOS.) It says first what it will fetch (about
-360-390 MB), puts everything into one folder of its own outside the skill (it names it), needs no admin
+400-445 MB), puts everything into one folder of its own outside the skill (it names it), needs no admin
 rights, asks nothing, and names what it could not install. [Engines](#engines) has the list.
 
 **3. Ask your agent to read something**: *"read https://example.com/article and summarise it"*.
