@@ -1101,6 +1101,34 @@ def main():
           sorted(os.listdir(os.path.join(m4, "img"))) == ["01-one.png", "02-two.png"],
           str(os.listdir(os.path.join(m4, "img"))))
 
+    # the cache step stopped at a list among a read's files - a scan's pages, the screenshots - with a TypeError, so
+    # such a read read into --dir was never kept, and one in the cache's own folder was kept without its files
+    _, _, modc = inproc(["--caps"])
+    wdc = os.path.join(tmp, "cache-lists")
+    os.makedirs(os.path.join(wdc, "shots"))
+    for name_ in ("content.md", "page-01.png", os.path.join("shots", "01.png")):
+        with open(os.path.join(wdc, name_), "wb") as fh_:
+            fh_.write(b"x")
+    modc.store_cache(wdc, {"status": "ok", "files": {
+        "content": os.path.join(wdc, "content.md"), "pages": [os.path.join(wdc, "page-01.png")],
+        "screenshots": [os.path.join(wdc, "shots", "01.png")]}}, "http://127.0.0.1:9/cache-lists")
+    hitc = modc.cached("http://127.0.0.1:9/cache-lists", False)
+    fc = (hitc[1].get("files") if hitc else None) or {}
+    check("a read whose files hold lists (a scan's pages, screenshots) is kept in the cache with them (TypeError)",
+          bool(fc.get("content")) and [os.path.basename(p) for p in fc.get("pages") or []] == ["page-01.png"]
+          and [os.path.relpath(p, hitc[0]) for p in fc.get("screenshots") or []] == [os.path.join("shots", "01.png")]
+          and all(os.path.isfile(p) for p in (fc.get("pages") or []) + (fc.get("screenshots") or [])), str(fc)[:200])
+    # ... and a cache hit into another --dir takes them there (it named each file by its name in the folder alone)
+    wdm = os.path.join(tmp, "cache-lists-dir")
+    try:
+        fm = modc.moved_files(fc, hitc[0], modc.materialize(hitc[0], wdm)) if hitc else {}
+    except Exception as e_:                                         # noqa: BLE001
+        fm = {"error": repr(e_)}
+    check("... and a cache hit into another --dir takes them there, the screenshots in shots/",
+          [os.path.relpath(p, wdm) for p in (fm.get("pages") or []) + (fm.get("screenshots") or [])]
+          == ["page-01.png", os.path.join("shots", "01.png")]
+          and all(os.path.isfile(p) for p in (fm.get("pages") or []) + (fm.get("screenshots") or [])), str(fm)[:200])
+
     # ------------------------------------------------ OCR of a scanned PDF
     try:
         from PIL import Image, ImageDraw, ImageFont
@@ -1127,6 +1155,11 @@ def main():
         m20, _ = run([f"http://127.0.0.1:{port20}/scan.pdf", "--dir", d20, "--refresh"])
         cpath = os.path.join(d20, "content.md")
         txt20 = open(cpath, encoding="utf-8").read() if os.path.isfile(cpath) else ""
+        # a --refresh (every read of a file on this machine is one) cleaned up the files the manifest does not name,
+        # and it took a list among them for nothing: the pages it had just rendered went, with or without OCR
+        pages20 = (m20.get("files") or {}).get("pages") or []
+        check("a scan's rendered pages stay where files.pages names them (a --refresh deleted them)",
+              bool(pages20) and all(os.path.isfile(p) for p in pages20), str(pages20)[:120])
         if "ocr:tesseract" in ((m20.get("chain") or {}).get("tried") or []):
             check("OCR: a scanned PDF becomes text", "SCANNED" in txt20.upper(),
                   txt20[:50].replace("\n", " "))

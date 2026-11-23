@@ -1416,11 +1416,11 @@ def prune_unreferenced(workdir, manifest):
     """After a re-read: delete our own files that the new manifest no longer references."""
     keep = {"manifest.json", "content.md", "page.md"}
     for p in (manifest.get("files") or {}).values():
-        if isinstance(p, str):
-            keep.add(os.path.basename(p))
-    for p in (manifest.get("files") or {}).get("screenshots") or []:
-        if isinstance(p, str):
-            keep.add(os.path.basename(p))
+        # a list too: a scan's pages (page-01.png ...) went at every read of a file on this machine, which is a
+        # --refresh, while the manifest and the advice named them
+        for x in (p if isinstance(p, list) else [p]):
+            if isinstance(x, str):
+                keep.add(os.path.basename(x))
     for e in (manifest.get("images") or []):
         if isinstance(e, dict) and e.get("file"):
             keep.add(e["file"].replace("/", os.sep))
@@ -1588,7 +1588,12 @@ def cached(url, refresh):
             return None              # a failure is not an answer: the next call asks again
         if (m.get("signals") or {}).get("rescued_after") and now() - m.get("_cached_at", 0) > RESCUED_TTL:
             return None              # a rescue after a moment's failure: ask the live page again
-        files = {k: os.path.join(d, v) for k, v in (m.get("_files") or {}).items() if os.path.exists(os.path.join(d, v))}
+        files = {}
+        for k, v in (m.get("_files") or {}).items():
+            if isinstance(v, list):
+                files[k] = [os.path.join(d, x) for x in v if os.path.exists(os.path.join(d, x))]
+            elif os.path.exists(os.path.join(d, v)):
+                files[k] = os.path.join(d, v)
         m["files"] = files
         m["dir"] = d
         m["cache"] = "hit"
@@ -1614,6 +1619,19 @@ def store_cache(workdir, manifest, url):
         same = os.path.normcase(os.path.abspath(workdir)) == os.path.normcase(os.path.abspath(d))
         rel = {}
         for k, p in (manifest.get("files") or {}).items():
+            if isinstance(p, list):
+                # a list - a scan's pages, the screenshots in shots/ - each by its place in the folder (the list
+                # stopped the whole step with a TypeError: nothing was kept)
+                kept = []
+                for x in p:
+                    r = _cache_rel(workdir, x)
+                    if r and not same:
+                        os.makedirs(os.path.dirname(os.path.join(d, r)), exist_ok=True)
+                        shutil.copyfile(x, os.path.join(d, r))
+                    if r:
+                        kept.append(r)
+                rel[k] = kept
+                continue
             if p and os.path.isfile(p):
                 base = os.path.basename(p)
                 if not same:
@@ -1639,6 +1657,29 @@ def store_cache(workdir, manifest, url):
         write_manifest(os.path.join(d, "manifest.json"), manifest)
     except Exception as _dbg_e:                                         # noqa: BLE001
         debuglog.exc("cache write", _dbg_e)
+
+
+def _cache_rel(workdir, p):
+    """A file of a read's folder as the cache keeps it: its place in the folder (shots/01.png), "" for one that is
+    not there or not in it."""
+    if not (isinstance(p, str) and os.path.isfile(p)):
+        return ""
+    try:
+        r = os.path.relpath(os.path.abspath(p), os.path.abspath(workdir))
+    except ValueError:                                  # another drive (Windows)
+        return ""
+    return "" if r == os.pardir or r.startswith(os.pardir + os.sep) or os.path.isabs(r) else r
+
+
+def moved_files(files, src, dst):
+    """A manifest's files for the folder `dst` that holds what `src` held: each at its place in `dst` where it is
+    there (a list's - a scan's pages, the screenshots in shots/ - each; a list was a TypeError), else as it was."""
+    def one(p):
+        if not isinstance(p, str):
+            return p
+        q = os.path.join(dst, _cache_rel(src, p) or os.path.basename(p))
+        return q if os.path.exists(q) else p
+    return dict((k, [one(x) for x in v] if isinstance(v, list) else one(v)) for k, v in (files or {}).items())
 
 
 _COOKIE_STATS = {"sent": 0, "stored": 0}       # per run, reported as signals.cookies
@@ -2021,7 +2062,7 @@ def materialize(src, dst):
                     shutil.copyfile(p, os.path.join(dst, name))
                 except OSError:
                     pass
-    for sub in ("img", "parts"):
+    for sub in ("img", "parts", "shots"):         # shots/: the screenshots, which the cache keeps too
         s, d = os.path.join(src, sub), os.path.join(dst, sub)
         if os.path.isdir(s):
             os.makedirs(d, exist_ok=True)
@@ -9398,13 +9439,9 @@ def read(args):
     if hit:
         workdir, manifest = hit
         if args.dir and os.path.normcase(os.path.abspath(args.dir)) != os.path.normcase(os.path.abspath(workdir)):
-            workdir = materialize(workdir, args.dir)     # --dir asked for a folder: honour it
+            src, workdir = workdir, materialize(workdir, args.dir)     # --dir asked for a folder: honour it
             manifest["dir"] = workdir
-            fixed = {}
-            for k, v in (manifest.get("files") or {}).items():
-                p = os.path.join(workdir, os.path.basename(v))
-                fixed[k] = p if os.path.exists(p) else v
-            manifest["files"] = fixed
+            manifest["files"] = moved_files(manifest.get("files"), src, workdir)
         trace("cache", hit=1, dir=workdir, status=manifest.get("status"))
         manifest["elapsed_ms"] = int((now() - t0) * 1000)
         manifest["cache"] = "hit"
@@ -9604,11 +9641,9 @@ def read(args):
         # the server hashed the page for us: nothing changed, the old answer is still true
         prev["cache"] = "revalidated"
         prev["signals"] = dict(prev.get("signals") or {}, revalidated=True)
-        prev["dir"] = workdir
+        old_dir, prev["dir"] = prev.get("dir") or workdir, workdir
         prev["elapsed_ms"] = int((now() - t0) * 1000)
-        prev["files"] = {k: (os.path.join(workdir, os.path.basename(v)) if os.path.exists(
-            os.path.join(workdir, os.path.basename(v))) else v)
-            for k, v in (prev.get("files") or {}).items()}
+        prev["files"] = moved_files(prev.get("files"), old_dir, workdir)
         store_cache(workdir, prev, url)
         return finish(workdir, prev, t0, args, (prev.get("files") or {}).get("content"))
     if f.get("etag") or f.get("last_modified"):

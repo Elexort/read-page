@@ -8,6 +8,12 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A scan's rendered pages stay where `files.pages` names them** (KNOWN-ISSUES 239): every read of a file on this
+  machine is a `--refresh`, whose cleanup kept the files the manifest names as text and deleted the pages it had
+  just rendered (a list), so "look at the rendered pages in files.pages" named files that were gone; and the cache
+  step stopped at a list among the files (a TypeError), so a scan or a page read with `--screenshots` into `--dir`
+  was never kept. Now a list's files are kept, cached at their places (`shots/01.png`), and a cache hit into
+  another `--dir` takes them there.
 - **A folder or a document named in GBK under a GBK locale is read like any other** (KNOWN-ISSUES 175): under a
   POSIX locale that is not UTF-8 (`zh_CN.GBK`) a name outside ASCII is GBK bytes, which the skill, in Python's UTF-8
   mode, keeps as they are - but PyMuPDF and tesserocr take a path as UTF-8 (PyMuPDF: "Failed to open file"; tesserocr:
