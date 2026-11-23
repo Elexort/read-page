@@ -399,4 +399,19 @@ try:
 finally:
     srv.close()
 
+# ---------------------------------------------------------------- SKILL.md's table of statuses
+# what an agent does on each status: a row for every status the answer gives, and `error`'s fits both of its kinds -
+# a network or server error passes (retry later), a file cut short or damaged does not (it said "retry later" alone)
+ROOT = os.path.dirname(HERE)
+with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as fh_:
+    skill_rows = dict(re.findall(r"(?m)^\| `([a-z_]+)` \| (.+?) \|$", fh_.read()))
+with open(os.path.join(ROOT, "references", "manifest-schema.json"), encoding="utf-8") as fh_:
+    statuses = json.load(fh_)["properties"]["status"]["enum"]
+check("SKILL.md's table of statuses has a row for every status the answer gives",
+      set(statuses) <= set(skill_rows), str(sorted(set(statuses) - set(skill_rows))))
+err_row = skill_rows.get("error", "")
+check("SKILL.md's `error` row fits both kinds of error: retry later, and a cut or damaged file is got again "
+      "(\"retry later\" alone was wrong for a file cut short)",
+      "retry later" in err_row and "cut" in err_row and "damaged" in err_row and "again" in err_row, err_row)
+
 sys.exit(check.done())

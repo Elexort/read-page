@@ -63,7 +63,7 @@ outline (line, heading): …
 | `empty` | follow `advice` |
 | `media_only` | the URL is a file; the text names where it is |
 | `too_large` | `--download` |
-| `error` | retry later; `--allow-external` adds readers and the archive |
+| `error` | retry later; a cut or damaged file: get it again |
 
 Every status but `ok` has a `reason:` line; `advice:` names the next step. `missing:` and
 `improve:` name a tool the machine lacks: on the user's yes, `readpage.py --setup` installs all
