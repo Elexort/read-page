@@ -351,6 +351,14 @@ below runs on the standard library alone, so a machine that never ran `--setup` 
   under a name of ours, and the program's output is moved back. A stage nothing has touched for an hour (a read
   killed while a document was staged) is removed. A Python program the skill runs (yt-dlp, markitdown) is given
   `PYTHONUTF8=1`: it wrote the ANSI code page, and its output is read as UTF-8.
+- **A POSIX locale that is not UTF-8** (`LC_ALL=zh_CN.GBK`, a legacy Chinese, Japanese or Korean Linux): a name
+  outside ASCII is that code set's bytes, which the skill, in Python's UTF-8 mode, keeps as they are. A library that
+  takes a path as UTF-8 - PyMuPDF, our readers' processes - gets such a document through a link of ours under an
+  ASCII name in the cache (copied where it cannot be linked), tesserocr its data folder by its own name from its
+  parent, `manifest.json` holds such a name escaped, and the answer and `--json` name the folder in the locale's
+  letters (`资料`); a folder or a file given back in those letters - MCP's `read`, an MCP client's path - is the one
+  they name. A name of another code set's bytes under a UTF-8 locale is shown with U+FFFD for the bytes it cannot
+  read.
 - **The MCP server's standard input** is UTF-8 whatever the locale (it was the locale's code page unless
   Python had `-X utf8`: a Chinese URL or folder arrived as other characters), a BOM before the first line
   dropped.
@@ -654,7 +662,9 @@ system, so `C:\Users\Иван\.read-page\tessdata` failed (code page 1252) and O
 folder goes by its 8.3 short name where the volume makes one (the system volume does; a runner's `D:` and a
 dev drive do not), else by its own name, which is ASCII, from its parent: the working directory is moved there
 while tesseract starts (`ownenv.tess_dir`; it reads its data at the start, and the picture is read after).
-Measured against a Cyrillic folder on code page 1252: the absolute path fails, the relative one reads.
+Measured against a Cyrillic folder on code page 1252: the absolute path fails, the relative one reads. Off Windows
+the same holds where a POSIX locale is not UTF-8 and the folder's name is its code set's bytes: tesserocr takes the
+path as UTF-8 ("surrogates not allowed"), so the folder goes by its own name from its parent.
 
 The work runs detached (its parent, a launcher, is gone at once), so a harness that kills a
 long command does not kill it; the command shows its progress for 100 s (in a terminal, to the

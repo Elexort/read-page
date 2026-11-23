@@ -8,6 +8,19 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A folder or a document named in GBK under a GBK locale is read like any other** (KNOWN-ISSUES 175): under a
+  POSIX locale that is not UTF-8 (`zh_CN.GBK`) a name outside ASCII is GBK bytes, which the skill, in Python's UTF-8
+  mode, keeps as they are - but PyMuPDF and tesserocr take a path as UTF-8 (PyMuPDF: "Failed to open file"; tesserocr:
+  "surrogates not allowed", OCR dead), `manifest.json` could not hold the name and was not written, and the answer
+  printed the folder as `????` (under a UTF-8 locale, a folder of GBK bytes stopped it with an internal error, and
+  stopped the pictures of the answer's window). Now PyMuPDF and our readers' processes get such a document through
+  a link of ours under an ASCII name, tesserocr its data folder by its own name from its parent, the manifest holds
+  the name escaped, the answer and `--json` name the folder in the locale's letters (`资料`), a folder or a path given
+  back in those letters (MCP's `read`, an MCP client's path) is the one it names, and the debug log no longer stops
+  the read on such a name. `tests/cjk.py` names its folders in Chinese under every locale (they were ASCII where the
+  locale is not UTF-8) and makes names of GBK bytes on any Linux; in WSL under `zh_CN.GBK` with no `-X utf8`, `props`
+  and `environment` pass, and CI's GBK job runs every suite.
+- **SKILL.md's `error` row fits a cut file too** (KNOWN-ISSUES 238): it said "retry later; `--allow-external` adds
 - **SKILL.md's `error` row fits a cut file too** (KNOWN-ISSUES 238): it said "retry later; `--allow-external` adds
   readers and the archive" for every error, and an archive cut short or damaged comes back the same however often a
   file on this machine is read. It reads "retry later; a cut or damaged file: get it again" now; SKILL.md is 12
@@ -470,7 +483,7 @@ while the rows below stood)
   only when there is nothing else, named so on the answer's first line (`content.track`). `READ_PAGE_SUB_LANGS` and
   `READ_PAGE_OCR_LANGS`, when set, win. What is sent: `references/engines.md`.
 - tests: `cjk.py` 182 (175 off Windows, 147 on Windows without curl_cffi and charset_normalizer; offline, any OS;
-  under a POSIX locale that is not UTF-8 its folders are ASCII, row 175); `security.py` 53 (49 on Windows).
+  its folders are named in Chinese under every locale since row 175); `security.py` 53 (49 on Windows).
 
 **`readpage.py --setup`**
 - **one command installs every engine** into the skill's own environment, one folder of the user's

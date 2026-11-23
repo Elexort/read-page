@@ -672,10 +672,21 @@ def cmd_line(cmd):
 def ascii_stage_root():
     """An ASCII-only folder of this user's own for programs that take their arguments in the ANSI code page
     (pdftotext, tesseract, lynx): under the cache when its path is ASCII, else its 8.3 short name, else the
-    environment's folder (READ_PAGE_HOME) when its path is ASCII. "" when there is none (not Windows, or none of
-    them is ASCII and writable): a document is never copied into a folder the machine's other users read
-    (C:\\Users\\Public, C:\\ProgramData), and the program then gets the path as it is."""
+    environment's folder (READ_PAGE_HOME) when its path is ASCII. "" when there is none (none of them is ASCII
+    and writable): a document is never copied into a folder the machine's other users read (C:\\Users\\Public,
+    C:\\ProgramData), and the program then gets the path as it is. Off Windows (for a library that takes a path
+    as UTF-8, lib_paths): under the cache, else under this user's own folder in the temp folder (_own_root), the
+    first whose path's bytes are its UTF-8."""
     if os.name != "nt":
+        for root in (cache_root(), _own_root()):
+            if not ownenv.utf8_clean(root):
+                continue
+            folder = os.path.join(root, "tmp")
+            try:
+                os.makedirs(folder, mode=0o700, exist_ok=True)
+                return folder
+            except OSError:
+                continue
         return ""
     base = cache_root()
     roots = [base, ownenv.ascii_path(base)]
@@ -751,8 +762,34 @@ def narrow_paths(ins, outs=()):
     read-only, or when it cannot be linked) into an ASCII folder of the user's alone under a name of ours, each such
     output is a name in it; `done()` moves the outputs to their real places and removes the folder, and a folder
     a killed read left is pruned. Anywhere else, or when every path is ASCII, nothing changes."""
+    if os.name != "nt":
+        return [str(x) for x in ins], [str(x) for x in outs], (lambda: None)
+    return _staged(ins, outs, str.isascii)
+
+
+def lib_paths(ins, outs=()):
+    """narrow_paths for a library that takes a path as UTF-8 - PyMuPDF, and our readers' processes, which get it in
+    JSON: under a POSIX locale of another code set (LC_ALL=zh_CN.GBK) a name outside ASCII is that code set's bytes,
+    which such a library cannot open (PyMuPDF: "Failed to open file", in Python's UTF-8 mode or not; KNOWN-ISSUES
+    175). Such an input is linked or copied under a name of ours into a folder whose path is ASCII; anywhere else -
+    Windows, a UTF-8 locale - nothing changes."""
+    return _staged(ins, outs, ownenv.utf8_clean)
+
+
+@contextlib.contextmanager
+def lib_path(path):
+    """`with lib_path(p) as at:` - `at` is a path to p's file that a library taking UTF-8 opens (lib_paths), for
+    the block's length."""
+    ins, _outs, done = lib_paths([path])
+    try:
+        yield ins[0]
+    finally:
+        done()
+
+
+def _staged(ins, outs, fits):
     ins, outs = [str(x) for x in ins], [str(x) for x in outs]
-    if os.name != "nt" or all(x.isascii() for x in ins + outs):
+    if all(fits(x) for x in ins + outs):
         return ins, outs, (lambda: None)
     root = ascii_stage_root()
     if not root:
@@ -765,7 +802,7 @@ def narrow_paths(ins, outs=()):
         return ins, outs, (lambda: None)
     new_ins, new_outs = [], []
     for i, x in enumerate(ins):
-        if x.isascii():
+        if fits(x):
             new_ins.append(x)
             continue
         ext = os.path.splitext(x)[1]
@@ -784,7 +821,7 @@ def narrow_paths(ins, outs=()):
         new_ins.append(dst)
     for j, x in enumerate(outs):
         ext = os.path.splitext(x)[1]
-        new_outs.append(x if x.isascii() else os.path.join(stage, "out%d%s" % (j, ext if ext.isascii() else "")))
+        new_outs.append(x if fits(x) else os.path.join(stage, "out%d%s" % (j, ext if ext.isascii() else "")))
 
     def done():
         for real, staged in zip(outs, new_outs):
@@ -1599,8 +1636,7 @@ def store_cache(workdir, manifest, url):
         manifest["_files"] = rel
         manifest["_raw_name"] = rel.get("raw", "raw.bin")
         stamp_read(manifest)
-        with open(os.path.join(d, "manifest.json"), "w", encoding="utf-8") as f:
-            json.dump(manifest, f, ensure_ascii=False, indent=1)
+        write_manifest(os.path.join(d, "manifest.json"), manifest)
     except Exception as _dbg_e:                                         # noqa: BLE001
         debuglog.exc("cache write", _dbg_e)
 
@@ -1927,6 +1963,32 @@ def load_manifest(workdir):
             return json.load(fh)
     except Exception:                                          # noqa: BLE001
         return {}
+
+
+def write_manifest(path, m):
+    """manifest.json: UTF-8, or escaped where it holds a path whose bytes are no UTF-8 - a folder named in GBK
+    under a POSIX locale of that code set is a str with lone surrogates in Python's UTF-8 mode, which a file of
+    UTF-8 cannot hold (the write failed, and the folder kept no manifest; KNOWN-ISSUES 175). The escapes read
+    back as the same path."""
+    text = json.dumps(m, ensure_ascii=False, indent=1)
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        text = json.dumps(m, ensure_ascii=True, indent=1)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def shown_paths(m):
+    """The manifest an answer prints: its folder and files as the user's locale names them (ownenv.shown) - under
+    zh_CN.GBK the folder `资料`, where the bytes printed as `????` (or the answer stopped: no UTF-8 holds them)."""
+    out = dict(m)
+    if isinstance(out.get("dir"), str):
+        out["dir"] = ownenv.shown(out["dir"])
+    if isinstance(out.get("files"), dict):
+        out["files"] = dict((k, [ownenv.shown(x) for x in v] if isinstance(v, list) else ownenv.shown(v))
+                            for k, v in out["files"].items())
+    return out
 
 
 def clear_text_artifacts(workdir):
@@ -2296,14 +2358,19 @@ def cut_reason(message):
 
 
 def local_path(arg):
-    """An existing file on this machine named by a path or a file:// URL, else ""."""
+    """An existing file on this machine named by a path or a file:// URL, else "". A path given as text in the
+    user's locale (an MCP client's) and a file:// URL's escapes are the file system's bytes where its locale is
+    not UTF-8 (KNOWN-ISSUES 175)."""
     a = (arg or "").strip()
     if not a:
         return ""
     try:
         if a.lower().startswith("file:"):
-            a = urllib.request.url2pathname(urllib.parse.urlparse(a).path)
-        p = os.path.abspath(os.path.expanduser(a))
+            raw = urllib.parse.urlparse(a).path
+            # the escapes are the name's bytes on disk (local_url writes them so): a GBK name is no UTF-8
+            a = (os.fsdecode(urllib.parse.unquote_to_bytes(raw)) if os.name != "nt"
+                 else urllib.request.url2pathname(raw))
+        p = ownenv.fs_path(os.path.abspath(os.path.expanduser(a)))
         return p if os.path.isfile(p) else ""
     except (OSError, ValueError):
         return ""
@@ -3437,6 +3504,11 @@ def pdf_shots(path, workdir, want):
     is scaled. `want` counts screens, like a page's; PNG, or JPEG q95 over 3.75 MB."""
     if want <= 0:
         return [], 0
+    with lib_path(path) as at:              # PyMuPDF takes the path as UTF-8 (KNOWN-ISSUES 175)
+        return _pdf_shots(at, workdir, want)
+
+
+def _pdf_shots(path, workdir, want):
     try:
         import pymupdf
     except Exception as _dbg_e:                                     # noqa: BLE001
@@ -4824,18 +4896,22 @@ OCR_RENDER_DPI = 150                    # a scanned page's picture for OCR
 
 
 def render_pdf_pages(path, workdir, pages=3, dpi=OCR_RENDER_DPI):
-    """PNG of the first pages, for a model that can look. Returns the file paths."""
+    """PNG of the first pages, for a model that can look. Returns the file paths. PyMuPDF opens the document by a
+    path it takes as UTF-8, and the pictures are written by Python, which writes any path (KNOWN-ISSUES 175)."""
     try:
         import pymupdf
-        doc = pymupdf.open(path)
-        out = []
-        for i, page in enumerate(doc, 1):
-            if i > pages:
-                break
-            pix = page.get_pixmap(dpi=dpi)
-            fn = os.path.join(workdir, "page-%02d.png" % i)
-            pix.save(fn)
-            out.append(fn)
+        with lib_path(path) as at:
+            doc = pymupdf.open(at)
+            out = []
+            for i, page in enumerate(doc, 1):
+                if i > pages:
+                    break
+                data = page.get_pixmap(dpi=dpi).tobytes("png")
+                fn = os.path.join(workdir, "page-%02d.png" % i)
+                with open(fn, "wb") as fh:
+                    fh.write(data)
+                out.append(fn)
+            doc.close()
         return out
     except Exception as _dbg_e:                                         # noqa: BLE001
         debuglog.exc("pdf pages", _dbg_e)
@@ -6261,7 +6337,15 @@ def doc_text(path, kind, c, workdir, alternate=False, name=""):
     file whose members do not all unpack, from the ones that do (zip_mend). What was wrong with the
     read's own document is _ZIPS["read"], which its answer's status and advice are made of; a
     member's goes into its note. A file that is no ZIP is named for what it is (text is its text),
-    and no machine's pandoc or markitdown is asked about either: they read archives as zipfile does."""
+    and no machine's pandoc or markitdown is asked about either: they read archives as zipfile does.
+
+    PyMuPDF and our readers' processes take the path as UTF-8: a file under a name of another code set's bytes is
+    read through a link of ours (lib_path; KNOWN-ISSUES 175)."""
+    with lib_path(path) as at:
+        return _doc_text_at(at, kind, c, workdir, alternate, name)
+
+
+def _doc_text_at(path, kind, c, workdir, alternate, name):
     src, broke = path, None
     if kind == "zip":
         path, broke = zip_whole(path, workdir)
@@ -7759,7 +7843,9 @@ def media_kind(body, ct, path):
 
 
 def media_note(path, kind, size, ct):
-    """content.md for a URL that is a file: one honest line, no invented content."""
+    """content.md for a URL that is a file: one honest line, no invented content. The path as the user's locale
+    names it (a folder named in GBK under that locale: its bytes are no UTF-8, and the note was not written)."""
+    path = ownenv.shown(path)
     return ("This URL is a file, not a page: %s (%s, %s%s).\n"
             "The file itself: %s\n"
             "Read it from that path; there is no page text to quote.\n"
@@ -10495,7 +10581,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         before = json.dumps(manifest.get("images"), sort_keys=True)
         try:
             manifest = window_pictures(workdir, manifest, url, view, getattr(args, "from_line", 0) or 1,
-                                       _prune({k: v for k, v in manifest.items() if not k.startswith("_")}))
+                                       shown_paths(_prune({k: v for k, v in manifest.items() if not k.startswith("_")})))
         except Exception as e:                                 # noqa: BLE001
             debuglog.exc("pictures: window", e)
             trace("images.window", error=str(e)[:120])
@@ -10509,7 +10595,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
             debuglog.exc("finish: prune", _dbg_e)
     if not as_json and not ocr_n:
         manifest["_view"] = view              # the file read last (answer_view); a picture's text is not one
-    public = _prune({k: v for k, v in manifest.items() if not k.startswith("_")})
+    public = shown_paths(_prune({k: v for k, v in manifest.items() if not k.startswith("_")}))
     if getattr(args, "ignored", None):
         # this call's left-out flags: the answer and --json say so, the saved manifest does not
         # (a later call from the cache did not have them)
@@ -10532,8 +10618,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
                      elapsed=bs["elapsed"], deadline=bs["deadline"], left=bs["left"],
                      steps_cut=[st for st in bs["steps"] if st.get("end") != "ok"])
     try:
-        with open(os.path.join(workdir, "manifest.json"), "w", encoding="utf-8") as fh:
-            json.dump(manifest, fh, ensure_ascii=False, indent=1)
+        write_manifest(os.path.join(workdir, "manifest.json"), manifest)
     except Exception as _dbg_e:                                         # noqa: BLE001
         debuglog.exc("finish: manifest write", _dbg_e)
     if as_json:
@@ -10577,8 +10662,7 @@ def remember_view(workdir, view):
         return
     m["_view"] = view
     try:
-        with open(os.path.join(workdir, "manifest.json"), "w", encoding="utf-8") as fh:
-            json.dump(m, fh, ensure_ascii=False, indent=1)
+        write_manifest(os.path.join(workdir, "manifest.json"), m)
     except OSError:
         pass
 

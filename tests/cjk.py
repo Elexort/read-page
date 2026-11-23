@@ -49,16 +49,10 @@ check = Checks()
 for _name in ("READ_PAGE_LANG", "READ_PAGE_SUB_LANGS", "READ_PAGE_OCR_LANGS"):
     os.environ.pop(_name, None)            # a suite sees only what it sets
 ROOT = tempfile.mkdtemp(prefix="rp-cjk-")
-# Windows paths are wide, and a UTF-8 file system is UTF-8: a folder named in Chinese reaches a child as it is. Under
-# a POSIX locale that is not UTF-8 (LC_ALL=zh_CN.GBK) the children, started with -X utf8, read their arguments and
-# environment as UTF-8 and the file system holds GBK (KNOWN-ISSUES 175, planned): the folders there are ASCII.
-UTF8_PATHS = os.name == "nt" or sys.getfilesystemencoding().lower().replace("-", "") == "utf8"
-
-
-def named(chinese, ascii_name):
-    return chinese if UTF8_PATHS else ascii_name
-
-
+# The folders below are named in Chinese under every locale: under a POSIX locale that is not UTF-8
+# (LC_ALL=zh_CN.GBK, CI's GBK job) their names are GBK bytes, which the skill's children, in Python's UTF-8 mode, see
+# as lone surrogates (KNOWN-ISSUES 175; they were ASCII there before it was fixed). Section 9b makes such names on
+# any Linux.
 
 
 def png(w, h, rgb=(200, 30, 30)):
@@ -340,13 +334,13 @@ finally:
     srv.close()
 
 # a file saved the way Excel on a Chinese Windows saves a CSV, in a folder named in Chinese
-work = os.path.join(ROOT, named("文件夹", "folder"))
+work = os.path.join(ROOT, "文件夹")
 os.makedirs(work, exist_ok=True)
-csv_path = os.path.join(work, named("客户名单.csv", "customers.csv"))
+csv_path = os.path.join(work, "客户名单.csv")
 csv_text = "姓名,电话,城市\n张伟,13800000000,北京\n李娜,13900000000,上海\n王芳,13700000000,广州\n"
 with open(csv_path, "wb") as f:
     f.write(csv_text.encode("gbk"))
-txt_path = os.path.join(work, named("说明.txt", "note.txt"))
+txt_path = os.path.join(work, "说明.txt")
 with open(txt_path, "wb") as f:
     f.write("这是一个测试。你好，世界！".encode("gbk"))
 for path, want, label in ((csv_path, "李娜", "a GBK CSV"), (txt_path, "你好，世界", "a one-line GBK text")):
@@ -644,7 +638,7 @@ def mcp_session(messages, env_extra=None, timeout=180, first=b""):
 
 seen, page = accept_server()
 msrv = serve({"/%E9%A1%B5%E9%9D%A2": page})
-mcp_cache = os.path.join(ROOT, named("目录", "dir"), named("缓存", "cache"))             # a profile's cache named in Chinese: the folders it hands out are
+mcp_cache = os.path.join(ROOT, "目录", "缓存")             # a profile's cache named in Chinese: the folders it hands out are
 try:
     out, err = mcp_session([
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}},
@@ -663,7 +657,7 @@ try:
     ], {"READ_PAGE_CACHE": mcp_cache})
     said = "".join(b.get("text", "") for b in ((out.get(2) or {}).get("result") or {}).get("content") or [])
     check("MCP: the Chinese folder the last answer named, sent back on stdin, is the folder that is read",
-          named("缓存", "cache") in folder and "页面的正文" in said, (said[:100] or err[-160:] or folder))
+          "缓存" in folder and "页面的正文" in said, (said[:100] or err[-160:] or folder))
     # a UTF-8 BOM before the first line (a file saved with one, piped in): the first message was a parse error
     out, err = mcp_session([
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}},
@@ -790,7 +784,7 @@ os.environ["READ_PAGE_LANG"] = "en"
 try:
     for label, folder, fname in (("ascii", next((d for d in (ROOT, tempfile.gettempdir()) if d.isascii()), ""),
                                   "rp-scan-%d.png" % os.getpid()),
-                                 ("wide", ROOT if UTF8_PATHS else "", "扫描页.png")):
+                                 ("wide", ROOT, "扫描页.png")):
         if not folder:
             continue
         page_png = os.path.join(folder, fname)
@@ -1600,9 +1594,9 @@ check("... and the user locale counts when the display languages cannot be read"
       isinstance(win_none, list) and win_none[:1] == ["de-DE"], str(win_none))
 
 # ---------------------------------------------------------------- 9. a home folder, a cache and an answer in Chinese
-home = os.path.join(ROOT, named("用户", "users"), named("张三", "zhang"))
-cache = os.path.join(home, named("缓存", "cache"), "read-page")
-tmp = os.path.join(home, named("临时", "tmp"))
+home = os.path.join(ROOT, "用户", "张三")
+cache = os.path.join(home, "缓存", "read-page")
+tmp = os.path.join(home, "临时")
 for d in (home, cache, tmp):
     os.makedirs(d, exist_ok=True)
 hsrv = serve({"/gbk": (200, HTML_H, html(ZH_S).encode("gbk")),
@@ -1613,7 +1607,7 @@ try:
     env = {"HOME": home, "USERPROFILE": home, "READ_PAGE_HOME": os.path.join(home, ".read-page"),
            "READ_PAGE_CACHE": cache, "TEMP": tmp, "TMP": tmp, "TMPDIR": tmp, "LOCALAPPDATA": os.path.join(home, "AppData"),
            "PYTHONUTF8": "0", "PYTHONIOENCODING": "gbk"}
-    answers = os.path.join(home, named("答案", "answers"))
+    answers = os.path.join(home, "答案")
     os.makedirs(answers, exist_ok=True)
     rc, out, man, folder = cli(hsrv.url("/gbk"), env=env, root=answers)
     check("a Chinese home, cache and answer folder: a GBK page is read, the files are there",
@@ -1624,9 +1618,89 @@ try:
     check("... and a picture lands in it", bool(got) and all(os.path.isfile(os.path.join(folder, g)) for g in got if g),
           str(got))
     check("... and the answer names that folder in Chinese", "files: " in out.decode("utf-8", "replace")
-          and named("张三", "zhang") in out.decode("utf-8", "replace"), out.decode("utf-8", "replace")[:160])
+          and "张三" in out.decode("utf-8", "replace"), out.decode("utf-8", "replace")[:160])
 finally:
     hsrv.close()
+
+# ---------------------------------------------------------------- 9b. names in another code set's bytes (Linux)
+# A POSIX locale that is not UTF-8 (zh_CN.GBK) writes a name outside ASCII as that code set's bytes, which the skill,
+# in Python's UTF-8 mode, holds as lone surrogates (KNOWN-ISSUES 175): PyMuPDF said "Failed to open file", tesserocr
+# could not take the tessdata folder, manifest.json could not be written, and the answer printed the folder as
+# "????". Linux keeps any bytes in a name, so such a folder is made here under any locale; Windows paths are wide
+# characters and macOS's names UTF-8.
+LORE = ("Page %d of a report kept in a folder whose name is written in another code set: the document reader opens "
+        "it through a name of its own, and the text, the pictures of its pages and its manifest all come back. ")
+
+
+def bytes_read(target, out, *flags, env_extra=None):
+    """One read of `target` into `out`, both bytes: (rc, stdout, the manifest written in `out`, or {})."""
+    e = dict(os.environ, READ_PAGE_CACHE=os.path.join(ROOT, "cache-9b"), READ_PAGE_TEST_PUBLIC_HOST=PUBLIC)
+    e["READ_PAGE_SKIP"] = ",".join(x for x in (e.get("READ_PAGE_SKIP", "").split(",") + ["env", "pdftotext"]) if x)
+    e.update(env_extra or {})
+    cmd = [os.fsencode(sys.executable), b"-X", b"utf8", os.fsencode(SCRIPT), target, b"--dir", out]
+    p = subprocess.run(cmd + [os.fsencode(f) for f in flags], capture_output=True, timeout=240, env=e)
+    man = {}
+    try:
+        with open(os.path.join(out, b"manifest.json"), encoding="utf-8") as fh_:
+            man = json.load(fh_)
+    except (OSError, ValueError):
+        pass
+    return p.returncode, p.stdout, man
+
+
+if not sys.platform.startswith("linux"):
+    check.skip("names in GBK bytes", "Linux only: Windows paths are wide characters, macOS's names are UTF-8")
+elif importlib.util.find_spec("pymupdf") is None:
+    check.skip("names in GBK bytes", "no PyMuPDF here")
+else:
+    import pymupdf
+    import ownenv
+    gbk_dir = os.path.join(os.fsencode(ROOT), "资料".encode("gbk"))
+    os.makedirs(os.path.join(gbk_dir, b"tessdata"), exist_ok=True)
+    made = os.path.join(ROOT, "made.pdf")
+    doc_ = pymupdf.open()
+    for i in range(2):
+        doc_.new_page().insert_textbox(pymupdf.Rect(72, 72, 520, 700), LORE % (i + 1) * 3)
+    doc_.save(made)
+    doc_.close()
+    gbk_pdf = os.path.join(gbk_dir, "报告.pdf".encode("gbk"))
+    os.replace(os.fsencode(made), gbk_pdf)
+    rc, out, man = bytes_read(gbk_pdf, os.path.join(gbk_dir, b"out"), "--screenshots", "1", "--deny-images")
+    said = content(os.fsdecode(os.path.join(gbk_dir, b"out")))
+    check("a PDF in a folder named in GBK bytes is read by PyMuPDF (\"Failed to open file\") and its manifest is "
+          "written beside the text (a file of UTF-8 could not hold the folder's name)",
+          rc == 0 and man.get("status") == "ok" and "Page 2 of a report" in said,
+          "%s rc=%s %s" % (man.get("status"), rc, (said[:60] or out[-200:].decode("utf-8", "replace"))))
+    shots_ = man.get("screenshots") or []
+    check("... and --screenshots of it gives its pages as pictures",
+          bool(shots_) and all(os.path.isfile(os.path.join(os.path.join(gbk_dir, b"out"), os.fsencode(e_["file"])))
+                               for e_ in shots_), str(shots_)[:160])
+    # a scan's pages are rendered for OCR and for a model to look at: PyMuPDF opens it, Python writes the pictures
+    os.makedirs(os.path.join(gbk_dir, b"scan"), exist_ok=True)
+    pages_ = module().render_pdf_pages(os.fsdecode(gbk_pdf), os.fsdecode(os.path.join(gbk_dir, b"scan")))
+    check("... and a scan's pages are rendered into such a folder (PyMuPDF opened nothing there)",
+          len(pages_) == 2 and all(os.path.isfile(p_) for p_ in pages_), ascii(pages_)[:160])
+    td_ = os.fsdecode(os.path.join(gbk_dir, b"tessdata"))
+    got_ = ownenv.tess_arg(td_)
+    check("tesserocr is given a tessdata folder named in GBK bytes by its own name from its parent (it took the "
+          "path as UTF-8 and did not start)", got_ == ("tessdata", os.fsdecode(gbk_dir)), ascii(got_))
+    # where a GBK locale is installed, the answer names the folder as that locale does (it printed "????")
+    have = subprocess.run(["locale", "-a"], capture_output=True).stdout.decode("ascii", "replace").split()
+    gbk_locale = next((x for x in have if x.lower().replace("-", "") in ("zh_cn.gbk", "zh_cn.gb18030")), "")
+    if not gbk_locale:
+        check.skip("the answer names a GBK folder in the locale's letters", "no zh_CN.GBK locale here")
+    else:
+        lc = {"LC_ALL": gbk_locale, "PYTHONUTF8": "0"}
+        rc, out, man = bytes_read(gbk_pdf, os.path.join(gbk_dir, b"shown"), "--json", "--deny-images", env_extra=lc)
+        try:
+            printed = json.loads(out.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            printed = {}
+        rc2, out2, _m = bytes_read(gbk_pdf, os.path.join(gbk_dir, b"shown2"), "--deny-images", env_extra=lc)
+        check("under %s the answer names the folder in its letters - %s (it printed ????)" % (gbk_locale, "资料"),
+              printed.get("dir") == os.path.join(ROOT, "资料", "shown")
+              and "资料" in out2.decode("utf-8", "replace"),
+              "%s | %s" % (ascii(printed.get("dir"))[-60:], out2.decode("utf-8", "replace")[:120]))
 
 shutil.rmtree(ROOT, ignore_errors=True)
 sys.exit(check.done())

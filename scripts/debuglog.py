@@ -64,7 +64,9 @@ def bind(folder, host=""):
         path = os.path.join(folder, "debug", "%s-%d.jsonl" % (stamp, os.getpid()))
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        fh = open(path, "a", encoding="utf-8", newline="\n")
+        # a path of bytes that are no UTF-8 (a folder named in GBK under that locale: lone surrogates) is
+        # written escaped - the log never raises, and it stopped the read at its first buffered line
+        fh = open(path, "a", encoding="utf-8", errors="backslashreplace", newline="\n")
     except OSError:
         return ""
     with _LOCK:

@@ -502,16 +502,15 @@ jobs:
           PYTHONUTF8: "0"
         run: python tools/ci_acp.py encoding gbk
 
-      # props and environment build fixtures on Cyrillic folder names: a GBK POSIX locale encodes them in GBK, while the
-      # skill's children (-X utf8) read their arguments as UTF-8, and PyMuPDF hands MuPDF UTF-8 whatever the file
-      # system holds ("cannot open file", measured: a PDF in a folder named in GBK) - a path under a legacy locale is a
-      # finding of its own (KNOWN-ISSUES), not what this job is about
-      - name: "the suites, in that locale, none of them told -X utf8 (props and environment: see above)"
+      # every suite, props and environment too: their fixtures are named in Cyrillic, which this locale writes in GBK
+      # and the skill's children (-X utf8) hold as other bytes than UTF-8 - KNOWN-ISSUES 175, fixed; tests/cjk.py
+      # names its folders in Chinese here too
+      - name: "the suites, in that locale, none of them told -X utf8"
         env:
           LC_ALL: zh_CN.GBK
           PYTHONUTF8: "0"
           PYTHONDONTWRITEBYTECODE: "1"
-        run: python tools/ci_install.py suites --no-xutf8 --no-browser --skip props,environment
+        run: python tools/ci_install.py suites --no-xutf8 --no-browser
 
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}

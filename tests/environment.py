@@ -394,9 +394,10 @@ if os.name == "nt":
     check("a path that is not there has no short name: '' (never a guess)",
           hasattr(ownenv, "ascii_path") and ownenv.ascii_path(os.path.join(cyr, "Ещё", "нет")) == "", "")
 ascii_only = os.path.join(os.sep, "ascii only", "folder")          # a path is a string here: it need not exist
-check("an ASCII path stays as it is (and so does any path off Windows)",
+check("an ASCII path stays as it is (and so does a path off Windows whose bytes are its UTF-8; one in another code "
+      "set's bytes has none: tesserocr takes the path as UTF-8)",
       hasattr(ownenv, "ascii_path") and ownenv.ascii_path(ascii_only) == ascii_only
-      and (os.name == "nt" or ownenv.ascii_path(cyr_td) == cyr_td), "")
+      and (os.name == "nt" or ownenv.ascii_path(cyr_td) == (cyr_td if ownenv.utf8_clean(cyr_td) else "")), "")
 
 
 def fake_tesserocr(broken_pack=False):
@@ -584,9 +585,11 @@ if has_tesserocr and os.path.isfile(real_eng):             # (Windows on ARM: an
         cut_pack = fh_.read()[:5000]
     with open(os.path.join(cyr_td, "xyz.traineddata"), "wb") as fh_:
         fh_.write(cut_pack)
+    # the folder goes as --setup's check gets it, in its arguments (bytes): written into the code, a name of this
+    # process's would be the UTF-8 mode child's other bytes under a POSIX locale that is not UTF-8
     p3 = subprocess.run([real_py, "-E", "-B", "-X", "utf8", "-c",
-                         "import sys; sys.path.insert(0, %r); import envsetup; r = envsetup._check_ocr(%r, "
-                         "{'tessdata': 'tessdata'}); print(r['ok'], r['why'])" % (SCRIPTS, cyr)],
+                         "import sys; sys.path.insert(0, %r); import envsetup; r = envsetup._check_ocr(sys.argv[1], "
+                         "{'tessdata': 'tessdata'}); print(r['ok'], r['why'])" % SCRIPTS, cyr],
                         capture_output=True, timeout=120)
     said3 = p3.stdout.decode("utf-8", "replace").strip()
     check("a pack tesseract does not start with (a pack cut short) is found by the check, which starts each",

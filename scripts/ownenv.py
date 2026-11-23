@@ -210,14 +210,88 @@ def ocr_default_packs(env=None):
     return packs + [p for p in OCR_DEFAULT_PACKS if p not in packs] + [OCR_SCRIPT_PACK]
 
 
+# ---------------------------------------------------------------- paths under a POSIX locale that is not UTF-8
+# KNOWN-ISSUES 175. Under LC_ALL=zh_CN.GBK a name outside ASCII is GBK bytes on disk. The skill runs in Python's UTF-8
+# mode (-X utf8: SKILL.md's command, its children, the environment's Python), where such bytes are a str with lone
+# surrogates: every file call takes them back to the same bytes, but a library that takes a path as UTF-8 (PyMuPDF,
+# tesserocr) cannot open it, a file of JSON cannot hold it, and the caller needs it in its own locale's letters.
+_CODESET = []
+
+
+def fs_codeset():
+    """The code set of a POSIX locale whose file names are not UTF-8 ("gbk" under zh_CN.GBK); "" where they are
+    UTF-8 - every current Linux and macOS - and on Windows, whose paths are wide characters."""
+    if not _CODESET:
+        cs = ""
+        if os.name != "nt":
+            try:
+                import codecs
+                import locale
+                cs = codecs.lookup(locale.nl_langinfo(locale.CODESET) or "utf-8").name
+            except (ImportError, AttributeError, LookupError, ValueError):
+                cs = ""
+            if cs in ("utf-8", "ascii"):        # ascii: the C locale, which Python itself takes for UTF-8
+                cs = ""
+        _CODESET.append(cs)
+    return _CODESET[0]
+
+
+def utf8_clean(p):
+    """True when a library that takes a path as UTF-8 (PyMuPDF, tesserocr) opens `p`: on Windows (wide paths), an
+    ASCII path, and one whose bytes on disk are its UTF-8. Under a POSIX locale of another code set a name outside
+    ASCII is not: it is that code set's bytes."""
+    p = str(p or "")
+    if os.name == "nt" or p.isascii():
+        return True
+    try:
+        return os.fsencode(p) == p.encode("utf-8")
+    except UnicodeError:
+        return False
+
+
+def shown(p):
+    """A path of this process's as the user's locale names it, for an answer or a manifest: under zh_CN.GBK the
+    folder `资料`, not lone surrogates, which printed as `????` - and which no UTF-8 text holds: an answer naming such
+    a folder stopped with an internal error. Bytes the locale does not read (a name in GBK under a UTF-8 locale) are
+    marked as such (U+FFFD); any other path comes back as it is."""
+    if not isinstance(p, str) or p.isascii():
+        return p
+    try:
+        raw = os.fsencode(p)
+    except UnicodeError:
+        return p.encode("utf-8", "replace").decode("utf-8")
+    cs = fs_codeset() or "utf-8"
+    try:
+        return raw.decode(cs)
+    except (UnicodeError, LookupError):
+        return raw.decode("utf-8", "replace")
+
+
+def fs_path(s):
+    """The other way: a path given as text - the `dir` of an answer, an MCP client's argument - as this process
+    names it. It is taken only when it is there (a path that is there already, or none, comes back as it is)."""
+    cs = fs_codeset()
+    if not cs or not isinstance(s, str) or s.isascii() or os.path.exists(s):
+        return s
+    try:
+        t = os.fsdecode(s.encode(cs))
+    except (UnicodeError, LookupError):
+        return s
+    return t if os.path.exists(t) else s
+
+
 def ascii_path(p):
     """`p` as an API that takes narrow characters opens it. tesserocr hands tesseract the path in the
     system's ANSI code page, so on Windows tessdata under a profile named in another alphabet (a local
     account `Иван`) fails to open - and the OCR is silently dead. Such a path goes by its 8.3 short
     name, which is ASCII; "" when it has none (the volume makes no short names, or the path is not
-    there). Any other path - ASCII, or on another OS - comes back as it is."""
+    there). Elsewhere a path comes back as it is when its bytes are its UTF-8, the way tesserocr hands it on, and is
+    "" when they are not (a POSIX locale of another code set, KNOWN-ISSUES 175): such a folder is opened by its own
+    name from its parent (tess_arg)."""
     p = str(p or "")
-    if os.name != "nt" or p.isascii():
+    if os.name != "nt":
+        return p if utf8_clean(p) else ""
+    if p.isascii():
         return p
     try:
         import ctypes
@@ -236,10 +310,11 @@ def ascii_path(p):
 
 def tess_arg(td):
     """(the path tesserocr is given for the tessdata folder `td`, the working directory to give it from or None).
-    `td` itself where it opens (ASCII, or off Windows) and its 8.3 short name where Windows has one. Where it has
-    none - a volume that makes no short names: the D: of a CI runner, a dev drive - the folder's own name, which
-    is ASCII, from its parent (the process's working directory is a wide-character path: only the narrow
-    argument is the trouble). ("", None) when none of that opens it: the folder's own name is outside ASCII."""
+    `td` itself where it opens (ASCII; off Windows, a name whose bytes are its UTF-8) and its 8.3 short name where
+    Windows has one. Where it has none - a volume that makes no short names: the D: of a CI runner, a dev drive; a
+    folder named in GBK under a POSIX locale of that code set - the folder's own name, which is ASCII, from its parent
+    (the process's working directory takes any path: only the argument is the trouble). ("", None) when none of
+    that opens it: the folder's own name is outside ASCII."""
     short = ascii_path(td)
     if short or not td:
         return short or td, None
