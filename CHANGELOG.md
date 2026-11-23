@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The fix for an OCR that does not start survives a long path** (KNOWN-ISSUES 240): its reason was cut at 200
+  characters, and under a long tessdata path the words the fix is found by went with the end - the report said
+  `readpage.py --setup` where `READ_PAGE_HOME` on an ASCII path is the one that works. A longer reason keeps its start
+  and its end now.
 - **A scan's rendered pages stay where `files.pages` names them** (KNOWN-ISSUES 239): every read of a file on this
   machine is a `--refresh`, whose cleanup kept the files the manifest names as text and deleted the pages it had
   just rendered (a list), so "look at the rendered pages in files.pages" named files that were gone; and the cache

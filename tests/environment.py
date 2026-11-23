@@ -495,6 +495,12 @@ try:
     shutil.copy2(os.path.join(cyr_td, "eng.traineddata"), odd_td)
     arg_odd = ownenv.tess_arg(odd_td)
     caps_odd = with_tesserocr(fake_tesserocr(), odd_td, lambda: rp1.caps(fresh=True))
+    # the same folder down a long path (a long TEMP, a deep home): the reason was cut at 200 characters, the words
+    # the fix is found by went with its end, and the report said `readpage.py --setup`
+    long_td = os.path.join(cyr, "a-long-folder-name-" * 7, os.path.basename(odd_td))
+    os.makedirs(long_td)
+    shutil.copy2(os.path.join(cyr_td, "eng.traineddata"), long_td)
+    caps_long = with_tesserocr(fake_tesserocr(), long_td, lambda: rp1.caps(fresh=True))
 finally:
     ownenv.ascii_path = real_ascii
 check("with no short name the folder's own name goes from its parent (ASCII; the working directory is moved for the "
@@ -510,6 +516,11 @@ check("... and when the folder's own name is outside ASCII too the fix is the on
       and "outside ASCII" in (caps_odd.get("ocr_error") or "")
       and rows["tesseract"][2] == ownenv.NONASCII_FIX and "READ_PAGE_HOME" in ownenv.NONASCII_FIX,
       str((arg_odd, rows["tesseract"][2:3])))
+rows = {r[0]: r for r in rp1.setup_rows(dict(caps_long, keys={}))}
+check("... and down a long path too: the reason keeps what names the fix (it was cut at 200 characters, and the fix "
+      "said `readpage.py --setup`)", rows["tesseract"][2] == ownenv.NONASCII_FIX
+      and len(caps_long.get("ocr_error") or "") <= 300, "%d: %s" % (len(caps_long.get("ocr_error") or ""),
+                                                                    rows["tesseract"][2:3]))
 ownenv.ascii_path = lambda p: ""
 try:
     try:

@@ -5016,8 +5016,18 @@ def _tess_ready():
         return tesserocr, td or where, have, ""        # the folder itself: every start goes through tess_dir
     except Exception as e:                                    # noqa: BLE001
         debuglog.exc("ocr: tesserocr start", e)
-        why = " ".join(str(e).split())[:200] or type(e).__name__
-        return None, "", [], "does not start: %s" % why
+        return None, "", [], "does not start: %s" % (short_reason(e) or type(e).__name__)
+
+
+def short_reason(e, limit=200):
+    """An error's text on one line, at most `limit` characters: where it is longer, its start and its end - the end
+    of such a text says what is wrong ("... a folder whose name has characters outside ASCII that OCR cannot
+    open", what ownenv.ocr_fix finds the fix by), and a long path in its middle cut that off."""
+    s = " ".join(str(e).split())
+    if len(s) <= limit:
+        return s
+    head = (limit - 5) // 2
+    return s[:head] + " ... " + s[-(limit - 5 - head):]
 
 
 def _tesserocr():
@@ -5274,7 +5284,7 @@ def ocr_picture(path, page_text=""):
         best = None
     except Exception as e:                               # noqa: BLE001  (no packs, a path or a pack it cannot open)
         debuglog.exc("ocr: tesserocr", e)
-        best, broken = None, "tesserocr is installed but does not start: %s" % (" ".join(str(e).split())[:160])
+        best, broken = None, "tesserocr is installed but does not start: %s" % short_reason(e, 160)
     if best is None:
         if not exe:
             return "", {"why": broken or "no OCR engine here: tesseract, or tesserocr from pip"}
