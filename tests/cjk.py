@@ -1026,25 +1026,28 @@ turn_seen = []
 
 class FakeTurn(FakeOsd):
     ORIENT = {}
-    BY = {}                       # how the page came ("file", "picture"): (its reading, the reading's confidence)
+    BY = {}                       # the page as it lies or turned ("as-is", "turned"): (its reading, its confidence)
 
     def SetImageFile(self, p):
         turn_seen.append(("file", self.lang))
-        self.how = "file"
+        self.state = "as-is"                          # a page by its file is read as it lies
 
     def SetImage(self, img):
+        # told by the mark, not by how the page came: from a path that is not ASCII (a Chinese profile's TEMP) even a
+        # page as it lies comes as a picture
         from PIL import ImageOps
-        turn_seen.append(("picture", self.lang, img.size, ImageOps.invert(img.convert("L")).getbbox()))
-        self.how = "picture"
+        box = ImageOps.invert(img.convert("L")).getbbox()
+        turn_seen.append(("picture", self.lang, img.size, box))
+        self.state = "as-is" if box == (0, 0, 1, 1) else "turned"
 
     def GetUTF8Text(self):
-        return FakeTurn.BY.get(getattr(self, "how", ""), (FakeOsd.GetUTF8Text(self), 0))[0]
+        return FakeTurn.BY.get(getattr(self, "state", ""), (FakeOsd.GetUTF8Text(self), 0))[0]
 
     def MeanTextConf(self):
-        return FakeTurn.BY.get(getattr(self, "how", ""), ("", FakeOsd.MeanTextConf(self)))[1]
+        return FakeTurn.BY.get(getattr(self, "state", ""), ("", FakeOsd.MeanTextConf(self)))[1]
 
     def Recognize(self, ms=0):
-        time.sleep(FakeTurn.SLOW if getattr(self, "how", "") == "picture" else 0)
+        time.sleep(FakeTurn.SLOW if getattr(self, "state", "") == "turned" else 0)
 
     def DetectOrientationScript(self):
         return dict(FakeOsd.SCRIPT, **FakeTurn.ORIENT)
@@ -1053,7 +1056,19 @@ class FakeTurn(FakeOsd):
 FakeTurn.SLOW = 0                 # seconds a reading of the page turned takes (a slow machine)
 
 
-turn_png = os.path.join(next((d for d in (ROOT, tempfile.gettempdir()) if d.isascii()), ROOT), "rp-turn-%d.png" % os.getpid())
+def ascii_dir():
+    """A folder with an ASCII path where there is one: TEMP is not ASCII under a Chinese profile (CI runs this suite
+    there), and tesserocr takes a page by its file only from such a path - from another, by a picture of it."""
+    for base in (ROOT, tempfile.gettempdir(), os.environ.get("RUNNER_TEMP"), os.environ.get("PUBLIC"),
+                 os.environ.get("SystemDrive", "C:") + os.sep):
+        if base and base.isascii() and os.path.isdir(base) and os.access(base, os.W_OK):
+            return base
+    return ROOT
+
+
+turn_png = os.path.join(ascii_dir(), "rp-turn-%d.png" % os.getpid())
+# how an upright page is read: by its file from an ASCII path, else as a picture of it, as it lies
+AS_IS = [("file", "eng")] if turn_png.isascii() else [("picture", "eng", (40, 20), (0, 0, 1, 1))]
 if importlib.util.find_spec("PIL") is None:
     check.skip("OCR: a page scanned turned is turned upright before it is read", "no Pillow here")
 else:
@@ -1071,7 +1086,7 @@ else:
                                   ("unsure", {"orient_deg": 180, "orient_conf": 2.0}, {}),
                                   ("upright", {"orient_deg": 0, "orient_conf": 15.0}, {}),
                                   ("taken for upside down", {"orient_deg": 180, "orient_conf": 9.0},
-                                   {"picture": ("Iqoqo ppun ono", 33), "file": (LATIN["eng"], 50)})):
+                                   {"turned": ("Iqoqo ppun ono", 33), "as-is": (LATIN["eng"], 50)})):
             mod6._tesserocr = lambda: (types.SimpleNamespace(PyTessBaseAPI=FakeTurn), ROOT, ["eng", "osd"])
             FakeOsd.SCRIPT, FakeOsd.READS, FakeOsd.CONF = {"script_name": "Latin", "script_conf": 5.0}, {}, {}
             FakeTurn.ORIENT, FakeTurn.BY = orient, by
@@ -1089,11 +1104,11 @@ else:
           and turns["turned left"] == [("picture", "eng", (20, 40), (19, 0, 20, 1))],
           str((turns["turned right"], turns["turned left"])))
     check("... and an upright page, or one OSD is unsure of (2.0), is read from its file as before",
-          turns["upright"] == [("file", "eng")] and turns["unsure"] == [("file", "eng")],
+          turns["upright"] == AS_IS and turns["unsure"] == AS_IS,
           str((turns["upright"], turns["unsure"])))
     check("... an upright page OSD took for upside down (9.0), read unsure of itself turned (33), is read as it is too, "
           "and that surer reading (50) is the text",
-          [x[0] for x in turns["taken for upside down"]] == ["picture", "file"]
+          [x[0] for x in turns["taken for upside down"]] == ["picture", AS_IS[0][0]]
           and turns["taken for upside down: text"] == LATIN["eng"],
           str((turns["taken for upside down"], turns["taken for upside down: text"][:40])))
     # ... and so it is on a slow machine, whose turned reading took most of the page's time (an emulated Celeron)
@@ -1102,7 +1117,7 @@ else:
     mod6b._tesserocr = lambda: (types.SimpleNamespace(PyTessBaseAPI=FakeTurn), ROOT, ["eng", "osd"])
     FakeOsd.SCRIPT, FakeOsd.READS, FakeOsd.CONF = {"script_name": "Latin", "script_conf": 5.0}, {}, {}
     FakeTurn.ORIENT = {"orient_deg": 180, "orient_conf": 9.0}
-    FakeTurn.BY, FakeTurn.SLOW = {"picture": ("Iqoqo ppun ono", 33), "file": (LATIN["eng"], 50)}, 1.2
+    FakeTurn.BY, FakeTurn.SLOW = {"turned": ("Iqoqo ppun ono", 33), "as-is": (LATIN["eng"], 50)}, 1.2
     del turn_seen[:]
     os.environ["READ_PAGE_LANG"] = "en"
     try:
@@ -1112,7 +1127,7 @@ else:
         FakeTurn.BY, FakeTurn.SLOW = {}, 0
     slow_seen = [x[0] for x in turn_seen if x[1] != "osd"]
     check("... even where the turned reading took most of the page's time (1.2 of 2 s): the page as it lies is read "
-          "in what is left, and kept", slow_seen == ["picture", "file"]
+          "in what is left, and kept", slow_seen == ["picture", AS_IS[0][0]]
           and isinstance(res_slow, tuple) and res_slow[0] == LATIN["eng"], str((slow_seen, res_slow))[:200])
 
 
@@ -1296,7 +1311,9 @@ if importlib.util.find_spec("PIL") is not None and os.path.isfile(turn_png):
         if "--psm" in cmd and cmd[cmd.index("--psm") + 1] == "0":
             return 0, (b"Orientation in degrees: 180\nRotate: 180\nOrientation confidence: 9.00\nScript: Latin\n"
                        b"Script confidence: 5.00\n"), b""
-        turned = os.path.abspath(cmd[1]) != os.path.abspath(turn_png)
+        from PIL import Image, ImageOps
+        with Image.open(cmd[1]) as im:              # by its mark: a page by a path that is not ASCII is a copy
+            turned = ImageOps.invert(im.convert("L")).getbbox() != (0, 0, 1, 1)
         seen9.append((turned, "tsv" in cmd))
         return 0, tsv_of("Iqoqo ppun ono" if turned else "The town lies on the bank", 30 if turned else 50), b""
 

@@ -8,6 +8,7 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **CI: the OCR turn checks hold under a profile named in Chinese**: their fakes told an upright page from a turned one by how it came (by its file or as a picture), and from a temp folder that is not ASCII every page comes as a picture; they tell it by the page's mark now, and the page is made in an ASCII folder where there is one.
 - **OCR of real scans: a page on its side or upside down is turned upright, a page printed in columns is read with
   the vertical packs, a page whose script OSD is unsure of with the likeliest scripts' packs, Fraktur with its own**
   (KNOWN-ISSUES 232-236). Measured on a corpus of real pages - 92 proofread Wikisource pages with their scans (34 of
