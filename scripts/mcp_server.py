@@ -593,7 +593,9 @@ def tool_read_url(args):
 
     status = manifest.get("status") or "error"
     files = manifest.get("files") or {}
-    workdir = manifest.get("dir") or ""
+    # the folder as the answer names it - in the user's locale's letters, which under a POSIX locale that is not
+    # UTF-8 are other bytes than this process's name for it (KNOWN-ISSUES 175)
+    workdir = ownenv.fs_path(manifest.get("dir") or "")
     # the text's pictures by number; only those with a file can become image blocks
     images = sorted((e for e in manifest.get("images") or [] if e.get("file")), key=lambda x: x.get("n") or 0)
     # the same choice as the CLI: a continuation with no file goes on in the file read last,
@@ -615,7 +617,7 @@ def tool_read_url(args):
     tiles = manifest.get("screenshots") or []
     blocks, state, shots_done = content_blocks(workdir, said, inline, images, tiles, uses)
     if status == "media_only":
-        media = files.get("media") or ""
+        media = ownenv.fs_path(files.get("media") or "")
         kind = (manifest.get("content") or {}).get("kind") or ""
         if media and kind == "image":
             # single-file endpoint: the point is to see the picture in one hop, not to read a path
@@ -705,7 +707,7 @@ def tool_read(args):
     known = TOOLS[1]["inputSchema"]["properties"]
     args = {readpage.typo_fixed(k, list(known)): v for k, v in args.items()}
     ignored = ["%s (no such parameter)" % k for k in args if k not in known]
-    d = (args.get("dir") or "").strip()
+    d = ownenv.fs_path((args.get("dir") or "").strip())       # the folder as an answer named it (shown_paths)
     if not d or not os.path.isdir(d):
         return err("dir is not a directory: %r" % d)
     if not owned_dir(d):
@@ -726,6 +728,7 @@ def tool_read(args):
     path = inside(d, rel)
     if not path or not os.path.isfile(path):
         return err("no such file: %s (in %s)" % (rel, d))
+    shown_d = ownenv.shown(d)                                    # and as the user's locale names it, in what we say
 
     ext = os.path.splitext(path)[1].lower()
     size = os.path.getsize(path)
@@ -741,21 +744,21 @@ def tool_read(args):
             pass
         found, info = readpage.ocr_picture(path, page_text)
         info.update(file=rel)
-        manifest = dict(readpage.load_manifest(d) or {"status": "ok"}, dir=d, cache="hit", ocr=info)
+        manifest = dict(readpage.load_manifest(d) or {"status": "ok"}, dir=shown_d, cache="hit", ocr=info)
         if ignored:
             manifest["ignored"] = ignored
         said, _ = answer.render(manifest, found, "%s text" % os.path.basename(path), 1, readpage.ocr_next)
-        return result([text(said)], {"dir": d, "file": rel, "kind": "text in a picture", "ocr": info})
+        return result([text(said)], {"dir": shown_d, "file": rel, "kind": "text in a picture", "ocr": info})
     if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif", ".ico"):
         block, caption = image_block(path)
         if block:
             blocks = [text("read-page · image · %s · %s" % (readpage.human_bytes(size), os.path.basename(path))),
                       block, text(caption)]
-            structured = {"dir": d, "file": rel, "kind": "image", "bytes": size,
+            structured = {"dir": shown_d, "file": rel, "kind": "image", "bytes": size,
                           "attached": True, "caption": caption}
         else:
             blocks = [text("read-page · image · %s · not attached: %s" % (os.path.basename(path), caption))]
-            structured = {"dir": d, "file": rel, "kind": "image", "bytes": size, "attached": False,
+            structured = {"dir": shown_d, "file": rel, "kind": "image", "bytes": size, "attached": False,
                           "reason": caption}
         return result(blocks, structured)
 
@@ -772,7 +775,7 @@ def tool_read(args):
         blocks.append(text("read-page · %s · %s · %s%s" % (
             kind, os.path.basename(path), readpage.human_bytes(size),
             "" if attached else " · attached only with READ_PAGE_MCP_MEDIA=audio (and a client that renders audio)")))
-        return result(blocks, {"dir": d, "file": rel, "kind": kind, "bytes": size, "attached": attached})
+        return result(blocks, {"dir": shown_d, "file": rel, "kind": kind, "bytes": size, "attached": attached})
 
     try:
         data = open(path, "rb").read()
@@ -781,12 +784,12 @@ def tool_read(args):
     if readpage.media_kind(data, "", path) == "image":
         block, caption = image_block(path)
         blocks = [text("read-page · image · %s" % os.path.basename(path))] + ([block] if block else []) + [text(caption)]
-        return result(blocks, {"dir": d, "file": rel, "kind": "image", "bytes": size,
+        return result(blocks, {"dir": shown_d, "file": rel, "kind": "image", "bytes": size,
                                "attached": bool(block)})
     if readpage.media_kind(data, "", path):
         note = "read-page · binary · %s · %s · no text in this file" % (os.path.basename(path),
                                                                        readpage.human_bytes(size))
-        return result([text(note)], {"dir": d, "file": rel, "kind": "binary", "bytes": size,
+        return result([text(note)], {"dir": shown_d, "file": rel, "kind": "binary", "bytes": size,
                                      "attached": False})
 
     body = data.decode("utf-8", "replace")
@@ -796,11 +799,11 @@ def tool_read(args):
             body = pretty
         except Exception:
             pass
-    manifest = dict(readpage.load_manifest(d) or {"status": "ok"}, dir=d, cache="hit")
+    manifest = dict(readpage.load_manifest(d) or {"status": "ok"}, dir=shown_d, cache="hit")
     if ignored:
         manifest["ignored"] = ignored
     said, nxt = answer.render(manifest, body, rel, start, mcp_next)
-    return result([text(said)], {"dir": d, "file": rel, "kind": "text", "from": start,
+    return result([text(said)], {"dir": shown_d, "file": rel, "kind": "text", "from": start,
                                  "next_from": nxt, "total_lines": line_count(body)})
 
 
