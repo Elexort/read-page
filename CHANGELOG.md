@@ -8,6 +8,14 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **`--setup` no longer takes a read of its state that finds nothing for a run that never started** (KNOWN-ISSUES
+  229): on Windows a read made while the work replaces `setup.state` cannot open the file for that moment (20-27 of
+  about 38 000 reads in 5 s against a writer replacing it as fast as it can), and once 20 s had passed the command said
+  "the work did not start" and exited 1 while the work ran to its end. Such a read is no news now: what was seen last
+  stands, only a run never seen within 20 s did not start, and where the work's lock is let go (or a run holds it as the
+  command starts) the state is read again till a read finds it. On the writer's side a reader that keeps the file open
+  stops the replace (WinError 5): past its 2 s of tries the work raised and stopped, its last state lost; it writes the
+  state in place then, which a reader does not stop, and goes on where even that is refused.
 - **The weak laptop, emulated with its memory and disk** (KNOWN-ISSUES 73, by design): the E-core emulation of the
   numbers here runs in a Windows job whose commit is capped at 4 or 8 GB and whose own disk I/O the job's rate control
   holds at a cheap eMMC's (2000 IOPS, 150 MB/s). Five reads one at a time, two and four at once: nothing failed or

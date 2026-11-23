@@ -594,6 +594,11 @@ The work runs detached (its parent, a launcher, is gone at once), so a harness t
 long command does not kill it; the command shows its progress for 100 s (in a terminal, to the
 end), then says it goes on in the background, and a second `--setup` follows the one at work - a run
 that is not done, whose process is alive and whose `setup.lock` is held; nothing else counts as one.
+The command follows the work's `setup.state`, which the work replaces whole (a temp file, then a rename). A read that
+finds nothing is no news - on Windows one made while the file is replaced cannot open it - so what was seen last
+stands: only a run never seen within 20 s is one that did not start, and where the work's lock is let go, or a run
+holds it as the command starts, the state is read again till a read finds it. A reader that keeps the file open
+stops the rename (WinError 5) and not a write in place: past 2 s of tries the work writes its state in place.
 Where a Windows job around the command kills on close and lets nothing leave (a harness that runs
 each command in one), the work would end with the command: `--setup` then says so and follows it to
 its end. That is asked of a small child that has broken away (the job it lands in is the first that

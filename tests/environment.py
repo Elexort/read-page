@@ -851,6 +851,156 @@ check("the launcher tells --setup how it went (exit code 0: free; %d: attached t
 os.mkdir(os.path.join(fd, "no.lock"))
 check("a lock file that cannot be opened (a read-only folder) is nobody's lock - the file existing proves nothing",
       envsetup._lock_state(os.path.join(fd, "no.lock")) == "unusable" and not envsetup._locked(os.path.join(fd, "no.lock")), "")
+
+# ---------------------------------------------------------------- a read of setup.state that finds nothing is no news
+# On Windows a read made while the worker replaces setup.state (a temp file, then os.replace) cannot open the file for that
+# moment: once 20 s had passed, the command took such a read for a run that never started - "the work did not start",
+# exit 1, while the work ran to its end (KNOWN-ISSUES 229). The worker is played: its state and its lock as a clock of the
+# test's has them (time.sleep moves it), the reads that find nothing scripted - nothing here depends on timing.
+real_read_json = envsetup._read_json
+
+
+class PlayedWork:
+    """The worker of a --setup, played for envsetup.setup(): it starts when launched (or was at work before: `earlier`),
+    writes its last state at `ends` s and lets go of the lock right after the command's read of the state before it (one
+    write behind the lock, as can be); `dies`: it lets go there without a last state. A read finds nothing at the first
+    read past each of `torn` (s), and at the first read after the work's end with `torn_end`. `starts=False`: launched,
+    it never starts."""
+
+    strftime = staticmethod(time.strftime)
+
+    def __init__(self, ends=40.0, torn=(), torn_end=False, earlier=False, starts=True, dies=False):
+        self.t0 = self.now = 1000.0
+        self.ends, self.torn, self.torn_end, self.starts, self.dies = ends, sorted(torn), torn_end, starts, dies
+        self.run, self.started = ("earlier", self.t0 - 300) if earlier else (None, None)
+        self.over, self.launched = False, []
+
+    def time(self):
+        return self.now
+
+    def sleep(self, s):
+        self.now += s
+
+    def launch(self, d_, run_, ver_):
+        self.launched.append(run_)
+        if self.run is None and self.starts:
+            self.run, self.started = run_, self.now + 0.5
+        return "", False
+
+    def locked(self, path):
+        return self.run is not None and not self.over
+
+    def read(self, path):
+        if os.path.basename(path) != "setup.state":
+            return real_read_json(path)
+        if self.torn and self.now - self.t0 >= self.torn[0]:
+            self.torn.pop(0)
+            return {}
+        if self.run is None or self.now < self.started:
+            return {}
+        st = {"run": self.run, "pid": os.getpid(), "started": self.started, "steps": 10, "done": False,
+              "finished": min(9, int((self.now - self.started) / 4))}
+        if self.over and not self.dies:
+            if self.torn_end:
+                self.torn_end = False
+                return {}
+            return dict(st, finished=10, done=True, ok=True)
+        if self.now - self.t0 >= self.ends:
+            self.over = True
+        return st
+
+
+pw_home = scratch("rp-env-torn-")
+
+
+def played(work):
+    """envsetup.setup() following a played worker: (exit code, what it printed)."""
+    with open(os.path.join(pw_home, "setup.log"), "w", encoding="utf-8") as fh_:
+        fh_.write(finished_log)
+    saved_ = (envsetup.time, envsetup._read_json, envsetup._locked, envsetup._launch)
+    old_env = dict((k, os.environ.get(k)) for k in ("READ_PAGE_HOME", "READ_PAGE_SETUP_WAIT"))
+    os.environ.update(READ_PAGE_HOME=pw_home, READ_PAGE_SETUP_WAIT="1000")
+    envsetup.time, envsetup._read_json, envsetup._locked, envsetup._launch = work, work.read, work.locked, work.launch
+    buf_ = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf_):
+            rc_ = envsetup.setup(SCRIPT, "test")
+    finally:
+        envsetup.time, envsetup._read_json, envsetup._locked, envsetup._launch = saved_
+        for k, v in old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return rc_, buf_.getvalue()
+
+
+rc_, out_ = played(PlayedWork(torn=(25,)))
+check("a read of setup.state that finds nothing past 20 s (the worker replacing it, on Windows) is no news: --setup "
+      "follows the work to its end", rc_ == 0 and "did not start" not in out_ and "stopped after" not in out_,
+      out_.replace("\n", " | ")[-160:])
+rc_, out_ = played(PlayedWork(torn=(1.0,)))
+check("... and one right after the run was first seen", rc_ == 0 and "did not start" not in out_
+      and "stopped after" not in out_, out_.replace("\n", " | ")[-160:])
+rc_, out_ = played(PlayedWork(torn_end=True))
+check("the worker gone (its lock let go) and the state one write behind: a read that finds nothing is read again, and "
+      "the work's own end is what --setup says", rc_ == 0 and "stopped after" not in out_, out_.replace("\n", " | ")[-160:])
+pw_ = PlayedWork(earlier=True, torn=(0,))
+rc_, out_ = played(pw_)
+check("a run at work when --setup starts, and the first read finds nothing: that run is followed, none is started",
+      rc_ == 0 and not pw_.launched and "following it" in out_ and "did not start" not in out_,
+      "%d launched; %s" % (len(pw_.launched), out_.replace("\n", " | ")[-140:]))
+rc_, out_ = played(PlayedWork(starts=False))
+check("... while a run never seen at all within the wait did not start (exit 1)",
+      rc_ == 1 and "the work did not start" in out_, out_.replace("\n", " | ")[-160:])
+rc_, out_ = played(PlayedWork(ends=10.0, dies=True))
+check("... and a worker that let go of its lock with no last state stopped (exit 1)",
+      rc_ == 1 and "the work stopped after 2 of 10 steps" in out_, out_.replace("\n", " | ")[-160:])
+# the writer's side: a reader that keeps the file open stops os.replace (measured on Windows: WinError 5 while a Python
+# reader holds it; a write in place goes through). Past the retries the worker raised and stopped there, and a last
+# state - what the command waits for - was lost with it
+wr_home = scratch("rp-env-wr-")
+wr = envsetup.Work(wr_home, "wr", "test")
+wr_tmp = os.path.join(wr_home, "setup.state.%d.tmp" % os.getpid())
+real_replace, wr_errs = os.replace, []
+
+
+def refuse_replace(src, dst, *a, **k):
+    if os.path.basename(str(dst)) == "setup.state":
+        raise PermissionError(13, "Permission denied", str(dst))
+    return real_replace(src, dst, *a, **k)
+
+
+def refuse_open(path, mode="r", *a, **k):
+    if os.path.basename(str(path)) == "setup.state" and "w" in mode:
+        raise PermissionError(13, "Permission denied", str(path))
+    return io.open(path, mode, *a, **k)
+
+
+envsetup.time, os.replace = PlayedWork(), refuse_replace
+try:
+    for kw_ in ({"done": False}, {"done": True, "ok": True}):
+        try:
+            wr.state(**kw_)
+        except OSError as e:
+            wr_errs.append(repr(e))
+    wr_last = real_read_json(os.path.join(wr_home, "setup.state"))
+    wr_left = os.path.exists(wr_tmp)
+    envsetup.open = refuse_open                          # a write in place refused too
+    try:
+        wr.state(done=False, name="again")
+    except OSError as e:
+        wr_errs.append(repr(e))
+    finally:
+        del envsetup.open
+finally:
+    envsetup.time, os.replace = time, real_replace
+check("a reader that keeps setup.state open past the retries loses no state: it is written in place, the last one too",
+      not wr_errs[:2] and wr_last.get("done") is True and wr_last.get("ok") is True and not wr_left,
+      "%s %s tmp left: %s" % (wr_errs[:2], wr_last.get("done"), wr_left))
+check("... and where even that is refused the work goes on (the next state carries it), and the log says so",
+      not wr_errs and "setup.state was not written" in io.open(os.path.join(wr_home, "setup-detail.log"),
+                                                               encoding="utf-8").read(), str(wr_errs[2:]))
 ro = tempfile.mkdtemp(prefix="rp-env-ro-")
 junk.append(ro)
 real_open = open

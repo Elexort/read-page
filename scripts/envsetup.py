@@ -212,6 +212,8 @@ def setup(script, skill_version):
         print("read-page --setup: %s - %s" % (d, SIZE_NOTE))
     sys.stdout.flush()
     st0 = _read_json(state)
+    if not st0 and _locked(lock):
+        st0 = _read_again(state, {})           # made while the run at work replaced it (Windows): read it again
     attached = False
     if _locked(lock) and st0.get("done") is False and _pid_alive(st0.get("pid")):
         # only a run still at work is followed: the lock alone, or a state of a run that ended, is
@@ -233,9 +235,11 @@ def setup(script, skill_version):
         limit = float(wait) if wait else (1e9 if (_tty() or attached) else FOLLOW_SECONDS)
     except ValueError:
         limit = FOLLOW_SECONDS
-    seen = 0
+    seen, last = 0, {}
     while True:
-        st = _read_json(state)
+        # a read that finds nothing is no news (on Windows the file cannot be opened for the moment the worker replaces
+        # it): what was seen last stands, and only a run never seen at all did not start
+        st = last = _read_json(state) or last
         if st.get("run") != target and float(st.get("started") or 0) >= t0 - 1:
             target = st.get("run")             # another --setup's work started first: that one
         mine = st.get("run") == target
@@ -245,7 +249,7 @@ def setup(script, skill_version):
                 break
             if not _locked(lock):
                 time.sleep(0.5)                # the state may be one write behind the lock
-                st = _read_json(state)
+                st = last = _read_again(state, st)
                 if not st.get("done"):
                     _show_log(d, seen)
                     print("the work stopped after %s of %s steps, before its end (its log: %s); run --setup "
@@ -508,17 +512,35 @@ def _read_json(path):
         return {}
 
 
+def _read_again(path, last, tries=20):
+    """setup.state read till a read finds it, 0.1 s apart (on Windows one made while the file is replaced, or while
+    something else holds it, finds nothing); where none does, what was seen last stands."""
+    for _ in range(tries):
+        st = _read_json(path)
+        if st:
+            return st
+        time.sleep(0.1)
+    return last
+
+
 def _write_json(path, data):
+    """The file whole or not at all: a temp file, then os.replace. On Windows a reader that has the file open stops the
+    replace (WinError 5) for as long as it holds it: it is tried for 2 s, then the error is raised (the temp file gone)."""
     tmp = "%s.%d.tmp" % (path, os.getpid())
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=1, ensure_ascii=False)
-    for _ in range(40):                       # a reader on Windows holds it for a moment
+    for i in range(41):
         try:
             os.replace(tmp, path)
             return
         except PermissionError:
+            if i == 40:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                raise
             time.sleep(0.05)
-    os.replace(tmp, path)
 
 
 def _lock_state(path):
@@ -1396,7 +1418,19 @@ class Work:
                   "steps": len(self.STEPS), "finished": len(self.parts),
                   "step": len(self.parts) + 1, "name": ", ".join(self.running) or "starting"}
             st.update(kw)
-            _write_json(os.path.join(self.d, "setup.state"), st)
+            path = os.path.join(self.d, "setup.state")
+            try:
+                _write_json(path, st)
+            except OSError as e:
+                # past the retries a reader that keeps the file open (Windows) still stops a replace, not a write in
+                # place (measured); a read made while that is half written finds nothing, which the command takes for
+                # no news. The last state is what the command waits for. Where even this is refused the work goes on:
+                # each state is the whole of it, and the next one carries this one
+                try:
+                    with open(path, "w", encoding="utf-8") as fh:
+                        json.dump(st, fh, indent=1, ensure_ascii=False)
+                except OSError as e2:
+                    self.log("setup.state was not written: %s; in place: %s" % (e, e2))
 
     def step(self, name, fn, need=None):
         """One step: it runs, or is skipped when the step it needs did not succeed; its line goes
