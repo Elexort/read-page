@@ -8,6 +8,18 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The weak laptop, emulated with its memory and disk** (KNOWN-ISSUES 73, by design): the E-core emulation of the
+  numbers here runs in a Windows job whose commit is capped at 4 or 8 GB and whose own disk I/O the job's rate control
+  holds at a cheap eMMC's (2000 IOPS, 150 MB/s). Five reads one at a time, two and four at once: nothing failed or
+  crawled under 4 GB (four at once held 2.1 GB of commit); one at a time no step reached its cap; four at once on a
+  Celeron's budget the PDF layout model's 10 s ran out (the tables came as text), an N100's four cores read them in
+  11-12 s with nothing cut; a cold first read took 0.1-6.1 s more on the eMMC. What an emulation cannot show is in the
+  row. **`--setup` with each step's work overlapped with the next download, one download at a time, was measured and
+  left out**: from nothing it saved 10 % on a fast machine (64 -> 57.5 s), 16-19 % on an emulated N100, 7-14 % on an emulated
+  Celeron, whose one core the overlapped steps' own work then shares - under the 15 % it had to save. Found on the
+  way, both planned: `--setup`'s command can take a read of `setup.state` made while the worker replaces it for a
+  run that never started (KNOWN-ISSUES 229), and a home over 134 characters breaks curl_cffi's and tesserocr's DLLs
+  on Windows (KNOWN-ISSUES 230).
 - **CI: the macOS proxy job ends instead of hanging** (KNOWN-ISSUES 228): `ci_proxy.py stop` deletes the certificate first and stops each removal at 60 s on a runner, where `security remove-trusted-cert -d` waited 90 minutes for an administrator's answer.
 - **Our EPUB reader reads again in its own process** (KNOWN-ISSUES 226): it failed on every EPUB whose parts declare their encoding - `No module named 'intl'`, for the process starts with `-I` - and the read fell to PyMuPDF or to `empty`. **A home named through an 8.3 short name is under the profile** (KNOWN-ISSUES 227): `--setup` no longer changes its ACL. The OMML check compares strings of one width (the n-ary operator made its text twice as wide as the fraction's: 6.3 times the time on macOS, 1.0 alike).
 - **Arabic, Greek, Thai and Hebrew join the OCR packs `--setup` fetches for everyone** (KNOWN-ISSUES 225): scripts English reads as nothing (84-99 % CER), whose packs save the most for their share of the web after the ten; 4.9 MB more, 39.3 MB of OCR data in all (35.2 more than English alone). Chosen per page they read their synthetic scans at 2.9 % CER and 2.1 s a page (Arabic), 1.1 % and 1.8 s (Greek), 2.4 % and 1.6 s (Hebrew), 0.5 % and 1.7 s (Thai); the ten languages read as before, page by page. Greek counts from OSD's 0.4 (`OCR_SCRIPT_TRUST`): 3 of 14 Greek pages gave it under 1.0, and no Latin or Cyrillic page of 130 was taken for Greek. On 7 real scans OSD named the script of a Greek and a Thai page (9.8 and 20.9 % against 75-99 with English) and took the others for another; `--ocr-langs`' example is `eng+hin` now.

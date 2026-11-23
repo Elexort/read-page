@@ -260,11 +260,13 @@ Windows: the Python engines 469 MB; the browser 275; defuddle and npm 30, on the
 carries; Python 69; the OCR packs 39 - nodejs.org's Node, 36-56 MB to fetch and 90-190 on disk, and pandoc's 226 MB, are
 gone, our own readers read EPUB, ODT and RTF; measured by real installs on GitHub's runners, and the fourteen OCR packs
 and osd added by their sizes in the lock: 35 MB more than English alone).
-From nothing it takes about a minute (65-70 s on a 9 MB/s link, of which ~48 s are downloads; the
-steps side by side were no faster, measured), a check of an environment already up to
-date 8 s. From then on `readpage.py` and the MCP server run under that environment's Python by
-themselves (POSIX: `exec`; Windows: a child process tied to the first, +0.16 s a read), with
-its tools first; `READ_PAGE_SKIP=env` keeps a run in the Python it was started with, and is the way
+From nothing it takes about a minute (63-65 s on a 12 MB/s link, of which ~41 s are downloads; on an
+emulated weak laptop 94-99 s with an N100's four cores, 105-122 s on a Celeron's budget), a check of an
+environment already up to date 5-8 s. Its steps run one after another: each step's work overlapped with
+the next download, one download at a time, was measured and saved 10 % on a fast machine, 16-19 % on the
+N100 and 7-14 % on the Celeron (2026-11-23) - left out, for under 15 %. From then on `readpage.py` and the
+MCP server run under that environment's Python by themselves (POSIX: `exec`; Windows: a child process
+tied to the first, +0.16 s a read), with its tools first; `READ_PAGE_SKIP=env` keeps a run in the Python it was started with, and is the way
 out when the environment's Python starts and fails (an antivirus took one of its files): that read
 runs in the machine's Python with an `environment:` line saying why, and `--setup` repairs it. Running
 `--setup` again brings the environment up to the skill's pins and checks every engine; deleting
@@ -491,7 +493,7 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (226 rows: 181 fixed, 3 planned, 42 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (228 rows: 181 fixed, 4 planned, 43 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License
