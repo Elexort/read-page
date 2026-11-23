@@ -104,15 +104,17 @@ does not). Pictures are downloaded either way; only their positions in the text 
 
 Detecting a missing text layer takes 14 ms and rendering a page 33 ms; both always happen, and the
 PNGs land in `files.pages` for a model that can look. With OCR - `tesserocr` in-process, which
-`readpage.py --setup` installs with fourteen language packs from tessdata_fast, or the `tesseract`
-command - the same pages are OCR'd side by side and the result becomes the text (`engine:
+`readpage.py --setup` installs with fourteen language packs, four vertical ones and Fraktur's from tessdata_fast, or
+the `tesseract` command - the same pages are OCR'd side by side and the result becomes the text (`engine:
 document:ocr`, `signals.ocr_pages`), so a text-only pipeline gets words instead of a picture.
 Measured on a synthetic scan: "SCANNED REPORT / Total 42 units" read back correctly.
 
 **Languages, page by page.** `--setup` fetches the ten languages with the most web text by Common Crawl's
 CC-MAIN-2026-43 - `eng rus chi_sim chi_tra jpn kor deu fra spa por` - and four scripts English reads as nothing -
-`ara ell tha heb` -, 27.4 MiB, the packs of the user's own languages beside them (`READ_PAGE_LANG`, else the system's
-list; at most three), and `osd`, tesseract's own script detection (10.1 MiB). A scanned page is never read with all of them at once (on 52 pages in 13 languages that took 2.2-16 s a
+`ara ell tha heb` -, 27.4 MiB, the vertical packs of Chinese, Japanese and Korean and Fraktur's (`jpn_vert
+chi_tra_vert chi_sim_vert kor_vert frk`, 13.7 MiB), the packs of the user's own languages beside them
+(`READ_PAGE_LANG`, else the system's list; at most three), and `osd`, tesseract's own script and orientation detection
+(10.1 MiB). A scanned page is never read with all of them at once (on 52 pages in 13 languages that took 2.2-16 s a
 page, 5.2 on average for the ten languages, against 1.2-3.5 and 2.15 chosen per page, and read Korean at 35 % CER -
 English before Korean -, Arabic and Hindi at 81-84 %). OSD names the page's script first (0.25-0.6 s), and the page is
 read with that script's pack - `chi_sim`, `chi_tra` and `jpn` alone
@@ -123,7 +125,20 @@ a kanji-heavy one can come out as Han); a
 Latin page with English and the user's own Latin-script packs, then again with the pack of the language its words are
 in (`intl.latin_pack`: the commonest words of 15 languages) when that pack is here; a page whose script OSD is not sure
 of, with English and the user's own packs. A script whose pack is not here - a Hindi scan on a machine of the
-fourteen - is read with English and named in `improve` (`readpage.py --setup --ocr-langs eng+hin`). `READ_PAGE_OCR_LANGS`, when
+fourteen - is read with English and named in `improve` (`readpage.py --setup --ocr-langs eng+hin`).
+
+**Real scans** (2026-11-23). A page scanned on its side or upside down is turned upright by OSD's orientation when OSD
+is that sure of it (from 5.0) and its script told again upright; where the page read turned is unsure of itself it is
+read as it lay too, and the surer reading kept (OSD took pages of a magazine set in Fraktur for upside down). A page
+printed in vertical columns - tesseract's layout finds its text written top to bottom - is read again with the vertical
+packs `--setup` fetches (`jpn_vert`, `chi_tra_vert`, `chi_sim_vert`, `kor_vert`), its script's first, the most
+confident kept. A page whose script OSD is unsure of, or one it calls Latin whose reading is unsure of itself, is read
+again with the likeliest other scripts' packs - OSD's own answer's, then the scripts OSD was seen to take for it (Hebrew
+for Arabic, Greek for Latin, Fraktur for Latin, ...), at most three -, the most confident kept. A page OSD names Fraktur
+is read with `frk`. The cost falls on such pages alone: an upright page in a script OSD is sure of is read as before.
+Measured on real pages (CER): 42 turned copies 67 -> 22 %, 27 vertical pages 104 -> 67, 6 pages OSD was unsure of or
+wrong about 90 -> 46, 17 Fraktur pages 32 -> 21.
+`READ_PAGE_OCR_LANGS`, when
 set, decides every page; a picture (`--ocr N`) is read with the pack of its page's text - its script, or its Latin
 language - and English beside it. The measurement is in [engines.md](engines.md#ocr-languages-measured).
 `READ_PAGE_TESSDATA` points at a data folder outside the install (the environment sets its own). Without OCR nothing

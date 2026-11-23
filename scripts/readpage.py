@@ -1212,8 +1212,9 @@ def setup_rows(c):
         packs = fix("ocr-langs", "download a language's .traineddata (rus, deu, jpn...) into tessdata - "
                                  "github.com/tesseract-ocr/tessdata_fast - and name it in READ_PAGE_OCR_LANGS")
         if packs == SETUP:
-            packs += (" --ocr-langs eng+hin (the fourteen packs every environment gets and the user's own come by "
-                      "themselves; the flag names others)")
+            packs += (" --ocr-langs eng+hin (the packs every environment gets - fourteen languages, the vertical "
+                      "packs of Chinese, Japanese and Korean, Fraktur's - and the user's own come by themselves; the "
+                      "flag names others)")
         # after --setup the choice is made (English and the user's languages): the row is not a nag then
         rows.insert(at, ("ocr-langs", True if any(x != "eng" for x in langs) else (
             None if (ownenv.status().get("used") and ownenv.load().get("ocr_langs")) else False), packs,
@@ -4943,6 +4944,7 @@ OCR_SCRIPT_PACKS = {
     "Gujarati": ("guj",), "Gurmukhi": ("pan",), "Oriya": ("ori",), "Sinhala": ("sin",), "Armenian": ("hye",),
     "Georgian": ("kat",), "Ethiopic": ("amh", "tir"), "Khmer": ("khm",), "Lao": ("lao",), "Myanmar": ("mya",),
     "Tibetan": ("bod",), "Syriac": ("syr",), "Thaana": ("div",),
+    "Fraktur": ("frk",),                   # OSD's own name for black letter: German print to the 1940s
 }
 # The confidence OSD gives its script from which the script chooses the packs, and a pack it needs and this machine
 # lacks is named; below it the page is read as one whose script nobody told. Measured on 160 synthetic scans in 24
@@ -4950,15 +4952,17 @@ OCR_SCRIPT_PACKS = {
 # gave 3.7-60; Han's is low by OSD's own rule - its characters count for Japanese and Korean too - 0.5-1.4 on Chinese
 # pages, Japanese 2.0-2.7, Korean 0.8-1.6; Greek 0.5-10.3 on 13 of 14 Greek pages (the other taken for Cyrillic, 2.9),
 # and no Latin or Cyrillic page of the 112 was taken for Greek; Arabic, Hebrew, Devanagari and Thai 9-210; no page was
-# taken for any script but Latin, Cyrillic or its own.
+# taken for any script but Latin, Cyrillic or its own. Fraktur (2026-11-23): 2.7-49 on 11 of 17 German pages printed
+# in it (the other six Latin or Cyrillic), and once 1.8 on an Italian print of 1533 in italics - no other page of 320.
 OCR_SCRIPT_TRUST = {"Cyrillic": 3.0, "Greek": 0.4, "Han": 0.3, "Japanese": 0.3, "Hiragana": 0.3, "Katakana": 0.3,
-                    "Korean": 0.3, "Hangul": 0.3}
+                    "Korean": 0.3, "Hangul": 0.3, "Fraktur": 2.5}
 OCR_SCRIPT_TRUST_ELSE = 1.0
 # Packs that read a page alone, without English beside it: they read the English words in a Chinese or Japanese text
 # themselves (12-16 of 13-17 terms on a page, as many as with English beside them), and English beside them made the
 # rest worse and slower (CER 1.6 against 2.2 %, 2.0 against 3.3, 1.3 against 1.5; about 0.7 s more a page). kor is
-# not one: alone it read none of 14 English terms in a Korean text (with English beside it 10-11).
-OCR_ALONE = ("chi_sim", "chi_tra", "jpn")
+# not one: alone it read none of 14 English terms in a Korean text (with English beside it 10-11). frk reads its
+# Antiqua words itself (with English beside it 0.1-0.8 points worse on 7 of 11 Fraktur pages).
+OCR_ALONE = ("chi_sim", "chi_tra", "jpn", "frk")
 # OSD names Han, not which Chinese: on 16 Chinese pages (8 with English words in the text) chi_sim's mean word
 # confidence was 88-91 on simplified ones and 79-87 on traditional ones (where it misread a fifth to a third of the
 # characters), chi_tra's 86-90 on simplified ones (a fifth to a quarter misread) and 88-92 on its own; on 8 Japanese
@@ -4968,6 +4972,41 @@ OCR_ALONE = ("chi_sim", "chi_tra", "jpn")
 OCR_HAN_SURE = 90
 OCR_HAN_JAPANESE = 70
 OCR_HAN_MARGIN = 3
+# A page printed in vertical columns - Chinese, Japanese and Korean books, old and new - read as nothing with the
+# horizontal packs (95-121 % CER on 27 real pages and 10 synthetic ones, 2026-11-23). Tesseract's own layout finds such
+# columns written top to bottom whatever pack reads them (0.83-1.00 of the characters on 35 of the 37 pages, the other
+# two read as nothing at all; none on 241 horizontal pages): from OCR_VERTICAL_SHARE such a page, whose script OSD names
+# Han, Japanese or Korean or whose reading is unsure of itself (under OCR_UNSURE: OSD took 4 of the 27 for Latin), is
+# read again with the vertical packs in an order by its script (OCR_VERTICAL_PACKS), each while the best is unsure and
+# no less sure than the first reading - a page on its side that OSD could not turn is laid out vertically too, and the
+# vertical packs read it less surely than its own -, and the most confident kept. Tesseract's layout finds the columns
+# (the default page mode): one block of vertical text assumed for the whole page (PSM 5) read the 27 real pages at 79 %
+# CER against 67, running a page's tiers together.
+OCR_VERTICAL_SHARE = 0.5
+OCR_UNSURE = 60
+# each vertical pack with the confidence of the best reading so far under which it reads the page too: a Han page in
+# the Han packs' order and by their measures (chi_sim_vert's confidence tells a traditional page, chi_tra_vert's does
+# not tell a simplified one: 84 on a simplified page it read at 27 % CER), a Japanese or Korean page its own first, a
+# page OSD called anything else (four of them were Japanese) jpn_vert first
+OCR_VERTICAL_PACKS = {"Han": (("chi_sim_vert", 0), ("chi_tra_vert", OCR_HAN_SURE), ("jpn_vert", OCR_HAN_JAPANESE),
+                              ("kor_vert", OCR_UNSURE)),
+                      "Japanese": (("jpn_vert", 0), ("chi_tra_vert", OCR_UNSURE), ("kor_vert", OCR_UNSURE)),
+                      "Korean": (("kor_vert", 0), ("jpn_vert", OCR_UNSURE), ("chi_tra_vert", OCR_UNSURE))}
+OCR_VERTICAL_ELSE = (("jpn_vert", 0), ("chi_tra_vert", OCR_UNSURE), ("kor_vert", OCR_UNSURE),
+                     ("chi_sim_vert", OCR_UNSURE))
+# A scan whose script OSD is unsure of, or one it calls Latin whose reading is unsure of itself, is read again with the
+# likeliest other scripts' packs - OSD's own answer's, then the scripts OSD took for it on the real and synthetic scans
+# measured (2026-11-23: Hebrew for Arabic, Greek for Latin and Cyrillic, Thai for Cyrillic, Fraktur and Han for
+# Latin, Latin for Cyrillic) -, at most OCR_UNSURE_TRIES of them, while the best reading is under OCR_UNSURE, and the
+# most confident is kept (by OCR_HAN_MARGIN). Mean word confidence (2026-11-23): 180 horizontal pages read with their
+# own pack 42-95 - under 64 only where the reading itself is poor, 37-88 % CER -, English on 104 pages of another
+# script 12-54.
+OCR_UNSURE_TRIES = 3
+OCR_SCRIPT_TAKEN = {"Latin": ("Fraktur", "Greek", "Han", "Cyrillic"), "Cyrillic": ("Latin", "Greek", "Thai"),
+                    "Greek": ("Latin", "Cyrillic"), "Arabic": ("Hebrew",), "Hebrew": ("Arabic",),
+                    "Han": ("Japanese", "Korean"), "Japanese": ("Han", "Korean"), "Korean": ("Han", "Japanese")}
+_CJK_SCRIPTS = {"Han": "Han", "Japanese": "Japanese", "Hiragana": "Japanese", "Katakana": "Japanese",
+                "Korean": "Korean", "Hangul": "Korean"}
 
 
 def _pack_script(pack):
@@ -5202,16 +5241,23 @@ def ocr_answer(workdir, manifest, n):
     return manifest, info
 
 
-def _tess_page(api, png):
+def _turned(img, turn):
+    """A picture turned `turn` degrees clockwise (90, 180, 270)."""
+    from PIL import Image
+    ops = getattr(Image, "Transpose", Image)                 # Pillow 9.1 and later name them there
+    return img.transpose(getattr(ops, {90: "ROTATE_270", 180: "ROTATE_180", 270: "ROTATE_90"}[turn]))
+
+
+def _tess_page(api, png, turn=0):
     """A rendered page to tesserocr: by its path where the library can open it (the file's own resolution: the page's
     150 dpi), else as a picture with its resolution given - tesserocr hands a picture over re-saved without it, and
-    tesseract took 70 dpi for a page rendered at 150."""
-    if str(png).isascii():
+    tesseract took 70 dpi for a page rendered at 150. `turn`: degrees clockwise that set the page upright first."""
+    if str(png).isascii() and not turn:
         api.SetImageFile(png)
         return
     try:
         from PIL import Image
-    except ImportError:
+    except ImportError:                                  # no Pillow: the page as it is
         shown, _outs, narrow_done = narrow_paths([png])
         try:
             api.SetImageFile(shown[0])
@@ -5221,8 +5267,28 @@ def _tess_page(api, png):
     with Image.open(png) as shot:
         shot.load()
         dpi = (shot.info.get("dpi") or (OCR_RENDER_DPI,))[0]
-        api.SetImage(shot)                               # no path for the library to open in the ANSI code page
+        api.SetImage(_turned(shot, turn) if turn else shot)  # no path for the library to open in the ANSI code page
         api.SetSourceResolution(int(round(float(dpi))) or OCR_RENDER_DPI)
+
+
+def _vertical_share(api, mod):
+    """The share of a reading's characters in the blocks tesseract's layout found written top to bottom (columns of
+    Chinese, Japanese or Korean - or a page on its side); 0.0 when it cannot say."""
+    try:
+        level = getattr(getattr(mod, "RIL", None), "BLOCK", 0)
+        it = api.GetIterator()
+        vert = total = 0
+        while it is not None:
+            n = len("".join((it.GetUTF8Text(level) or "").split()))
+            total += n
+            if it.Orientation()[1] == 2:                    # WritingDirection.TOP_TO_BOTTOM
+                vert += n
+            if not it.Next(level):
+                break
+        return vert / float(total) if total else 0.0
+    except Exception as e:                                   # noqa: BLE001  (an older tesserocr, a fake one)
+        debuglog.exc("ocr: layout", e)
+        return 0.0
 
 
 def _osd_text(text):
@@ -5233,6 +5299,32 @@ def _osd_text(text):
         return (m.group(1), float(c.group(1))) if m and c else ("", 0.0)
     except ValueError:
         return "", 0.0
+
+
+# A page scanned on its side or upside down read as garbage. OSD answers the page's orientation too - the quarter turn
+# it sees, and its confidence - and the page is turned upright by it from OCR_TURN_TRUST. Measured (2026-11-23) on 42
+# copies of 14 real and synthetic pages in eight scripts, each turned 90, 180 and 270 degrees: OSD was right on 37, at
+# 3.6-22 (34 from 5.0), and wrong under 3.7; of 278 upright pages it named a turn for 11, under 3.3 but for two pages of
+# a magazine set in Fraktur (6.9, 9.4), which the reading's own confidence sets right (ocr_pages).
+OCR_TURN_TRUST = 5.0
+
+
+def _turn_of(deg, conf):
+    """Degrees clockwise that set a page upright, from OSD's orientation (the page's own turn clockwise, in degrees) and
+    its confidence: 0 for an upright page, and for one OSD is not that sure of."""
+    try:
+        deg, conf = int(float(deg or 0)) % 360, float(conf or 0.0)
+    except (TypeError, ValueError):
+        return 0
+    return (360 - deg) % 360 if deg in (90, 180, 270) and conf >= OCR_TURN_TRUST else 0
+
+
+def _osd_turn(text):
+    """The turn that sets a page upright from tesseract's OSD report (`--psm 0`: "Orientation in degrees: 90",
+    "Orientation confidence: 12.3"); 0 when it is upright, unsure or untold."""
+    m = re.search(r"(?m)^Orientation in degrees: *([0-9]+)", text or "")
+    c = re.search(r"(?m)^Orientation confidence: *([0-9.]+)", text or "")
+    return _turn_of(m.group(1), c.group(1)) if m and c else 0
 
 
 def ocr_pages(paths):
@@ -5266,43 +5358,74 @@ def ocr_pages(paths):
     pages = list(enumerate(paths[:OCR_MAX_PAGES], 1))
     secs = budget.cap(OCR_TIMEOUT, floor=1.0)
     t_ocr = now()
-    done, plans = {}, {}
+    done, plans, turns = {}, {}, {}
 
-    def osd(png):
-        """(script, confidence) of a page, ("", 0.0) when OSD cannot tell (too few letters)."""
+    @contextlib.contextmanager
+    def for_command(png, turn):
+        """The page as the tesseract command opens it: a copy turned upright beside it while it is read (removed
+        after; the page as it is without Pillow), by a path it can take in the ANSI code page."""
+        src = png
+        if turn:
+            try:
+                from PIL import Image
+                src = os.path.splitext(png)[0] + "-upright.png"
+                with Image.open(png) as shot:
+                    shot.load()
+                    _turned(shot, turn).save(src, dpi=shot.info.get("dpi") or (OCR_RENDER_DPI, OCR_RENDER_DPI))
+            except Exception as e:                           # noqa: BLE001  (no Pillow, no room: the page as it is)
+                debuglog.exc("ocr: turn", e)
+                src = png
+        shown, _outs, narrow_done = narrow_paths([src])
+        try:
+            yield shown[0]
+        finally:
+            narrow_done()
+            if src != png:
+                try:
+                    os.unlink(src)
+                except OSError:
+                    pass
+
+    def osd(png, turn=0):
+        """(script, confidence, turn) of a page - turn: the degrees clockwise that set it upright (_turn_of) -,
+        ("", 0.0, 0) when OSD cannot tell (too few letters). `turn`: the page is turned so first."""
         try:
             if not lib:
-                shown, _outs, narrow_done = narrow_paths([png])
-                try:
-                    rc, so, _se = run_tool([exe, shown[0], "stdout", "--psm", "0"] + extra, timeout=min(secs, 10.0))
-                finally:
-                    narrow_done()
-                return _osd_text(so.decode("utf-8", "replace")) if rc == 0 else ("", 0.0)
+                with for_command(png, turn) as shown:
+                    rc, so, _se = run_tool([exe, shown, "stdout", "--psm", "0"] + extra, timeout=min(secs, 10.0))
+                said = so.decode("utf-8", "replace") if rc == 0 else ""
+                return _osd_text(said) + (_osd_turn(said),)
             with ownenv.tess_dir(lib[1]) as tdir:
                 api = lib[0].PyTessBaseAPI(path=tdir, lang="osd", psm=0)       # PSM.OSD_ONLY
             with api:
-                _tess_page(api, png)
+                _tess_page(api, png, turn)
                 got = api.DetectOrientationScript() or {}
-            return str(got.get("script_name") or ""), float(got.get("script_conf") or 0.0)
+            return (str(got.get("script_name") or ""), float(got.get("script_conf") or 0.0),
+                    _turn_of(got.get("orient_deg"), got.get("orient_conf")))
         except Exception as e:                               # noqa: BLE001  (no script told: the page's plan without it)
             debuglog.exc("ocr: osd", e)
-            return "", 0.0
+            return "", 0.0, 0
 
-    def read(png, use, limit):
-        """(rc, text, error, the mean confidence of its words - -1 from the command)."""
+    def read(png, use, limit, turn=0, scored=False):
+        """(rc, text, error, the mean confidence of its words - -1 from the command -, the share of its characters
+        the layout found written top to bottom - 0 from the command). `turn`: degrees clockwise that set the page
+        upright before it is read. The command reads a page turned, or one `scored`, as TSV: its words' confidences
+        check OSD's turn."""
         if not lib:
-            shown, _outs, narrow_done = narrow_paths([png])
-            try:
-                return tuple(run_tool([exe, shown[0], "stdout", "-l", "+".join(use)] + extra, timeout=limit)) + (-1,)
-            finally:
-                narrow_done()
+            with for_command(png, turn) as shown:
+                cmd = [exe, shown, "stdout", "-l", "+".join(use)] + extra
+                if not (turn or scored):
+                    return tuple(run_tool(cmd, timeout=limit)) + (-1, 0.0)
+                rc, so, se = run_tool(cmd + ["tsv"], timeout=limit)
+            txt, confs = _ocr_tsv(so.decode("utf-8", "replace"))
+            return rc, txt.encode("utf-8"), se, (int(sum(confs) / len(confs)) if confs else -1), 0.0
         # tesserocr (--setup's OCR) in-process: it lets the other threads run while it reads, and
         # its own clock stops a page at the step's seconds
         try:
             with ownenv.tess_dir(lib[1]) as tdir:            # started from the folder's parent where a narrow path fails
                 api = lib[0].PyTessBaseAPI(path=tdir, lang="+".join(use))
             with api:
-                _tess_page(api, png)
+                _tess_page(api, png, turn)
                 try:
                     api.Recognize(int(limit * 1000))
                 except TypeError:
@@ -5312,14 +5435,20 @@ def ocr_pages(paths):
                     conf = int(api.MeanTextConf())
                 except (AttributeError, TypeError, ValueError):
                     conf = -1
-                return 0, text, b"", conf
+                return 0, text, b"", conf, _vertical_share(api, lib[0])
         except Exception as e:                               # noqa: BLE001
             debuglog.exc("ocr: tesserocr page", e)
-            return 1, b"", str(e).encode("utf-8", "replace"), -1
+            return 1, b"", str(e).encode("utf-8", "replace"), -1, 0.0
 
     def one(n, png):
         t_page = now()
-        script = osd(png) if detect else ("", 0.0)
+        script, conf, turn = osd(png) if detect else ("", 0.0, 0)
+        if turn:                                         # a page on its side or upside down is read upright, and its
+            upright = osd(png, turn)                     # script told upright (a Greek page turned: 0.3, upright 1.3)
+            if upright[0]:
+                script, conf = upright[0], upright[1]
+        script = (script, conf)
+        turns[n] = turn
         use, lost = _ocr_plan(have, "", script)
         # a Han page: chi_sim reads it first whatever the user's own - its confidence tells a traditional page and
         # chi_tra's does not tell a simplified one (OCR_HAN_SURE) - and chi_tra again where chi_sim is unsure
@@ -5328,24 +5457,78 @@ def ocr_pages(paths):
             use = ["chi_sim"]
         plans[n] = (use, lost, script)
         t_read = now()
-        got = read(png, use, max(1.0, secs - (t_read - t_page)))
+        got = read(png, use, max(1.0, secs - (t_read - t_page)), turn)
         once = now() - t_read
-        # ... then chi_tra, and jpn for a Japanese page OSD took for Han (kanji-heavy text: its kana are what make it
-        # Japanese to OSD), each while the best reading is that unsure and the page's time allows one more
-        for alt, sure in ((("chi_tra", OCR_HAN_SURE), ("jpn", OCR_HAN_JAPANESE)) if han and got[0] == 0 else ()):
-            if alt not in have or not 0 <= got[3] < sure:
-                continue
-            if now() - t_page + once >= secs:
-                break
-            other = read(png, [alt], max(1.0, secs - (now() - t_page)))
-            if other[0] == 0 and other[3] >= got[3] + OCR_HAN_MARGIN:
-                got, plans[n] = other, ([alt], lost, script)
+
+        def room():
+            """The page's time allows one more reading."""
+            return now() - t_page + once < secs
+
+        # OSD's turn is checked where the page read turned is unsure of itself: OSD took upright pages of a magazine
+        # set in Fraktur for upside down (at 6.9 and 9.4; at 11.0 rendered again), and was as sure of them turned; read
+        # as they lay they were the surer (50 and 51 against 33 and 29), and turned copies read turned at 64-93. The
+        # check is made whatever time is left (a slow machine's turned reading can take most of it): the page read
+        # as it lies, even cut short, is better than one read upside down
+        if turn and got[0] == 0 and 0 <= got[3] < OCR_UNSURE:
+            as_is = read(png, use, max(1.0, secs - (now() - t_page)), 0, True)
+            if as_is[0] == 0 and as_is[3] >= got[3] + OCR_HAN_MARGIN:
+                got, turn, turns[n] = as_is, 0, 0
+        first = got
+
+        def han_order(got, use):
+            """... then chi_tra, and jpn for a Japanese page OSD took for Han (kanji-heavy text: its kana are what make
+            it Japanese to OSD), each while the best reading is that unsure and the page's time allows one more."""
+            for alt, sure in (("chi_tra", OCR_HAN_SURE), ("jpn", OCR_HAN_JAPANESE)):
+                if alt not in have or not 0 <= got[3] < sure:
+                    continue
+                if not room():
+                    break
+                other = read(png, [alt], max(1.0, secs - (now() - t_page)), turn)
+                if other[0] == 0 and other[3] >= got[3] + OCR_HAN_MARGIN:
+                    got, use = other, [alt]
+            return got, use
+
+        # a page in vertical columns (OCR_VERTICAL_SHARE): the vertical packs, its script's first
+        cjk = _CJK_SCRIPTS.get(script[0], "")
+        vertical = auto and got[0] == 0 and got[4] >= OCR_VERTICAL_SHARE and (cjk or 0 <= got[3] < OCR_UNSURE)
+        if han and got[0] == 0 and not vertical:
+            got, use = han_order(got, use)
+            plans[n] = (use, lost, script)
+        if vertical:
+            best = None
+            for pack, under in OCR_VERTICAL_PACKS.get(cjk, OCR_VERTICAL_ELSE):
+                if pack not in have or best is not None and best[0][3] >= under:
+                    continue
+                if best is not None and best[0][3] < first[3] or not room():
+                    break                                # read less surely than the page's own: not vertical CJK
+                other = read(png, [pack], max(1.0, secs - (now() - t_page)), turn)
+                if other[0] == 0 and (best is None or other[3] >= best[0][3]):
+                    best = (other, [pack])
+            if best is not None and best[0][3] >= first[3]:
+                got, plans[n] = best[0], (best[1], lost, script)
+        # a script OSD is unsure of, or a Latin reading unsure of itself: the likeliest other scripts' packs
+        elif auto and got[0] == 0 and 0 <= got[3] < OCR_UNSURE and (
+                script[0] == "Latin" or script[1] < OCR_SCRIPT_TRUST.get(script[0], OCR_SCRIPT_TRUST_ELSE)):
+            tried = [plans[n][0]]
+            for name in [script[0]] + list(OCR_SCRIPT_TAKEN.get(script[0], ())):
+                if got[3] >= OCR_UNSURE or len(tried) > OCR_UNSURE_TRIES or not room():
+                    break
+                cand, gap = _ocr_plan(have, "", (name, 1e9))
+                if gap or cand in tried or (name != "Latin" and _pack_script(cand[0]) == "Latin"):
+                    continue                             # its pack is not here, or it is a reading already made
+                tried.append(cand)
+                other = read(png, cand, max(1.0, secs - (now() - t_page)), turn)
+                if other[0] == 0 and cand in (["chi_sim"], ["chi_tra"]):
+                    other, cand = han_order(other, cand)
+                if other[0] == 0 and other[3] >= got[3] + OCR_HAN_MARGIN:
+                    got, plans[n] = other, (cand, lost, script)
         # a page whose words are a Latin-script language with a pack here that it was not read with: read again with
         # it, English beside it, while the page's time allows the same again
         lang = intl.latin_pack(got[1].decode("utf-8", "replace")) if got[0] == 0 and auto else ""
         took = now() - t_page
-        if lang and lang not in plans[n][0] and lang in have and took * 2 < secs:
-            again = read(png, [lang, "eng"], max(1.0, secs - took))
+        if lang and lang not in plans[n][0] and lang in have and took * 2 < secs and not any(
+                x.endswith("_vert") or x == "frk" for x in plans[n][0]):     # Fraktur's German is frk's own
+            again = read(png, [lang, "eng"], max(1.0, secs - took), turn)
             if again[0] == 0 and again[1].strip():
                 got, plans[n] = again, ([lang, "eng"], lost, script)
         done[n] = got[:3]
@@ -5372,7 +5555,8 @@ def ocr_pages(paths):
         use, lost, script = plans.get(n) or (_use, [], ("", 0.0))
         info["used"] += [x for x in use if x not in info["used"]]
         info["missing"] += [x for x in lost if x not in info["missing"]]
-        scripts.append("%s %.1f" % script if script[0] else "?")
+        scripts.append(("%s %.1f" % script if script[0] else "?") + (
+            " turned %d" % turns[n] if turns.get(n) else ""))
     budget.record("ocr", t_ocr, budget.ended(OCR_TIMEOUT, secs) if info["timeouts"] else "ok",
                   own=OCR_TIMEOUT, given=secs, note="%s, %d pages, %d late, %s; osd: %s" % (
                       info["engine"], len(pages), len(info["timeouts"]), "+".join(info["used"]),

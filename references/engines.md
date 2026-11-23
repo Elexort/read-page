@@ -424,7 +424,7 @@ and the pack is here, the choice read as the page's own pack did - Russian of 19
 86-88 with English and 17-21 at once, French 2.3-4.0 against 3.1-6.0, Spanish 2.2-3.0 against 3.1-5.3, Portuguese 4.2
 against 5.9-7.4, German 17-29 (old print) against 19-30 -, at 0.8-3.7 s a page against 2.4-26.7 for all ten at once. The
 vertical Chinese, Japanese and Korean pages (5 of 7) read at 88-100 % every way: tesseract's horizontal packs do not read
-vertical text (`jpn_vert` and its kind are not fetched). OSD took two of them, and a sparse list of Chinese titles, for
+vertical text (`jpn_vert` and its kind were not fetched then: below). OSD took two of them, and a sparse list of Chinese titles, for
 Latin (that list: 98.4 % with English, 60.3 with `chi_tra`, 83.8 with all ten). A horizontal traditional page read at
 21.9 % (all ten 35.2, English 98.0). Arabic pages, read before `ara` was among the defaults: English's 82-84 %, `ara`
 named missing (15-31 % with it).
@@ -440,6 +440,67 @@ was taken for Greek, so Greek counts from 0.4 (`OCR_SCRIPT_TRUST`): 13 of the 14
 scans (Wikisource) OSD was right twice - a Greek page of 1912 at 1.3 (9.8 % with `ell` against 74.6 with English) and
 a Thai one at 8.9 (20.9 against 98.5) -, and took the others for Latin, Cyrillic or Arabic: two Hebrew pages for Arabic,
 one at 0.8 (English's 81 %, 24 with `heb`) and one at 1.0 (read with `ara`, 103 % against English's 95 and `heb`'s 88).
+
+**Real scans as they come** (2026-11-23): turned, printed in columns, a script OSD is unsure of, Fraktur. The corpus:
+92 proofread pages of Wikisource with their scans from Commons (public domain, one CC BY-SA, one CC0; the text the
+proofread wikitext, markup out) - the 34 above, 22 Chinese, Japanese and Korean pages printed vertically, 4 horizontal
+Chinese ones, 17 German pages in Fraktur (prints of the 16th to the 19th century, a magazine of 1856-1893) and 15 in
+Antiqua -, 42 copies of 14 of them and of synthetic pages turned 90, 180 and 270 degrees, and 10 synthetic vertical
+pages (the Moon article set in columns: Chinese in both scripts, Japanese in two fonts, Korean; clean and as a scan).
+Each page 150 dpi as a scan is read, through `ocr_pages` as it was and as it is, one after the other on each page
+(this machine, another program's work beside it), CER and seconds a page:
+
+| pages | n | before | after |
+|---|---|---|---|
+| turned copies | 42 | 67.0 % / 1.68 s | 21.6 % / 2.20 s |
+| real vertical: Japanese, Chinese, Korean | 13, 7, 7 | 95.1, 121.1, 101.4 % / 1.58 s | 53.3, 66.9, 94.1 % / 2.83 s |
+| synthetic vertical | 10 | 95.1 % / 5.36 s | 13.8 % / 5.15 s |
+| real pages whose script OSD was unsure of or wrong about | 6 | 90.2 % / 1.32 s | 46.4 % / 4.75 s |
+| real Fraktur | 17 | 31.5 % / 1.94 s | 20.7 % / 2.84 s |
+| real horizontal, the other 23; real Antiqua German, 15; horizontal Chinese, 4 | 42 | 21.6 % / 1.54 s | 21.6 % / 1.55 s |
+| synthetic, 24 languages | 176 | 5.4 % / 1.69 s | 4.9 % / 1.71 s (one Greek page OSD took for Cyrillic: 82 -> 4) |
+
+**Turned**: OSD answers the page's orientation with its script (the quarter turn it sees, and its confidence); the page
+is turned upright from 5.0 and OSD asked its script again upright (a Greek page turned: 0.3, upright 1.3). On the 42
+copies OSD was right 37 times, at 3.6-22 (34 from 5.0: English, French, Spanish, Portuguese, Arabic, Greek, Thai,
+Chinese, Japanese, Korean, Russian), and named a wrong turn only under 3.7; of 278 upright pages it named a turn for 11, under
+3.3 but for two pages of the Fraktur magazine (6.9, 9.4) - and asked again of them turned, it was as sure they were
+upright (10.0, 6.8). The reading tells: those two read at 50 and 51 as they lay and at 33 and 29 turned, while a
+turned copy reads turned at 64-93. A page read turned whose reading is under 60 is read as it lay too, and the surer
+reading kept. Left turned wrong or not at all: one hard page's copies (OSD wrong every way), a Russian page's (3.6-4.6)
+and two of a Korean one's.
+**Vertical**: tesseract's own layout finds the columns written top to bottom whatever pack reads the page (0.83-1.00 of
+the characters on 35 of the 37 vertical pages, the other two read as nothing at all; none on 241 horizontal pages). Such
+a page whose script OSD names Han, Japanese or Korean, or whose reading is unsure (OSD took 4 of the 27 for Latin), is
+read again with the vertical packs: Japanese and anything else jpn_vert first, Korean kor_vert, Han in the Han packs'
+order by their measures (chi_sim_vert, chi_tra_vert while under 90 - it read a simplified page at 27 % CER with 84 -,
+jpn_vert under 70), the others while the best is under 60 and no less sure than the first reading (a page on its side
+is laid out vertically too, and the vertical packs read it less surely than its own), the most confident kept. With the
+page's layout (the default page mode) against one block of vertical text (PSM 5): 67.4 against 79.3 % on the 27 - a
+page in tiers ran its tiers' columns together. Old Korean prints stay near unread (woodblocks in archaic Hangul).
+**Unsure of the script**: a page whose script OSD gives under its trust, or calls Latin while the reading is under 60,
+is read with at most three likeliest other scripts' packs - OSD's own answer's, then the scripts OSD was seen to take
+for it here (Fraktur, Greek and Han for Latin, Latin, Greek and Thai for Cyrillic, Hebrew for Arabic, Arabic for Hebrew,
+Latin and Cyrillic for Greek, the CJK ones for one another) -, while the best is under 60, the most confident kept (by 3).
+Mean word confidence tells a wrong script: 180 horizontal pages read with their own pack 42-95 (under 64 only where the
+reading itself is poor, 37-88 % CER), English on 104 pages of another script 12-54. The likeliest scripts rather than
+every one: each pack read on five lines of the page first chose within 2 points of the best on 178 of 193 pages, but
+took 2.1-5.8 s for the ten (each pack's start) - the time of two to five readings of the whole page.
+**Fraktur**: OSD names it (2.7-49 on 11 of the 17 pages; 1.8 on an Italian print of 1533 in italics, and on no other
+page of 320), from 2.5 the page is read with `frk` alone (with English or deu beside it no better); the magazine's six
+pages it called Latin or Cyrillic, and five of them read unsure of themselves with English, where frk is the first
+script tried (73-88 against 43-51 confidence). No Latin page was read with frk.
+**The tesseract command** (where tesserocr has no wheel) turns a page by its OSD report too, reading a copy turned
+upright, and checks the turn with the confidences of its TSV; it gives no layout and, in plain text, no confidence, so
+it reads no page with the vertical packs or the likeliest scripts' packs - tesserocr, which `--setup` installs, does.
+**Time**: the extra readings fall on the pages that need them; an upright page in a script OSD is sure of costs
+nothing more (its OSD ran already). On an emulated Celeron (KNOWN-ISSUES 73's `e2c`, 4 GB; two runs, old and new in pairs)
+a three-page scan of ordinary English pages read in 9.2-10.0 s, as before; three turned pages in 15 s (16-17
+before, read as garbage), three vertical ones in 24-31 s (12), three of the unsure six in 31-33 s (8), three of the
+Fraktur magazine's in 32-33 s (15-16) - within the read's 55 s, no page late; the OCR step of the last three took
+21-29.6 s of its 30, so on a slower machine their last tries end by time. There the turned reading of a magazine page
+took most of the page's time, and the check of OSD's turn, made only while time allowed another reading, was skipped:
+the page read upside down. The check is made whatever time is left.
 
 ## Every timeout, retry and fallback: one deadline, a fuse per step
 
@@ -558,8 +619,9 @@ which defuddle's Node entry needs, is one - and says nothing; the files go where
 `node_modules` of the npm folder on Windows and `lib/node_modules` elsewhere, the command in its `node_modules/.bin`,
 which `setup.json` names as `npm_bin`; measured, 2.6-3.2 s from an empty cache against the global install's 3.5-3.7,
 the same 27 versions), Playwright's `chromium-headless-shell`
-(`PLAYWRIGHT_BROWSERS_PATH` = the folder's `browsers`), and fourteen language packs, the packs of the user's own
-languages and `osd` from tessdata_fast 4.1.0 (`ownenv.OCR_DEFAULT_PACKS`, 39.3 MB with osd: [OCR languages, measured](#ocr-languages-measured);
+(`PLAYWRIGHT_BROWSERS_PATH` = the folder's `browsers`), and fourteen language packs, the vertical packs of Chinese,
+Japanese and Korean and Fraktur's, the packs of the user's own languages and `osd` from tessdata_fast 4.1.0
+(`ownenv.OCR_DEFAULT_PACKS`, 53.7 MB with osd: [OCR languages, measured](#ocr-languages-measured);
 plus what `--setup --ocr-langs` names, kept in `setup.json` as `ocr_named` for the next run;
 `READ_PAGE_OCR_LANGS` set for the `--setup` is the same), every pack of the release - 125, 339 MB - pinned by SHA256
 in `scripts/tessdata-lock.txt` (`tools/setup_lock.py --tessdata`) and held to it whoever serves it - then a check of every engine
@@ -609,10 +671,10 @@ its end. That is asked of a small child that has broken away (the job it lands i
 lets nothing leave), not read from the job the process is in: a venv's `python.exe` runs its
 interpreter in a job of its own, nested in the harness's, and hides it. A background yt-dlp update has a lock of its own (`ytdlp.lock`); a `--setup` waits for it, up
 to five minutes, and holds it for its run.
-Its first line says what it will download (about 395 MB on Windows, 430 on Linux, 385 on macOS - measured by
+Its first line says what it will download (about 410 MB on Windows, 445 on Linux, 400 on macOS - measured by
 real installs on GitHub's runners, 2026-11-21, with Node from Playwright's wheel: Windows x64 359 MB, Linux x64 393
-and arm64 370, macOS arm64 348, then English's OCR pack alone; the fourteen packs and osd of 2026-11-22 add 35 MB,
-39.3 in all; nodejs.org's archive is 36.0, 55.6, 55.4 and 50.6 MB against npm's tarball of 2.9, and its Node and npm take 102, 192, 189 and 188 MB on disk against npm's 11.7 - nothing at all once defuddle is installed) and keep
+and arm64 370, macOS arm64 348, then English's OCR pack alone; the fourteen packs and osd of 2026-11-22 add 35 MB, the four vertical packs and frk of 2026-11-23 14.3 MB,
+53.7 in all; nodejs.org's archive is 36.0, 55.6, 55.4 and 50.6 MB against npm's tarball of 2.9, and its Node and npm take 102, 192, 189 and 188 MB on disk against npm's 11.7 - nothing at all once defuddle is installed) and keep
 (about 0.9 GB on Windows, 1.0 GB on Linux, 0.85 on macOS, uv's cache hard-linked into it not counted twice), or that
 the folder is up to date and only a check follows. The steps run
 one after another; only the check's engines answer side by side. Side by side was built and

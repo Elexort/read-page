@@ -22,12 +22,13 @@ def _size_note():
     nodejs.org): measured by real installs on GitHub's runners (2026-11-21, the bytes the network adapter received and
     the folder's size without uv's cache, which is hard-linked into it): Windows x64 359 MB and 0.9 GB, Linux x64
     393 MB and 0.96 GB (arm64 370 MB, 0.92 GB), macOS arm64 348 MB and 0.82 GB - with English's OCR pack alone; the
-    fourteen packs and osd of 2026-11-22 are 35 MB more (39.3 MB in all, by the lock's sizes)."""
+    fourteen packs and osd of 2026-11-22 are 35 MB more, the four vertical packs and frk of 2026-11-23 14.3 MB more
+    (53.7 MB of OCR data in all, by the lock's sizes)."""
     if os.name == "nt":
-        return "downloads about 395 MB, takes about 0.9 GB on disk, no admin rights"
+        return "downloads about 410 MB, takes about 0.9 GB on disk, no admin rights"
     if sys.platform == "darwin":
-        return "downloads about 385 MB, takes about 0.85 GB on disk, no admin rights"
-    return "downloads about 430 MB, takes about 1.0 GB on disk, no admin rights"
+        return "downloads about 400 MB, takes about 0.85 GB on disk, no admin rights"
+    return "downloads about 445 MB, takes about 1.0 GB on disk, no admin rights"
 
 
 SIZE_NOTE = _size_note()
@@ -180,7 +181,11 @@ OCR_MORE_PACKS = 3          # the packs beyond English that --setup fetches for 
 # script's pack - never with all of them at once (5.2 s a page against 2.15 on the ten languages, and never better
 # than the page's own pack: references/engines.md).
 OCR_DEFAULT_PACKS = ("eng", "rus", "chi_sim", "chi_tra", "jpn", "kor", "deu", "fra", "spa", "por", "ara", "ell", "tha",
-                     "heb")
+                     "heb") + (
+    # and the vertical packs of the three (2026-11-23): Chinese, Japanese and Korean pages printed in columns read as
+    # nothing with the horizontal ones (95-121 % CER on 27 real pages); 7.9 MB. And Fraktur (frk, 6.4 MB): German print
+    # to the 1940s, read at 31.5 % CER with English and deu, 20.7 with it (17 real pages)
+    "jpn_vert", "chi_tra_vert", "chi_sim_vert", "kor_vert", "frk")
 OCR_SCRIPT_PACK = "osd"
 
 
