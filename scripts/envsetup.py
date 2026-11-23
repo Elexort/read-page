@@ -1642,7 +1642,9 @@ class Work:
                         os.unlink(path)
                         raise ValueError("the uv wheel pip fetched (%s) is not one this skill pins" % n)
                     return path
-            raise ValueError("neither pypi.org nor pip gave uv: %s" % out[-120:])
+            # both reasons: pypi.org's is what failed first, and a Python with no pip (musl's) says only that
+            raise ValueError("neither pypi.org (%s) nor pip (%s) gave uv"
+                             % (" ".join(str(e).split())[:60], " ".join(out.split())[-60:]))
 
     def python(self):
         # --no-bin --no-registry: nothing outside our folder (by default uv puts python3.13 into
@@ -1849,13 +1851,16 @@ class Work:
         """Node from PyPI's nodejs-wheel-binaries: musl's only Node (no Playwright wheel, no nodejs.org build), and the
         way for a network that reaches PyPI alone - held to the SHA256 pinned here for every wheel of it, as the lock's
         packages are (it is not in the lock: only these machines need it)."""
+        uv = getattr(self, "uv_exe", "")
+        if not uv:
+            raise ValueError("it installs with uv, and uv did not install")
         dest = os.path.join(self.d, "node", "wheel-" + NODE_WHEEL)
         shutil.rmtree(dest, ignore_errors=True)
         req = os.path.join(self.d, "cache", "dl", "nodejs-wheel-binaries.txt")
         os.makedirs(os.path.dirname(req), exist_ok=True)
         with open(req, "w", encoding="utf-8") as fh:
             fh.write(node_wheel_requirement())
-        rc, out = self.sh([self.uv_exe, "pip", "install", "--target", dest, "--only-binary", ":all:",
+        rc, out = self.sh([uv, "pip", "install", "--target", dest, "--only-binary", ":all:",
                            "--python", getattr(self, "env_py", "") or sys.executable, "-r", req, "--require-hashes"])
         if rc != 0:
             raise ValueError(out[-160:])
