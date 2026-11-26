@@ -14,7 +14,8 @@ Linux, a Job Object on Windows: _limit_memory): a reader stops itself at `until`
 the backstop for what it does not foresee. What
 they build is bounded by the document, not by its elements: a table's grid by CELLS and all of a
 document's tables by DOC_CELLS, whatever its cells span or repeat (a 1 KB EPUB took 1.4 GB and a
-4.5 KB ODT 40 s, because a cap held per cell and multiplied across cells). No scan runs back over
+4.5 KB ODT 40 s, because a cap held per cell and multiplied across cells); a sheet's by the cells it
+stores (SHEET_CELLS), what its repeats copy by CELLS. No scan runs back over
 what it has passed: a tag is TAG_MAX characters at most and holds no "<", a rule that closes an
 element looks up where it is open, a list or a paragraph is joined once.
 
@@ -26,8 +27,10 @@ stands; a footnote is [^n] where it is called and "[^n]: its text" (an EPUB: whe
 its notes; ODT, RTF: at the end); a table is a Markdown table whose merged cells leave their other
 places empty. The document's own text is escaped for Markdown, so its literal ![x](y), [a] or *b*
 stay text. An archive's part is read up to PART_BYTES and all of them together up to TOTAL_BYTES
-unpacked, whatever their headers claim; `until` (a time.time() to stop by, None for no limit) is
-checked between chapters and every few hundred elements."""
+unpacked, whatever their headers claim - but an OpenDocument file's content.xml is read as it
+unpacks, and a spreadsheet's up to SHEET_BYTES, its rows dropped as they are read (_Body); `until`
+(a time.time() to stop by, None for no limit) is checked between chapters and every few hundred
+elements."""
 import bisect
 import codecs
 import html
@@ -50,10 +53,15 @@ DEPTH = 100                        # nesting a renderer follows; what is deeper 
 OPEN = 2000                        # elements the tree builder keeps open; deeper start tags become siblings
 NODES = 500000                     # elements of one part (a part that unpacks to 1 GB of <p>a</p>
                                    # built 4 million of them, 2 GB, 2026-11-20)
-ROWS = 20000                       # rows of one table
+ROWS = 20000                       # rows of one table (a text's; a sheet's are what SHEET_CELLS leaves room for)
 WIDTH = 1024                       # columns of one table: a row's cells past it join its last cell
-CELLS = 250000                     # one table's grid, rows x columns, its spans and repeats included
-DOC_CELLS = 1000000                # the grids of all of one document's tables
+CELLS = 250000                     # one table's grid, rows x columns, its spans and repeats included; of a
+                                   # sheet, the cells with text that only a repeat makes (copies)
+DOC_CELLS = 1000000                # the grids of all of one document's tables; of a workbook, its sheets' copies
+SHEET_CELLS = 2000000              # one sheet's grid, rows x columns: what it stores itself, a cell a time
+DOC_SHEET_CELLS = 4000000          # the grids of all of one workbook's sheets
+SHEET_BYTES = 512 * 1024 * 1024    # a spreadsheet's content.xml, read as it unpacks and its rows dropped as
+                                   # they are read (_Body): it costs time, not memory
 TABLE_BYTES = PART_BYTES           # the text of one table's cells, a repeated cell's as often as it is repeated
 DOC_TABLE_BYTES = TOTAL_BYTES      # ... of all of one document's tables
 TAG_MAX = 8192                     # characters of one tag: a "<" no ">" closes within them is text
@@ -74,12 +82,13 @@ class Late(Exception):
 class _Clock(object):
     """The time a reader has, and what it may still build for one document (table cells, spaces);
     what a cap cut is counted, to be said once in the note."""
-    __slots__ = ("until", "finish", "n", "t0", "cells", "spaces", "cuts", "table_bytes")
+    __slots__ = ("until", "finish", "n", "t0", "cells", "spaces", "cuts", "table_bytes", "sheet_cells", "copies")
 
     def __init__(self, until, finish=None):
         self.until, self.n, self.t0 = until, 0, time.time()
         self.finish = finish if finish is not None or until is None else until + FINISH
         self.cells, self.spaces, self.cuts, self.table_bytes = 0, 0, {}, 0
+        self.sheet_cells, self.copies = 0, 0
 
     def tick(self):
         if self.until is not None:
@@ -375,11 +384,11 @@ def _table_blocks(rows, clock=None):
     return [md] if md else []
 
 
-def _grid_room(clock, rows, width):
-    """How many more rows of `width` cells a table holding `rows` may take: CELLS for one table,
-    what DOC_CELLS has left for the document."""
+def _grid_room(clock, rows, width, cells=CELLS, doc=DOC_CELLS, spent=None):
+    """How many more rows of `width` cells a table holding `rows` may take: `cells` for one table,
+    what `doc` has left for the document (`spent`: what its other tables took, clock.cells)."""
     width = max(1, width)
-    return min(CELLS // width, (DOC_CELLS - clock.cells) // width) - rows
+    return min(cells // width, (doc - (clock.cells if spent is None else spent)) // width) - rows
 
 
 # ---------------------------------------------------------------- archives
@@ -728,6 +737,25 @@ class _Zip(object):
             data = data[:cap]
         self.total += len(data)
         return data
+
+    def chunks(self, name, size=1 << 20):
+        """The part `name` as it unpacks, `size` bytes at a time, none of it held here (TOTAL_BYTES is
+        not spent on it): its reader says where it stopped (_feed). A part that stops unpacking is
+        named in `bad`, after what came before it. Nothing when the archive has no such part."""
+        real = self.name(name)
+        if real is None:
+            return
+        try:
+            with self.z.open(real) as fh:
+                while True:
+                    data = fh.read(size)
+                    if not data:
+                        return
+                    yield data
+        except GeneratorExit:
+            raise
+        except Exception:                                      # noqa: BLE001  (cut, encrypted, bad CRC)
+            self.bad.append(real)
 
     def note(self):
         out = []
@@ -1590,6 +1618,9 @@ O_RUBY, O_RUBY_BASE, O_RUBY_TEXT = _o("text:ruby"), _o("text:ruby-base"), _o("te
 O_NOTE_CITATION = _o("text:note-citation")
 O_TEXT_BODY, O_SHEET_BODY, O_SLIDE_BODY = _o("office:text"), _o("office:spreadsheet"), _o("office:presentation")
 O_PAGE, O_SLIDE_NOTES, O_TABLE_NAME = _o("draw:page"), _o("presentation:notes"), _o("table:name")
+O_BODY, O_ANNOTATION, O_SHAPES = _o("office:body"), _o("office:annotation"), _o("table:shapes")
+O_TABLE_SOURCE, O_TABLE_STYLE = _o("table:table-source"), _o("table:style-name")
+O_STYLE_BOXES = (_o("office:font-face-decls"), _o("office:styles"), _o("office:automatic-styles"))
 _ODF_SKIP = frozenset(_o(x) for x in (
     "office:annotation", "office:annotation-end", "text:tracked-changes", "text:soft-page-break",
     "text:bookmark", "text:bookmark-start", "text:bookmark-end", "text:reference-mark",
@@ -1887,8 +1918,8 @@ def _flat_text(el):
 
 class _OdfStyles(object):
     """What the styles say: a paragraph style's outline level (a heading), bold and italic of
-    paragraph and text styles through their parents, which list styles number their levels, and
-    which fonts are of fixed pitch (code)."""
+    paragraph and text styles through their parents, which list styles number their levels, which
+    fonts are of fixed pitch (code), and which sheets are hidden."""
 
     def __init__(self):
         self.st, self.lists, self.fixed = {}, {}, set()
@@ -1897,16 +1928,20 @@ class _OdfStyles(object):
         if root is None:
             return
         for box in root:
-            if box.tag == _o("office:font-face-decls"):
-                for ff in box:
-                    if ff.get(_o("style:font-pitch")) == "fixed":
-                        self.fixed.add(ff.get(_o("style:name")))
-            elif box.tag in (_o("office:styles"), _o("office:automatic-styles")):
-                for s in box:
-                    if s.tag == _o("style:style"):
-                        self.style(s)
-                    elif s.tag == _o("text:list-style"):
-                        self.list_style(s)
+            self.load_box(box)
+
+    def load_box(self, box):
+        """One of a part's style boxes: its font faces, its styles or its automatic styles."""
+        if box.tag == _o("office:font-face-decls"):
+            for ff in box:
+                if ff.get(_o("style:font-pitch")) == "fixed":
+                    self.fixed.add(ff.get(_o("style:name")))
+        elif box.tag in (_o("office:styles"), _o("office:automatic-styles")):
+            for s in box:
+                if s.tag == _o("style:style"):
+                    self.style(s)
+                elif s.tag == _o("text:list-style"):
+                    self.list_style(s)
 
     def style(self, s):
         name = s.get(_o("style:name"))
@@ -1923,6 +1958,8 @@ class _OdfStyles(object):
                     d["italic"] = it in ("italic", "oblique")
                 if p.get(_o("style:font-name")):
                     d["font"] = p.get(_o("style:font-name"))
+            elif p.tag == _o("style:table-properties") and p.get(_o("table:display")) == "false":
+                d["hidden"] = True                     # a sheet no one opening the workbook sees
         self.st[(s.get(_o("style:family")), name)] = d
 
     def list_style(self, s):
@@ -1963,15 +2000,22 @@ class _Odt(object):
     def __init__(self, styles, clock, zf=None):
         self.s, self.clock, self.zf = styles, clock, zf
         self.notes = []                   # [(label, blocks)]
+        self.labels = 0                   # the notes' and the comments' labels given so far
         self.counts = {}                  # (list style, level) -> the last number it gave
         self.broke = {}                   # the kind of fault -> how many elements it cost
         self.done, self.of = 0, 0         # top-level elements read, of how many
+        self.out = []                     # a workbook's blocks, its sheets' as each one ends (_Body)
+        self.sheet_no = 0                 # sheets read so far
+
+    def label(self):
+        self.labels += 1
+        return str(self.labels)
 
     def doc(self, root):
-        """The body, whichever it is: a text's blocks; a spreadsheet's sheets, each a heading and its
-        table (rows and cells repeated as the sheet says, within the grid's caps: a sheet repeats a
-        row it holds as often as it holds it, where a text's table is held to 64); a presentation's
-        slides, each "## Slide N", its frames' text, tables and pictures in order, then its notes."""
+        """The body, whichever it is: a text's blocks; a spreadsheet's sheets, each a heading, its shapes
+        and its table, then its comments (sheet_blocks; content.xml's own reading reads them as they
+        come, _Body); a presentation's slides, each "## Slide N", its frames' text, tables and pictures
+        in order, then its notes."""
         body = root.find(_o("office:body"))
         box = next((k for k in body if k.tag in (O_TEXT_BODY, O_SHEET_BODY, O_SLIDE_BODY)), None) \
             if body is not None else None
@@ -1986,16 +2030,10 @@ class _Odt(object):
                 if box.tag == O_TEXT_BODY:
                     out.extend(self.blocks_of([ch], 1))
                 elif box.tag == O_SHEET_BODY and ch.tag == O_TABLE:
-                    try:
-                        blocks = self.table(ch, 1, repeat=None)
-                    except (Late, MemoryError):
-                        raise
-                    except Exception as e:     # noqa: BLE001  (this sheet, not the others)
-                        self.broke[type(e).__name__] = self.broke.get(type(e).__name__, 0) + 1
-                        blocks = []
-                    if blocks:
-                        out.append(_heading(2, _esc(_one_line(ch.get(O_TABLE_NAME) or "Sheet %d" % (self.done + 1)))))
-                        out.extend(blocks)
+                    sheet = _Sheet(self, ch)
+                    for k in ch:
+                        sheet.child(k)
+                    out.extend(self.sheet_blocks(sheet))
                 elif box.tag == O_SLIDE_BODY and ch.tag == O_PAGE:
                     slide += 1
                     out.append("## Slide %d" % slide)
@@ -2007,12 +2045,36 @@ class _Odt(object):
                 self.done += 1
         except Late:
             late = True
+        return self.finish(out, late)
+
+    def finish(self, out, late):
+        """The blocks read as one Markdown text, the notes after them: (markdown, late)."""
         self.clock.finishing()
         md = "\n\n".join(b for b in out if b)
         notes = [d for d in (_note_def(lab, blocks) for lab, blocks in self.notes) if d]
         if notes:
             md = md + "\n\n" + "\n\n".join(notes)
         return _marks(md), late
+
+    def sheet_blocks(self, sheet, finishing=False):
+        """A sheet as blocks: its name a heading, its shapes' text and pictures, its table, then its
+        comments, each a note of its cell; nothing for a sheet with none of them, or an external
+        link's cache. `finishing`: the time is up, its table is written with no clock."""
+        self.sheet_no += 1
+        if sheet.cache():
+            return []
+        try:
+            rows = sheet.grid.blocks(finishing)
+        except (Late, MemoryError):
+            raise
+        except Exception as e:             # noqa: BLE001  (this sheet, not the others)
+            self.broke[type(e).__name__] = self.broke.get(type(e).__name__, 0) + 1
+            rows = []
+        said = [_note_def(label, [text]) for label, text in sheet.comments]
+        body = [b for b in sheet.shapes + rows + said if b]
+        if not body:
+            return []
+        return [_heading(2, _esc(_one_line(sheet.name or "Sheet %d" % self.sheet_no)))] + body
 
     def plain(self, el):
         """What is past DEPTH: its words as one paragraph."""
@@ -2130,10 +2192,10 @@ class _Odt(object):
         if tag == O_A:
             return _link(self.inline(ch, pend, base, depth), ch.get(O_HREF) or "")
         if tag == O_NOTE:
-            label = str(len(self.notes) + 1)
+            label, k = self.label(), len(self.notes)
             self.notes.append((label, []))
             body = ch.find(O_NBODY)
-            self.notes[int(label) - 1] = (label, self.blocks_of(list(body), depth + 1) if body is not None else [])
+            self.notes[k] = (label, self.blocks_of(list(body), depth + 1) if body is not None else [])
             return "[^%s]" % label
         if tag.startswith("{%s}" % _DRAW):
             return self.draw(ch, pend, depth)
@@ -2250,68 +2312,22 @@ class _Odt(object):
         return out
 
     def table(self, el, depth, repeat=64):
-        """A table's grid: repeated rows and cells `repeat` times each at most (None: as often as the
-        grid's caps leave room for - a sheet's), a row WIDTH columns, the grid CELLS (DOC_CELLS with
-        the document's other tables); past them the table is cut and the note says so (313 rows of 32
-        cells, each repeated 64 times both ways, took 40 s and gave 164 MB). The text the grid holds
-        is capped too, a repeated cell's counted as often as it is repeated: TABLE_BYTES a table,
-        DOC_TABLE_BYTES a document (a 64 KB cell repeated in 1 024 columns and 1 000 rows, 1 KB of
-        file, was 16 GB of text). A row with no text is left out, and a row's empty cells at its end."""
-        rows, state = [], {"width": 0, "cut": False, "bytes": 0}
-        cap = repeat or (1 << 62)
+        """A text's or a slide's table (_Grid): its rows and cells repeated `repeat` times each at most."""
+        grid = _Grid(self, depth, repeat)
+        grid.walk(el)
+        return grid.blocks()
 
-        def walk(box, d):
-            for r in box:
-                if state["cut"] or len(rows) >= ROWS:
-                    return
-                if r.tag in O_ROWS:
-                    if d < DEPTH:
-                        walk(r, d + 1)
-                elif r.tag == O_ROW:
-                    self.clock.tick()
-                    cells, size = [], 0
-                    for c in r:
-                        if c.tag not in (O_CELL, O_COVERED):
-                            continue
-                        rep = min(max(_int(c.get(_o("table:number-columns-repeated")), 1), 1), cap)
-                        text = self.cell(c, depth + 1) if c.tag == O_CELL else ""
-                        room = WIDTH - len(cells)
-                        if room <= 0:
-                            if text:
-                                cells[-1] = (cells[-1] + " " + text).strip()
-                                size += len(text) + 1
-                            continue
-                        cells.extend([text] * min(rep, room))
-                        size += len(text) * min(rep, room)
-                    while cells and not cells[-1]:
-                        cells.pop()
-                    if not cells:
-                        continue
-                    rep = min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), cap, ROWS - len(rows))
-                    width = max(state["width"], len(cells))
-                    fit, why = _grid_room(self.clock, len(rows), width), "table(s) cut at %d cells" % CELLS
-                    left = min(TABLE_BYTES - state["bytes"], DOC_TABLE_BYTES - self.clock.table_bytes - state["bytes"])
-                    if size and left // size < fit:
-                        fit, why = left // size, "table(s) cut at %d MB of text" % (TABLE_BYTES >> 20)
-                    if fit < rep:
-                        rep = max(0, fit)
-                        state["cut"] = True
-                        self.clock.cut(why)
-                    if rep:
-                        state["width"] = width
-                        state["bytes"] += size * rep
-                        rows.extend([cells] * rep)
-        walk(el, 0)
-        self.clock.cells += len(rows) * state["width"]
-        self.clock.table_bytes += state["bytes"]
-        return _table_blocks(rows, self.clock)
-
-    def cell(self, c, depth):
+    def cell(self, c, depth, sheet=None):
+        """A cell's text as one line. A sheet's cell (`sheet`, its _Sheet) keeps its comment apart, a
+        note of the cell's ("1997 [^1]", the comment after the sheet's table), and its shapes too - a
+        text box or a picture anchored to the cell is the sheet's, before its table: such a box's
+        paragraphs were glued into the cell ("addressesProjects")."""
         if depth > DEPTH:
             return _one_line(_esc(_space(_flat_text(c))))
-        parts = []
+        parts, marks = [], []
         for ch in c:
-            if ch.tag in (O_P, O_H):
+            tag = ch.tag
+            if tag in (O_P, O_H):
                 pend = []
                 style = ch.get(O_STYLE_NAME)
                 base = (bool(self.s.get("paragraph", style, "bold")), bool(self.s.get("paragraph", style, "italic")),
@@ -2319,27 +2335,333 @@ class _Odt(object):
                 t = _bi(_one_line(self.inline(ch, pend, base, depth)), base[0], base[1])
                 parts.append(t)
                 parts.extend(_one_line(b) for b in pend)
-            elif ch.tag in (O_LIST, O_ITEM, O_LHEAD, O_TABLE, O_ROW, O_CELL) + O_ROWS or \
-                    ch.tag == _o("text:section"):
+            elif tag in (O_LIST, O_ITEM, O_LHEAD, O_TABLE, O_ROW, O_CELL) + O_ROWS or tag == _o("text:section"):
                 parts.append(self.cell(ch, depth + 1))
-            elif isinstance(ch.tag, str) and ch.tag not in _ODF_SKIP:
+            elif sheet is not None and tag == O_ANNOTATION:
+                said = " ".join(_one_line(b) for b in self.blocks_of(
+                    [k for k in ch if k.tag in (O_P, O_H, O_LIST)], depth + 1) if b)
+                if said:
+                    label = self.label()
+                    sheet.comments.append((label, said))
+                    marks.append("[^%s]" % label)
+            elif isinstance(tag, str) and tag.startswith("{%s}" % _DRAW):
+                blocks = self.blocks_of([ch], depth + 1)
+                if sheet is not None:
+                    sheet.shapes.extend(blocks)
+                else:
+                    parts.extend(_one_line(b) for b in blocks)
+            elif isinstance(tag, str) and tag not in _ODF_SKIP:
                 parts.append(_one_line(_esc(_space(_flat_text(ch)))))
-        return " ".join(p for p in parts if p)
+        return " ".join(p for p in parts + marks if p)
+
+
+class _Grid(object):
+    """A table's rows as they come: repeated rows and cells `repeat` times each at most (None: as
+    often as the caps leave room for - a sheet's), a row WIDTH columns. A text's or a slide's table
+    holds ROWS rows and its grid CELLS cells (DOC_CELLS with the document's other tables). A sheet's
+    grid holds SHEET_CELLS (DOC_SHEET_CELLS with the workbook's other sheets) - what it stores, a
+    cell at a time - and of the cells with text that only a repeat makes, CELLS (DOC_CELLS): a real
+    sheet stores its cells (one of 441 377 was cut at 250 000, 2026-11-26), while a repeat makes a
+    file of 1 KB a grid of millions (313 rows of 32 cells, each repeated 64 times both ways, took 40
+    s and gave 164 MB). Past a cap the table is cut and the note says so. The text the grid holds is
+    capped too, a repeated cell's counted as often as it is repeated: TABLE_BYTES a table,
+    DOC_TABLE_BYTES a document (a 64 KB cell repeated in 1 024 columns and 1 000 rows, 1 KB of file,
+    was 16 GB of text). A row with no text is left out, and a row's empty cells at its end."""
+    __slots__ = ("odt", "depth", "rows", "width", "cut", "bytes", "copies", "cap", "sheet")
+
+    def __init__(self, odt, depth, repeat=64, sheet=None):
+        self.odt, self.depth, self.sheet = odt, depth, sheet
+        self.rows, self.width, self.cut, self.bytes, self.copies = [], 0, False, 0, 0
+        self.cap = repeat or (1 << 62)
+
+    def walk(self, box, d=0):
+        for r in box:
+            if self.cut:
+                return
+            if r.tag in O_ROWS:
+                if d < DEPTH:
+                    self.walk(r, d + 1)
+            elif r.tag == O_ROW:
+                if self.sheet is not None:
+                    self.sheet.row(r)
+                else:
+                    self.row(r)
+
+    def row(self, r):
+        clock = self.odt.clock
+        if self.cut:
+            return
+        if self.sheet is None and len(self.rows) >= ROWS:
+            self.cut = True
+            clock.cut("table(s) cut at %d rows" % ROWS)  # it was cut there with nothing said
+            return
+        clock.tick()
+        cells, size, copies, filled = [], 0, 0, 0
+        for c in r:
+            if c.tag not in (O_CELL, O_COVERED):
+                continue
+            rep = min(max(_int(c.get(_o("table:number-columns-repeated")), 1), 1), self.cap)
+            text = self.odt.cell(c, self.depth + 1, self.sheet) if c.tag == O_CELL else ""
+            room = WIDTH - len(cells)
+            if room <= 0:
+                if text:
+                    cells[-1] = (cells[-1] + " " + text).strip()
+                    size += len(text) + 1
+                continue
+            n = min(rep, room)
+            cells.extend([text] * n)
+            size += len(text) * n
+            if text:
+                filled += n
+                copies += n - 1
+        while cells and not cells[-1]:
+            cells.pop()
+        if not cells:
+            return
+        rep = min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), self.cap)
+        width = max(self.width, len(cells))
+        if self.sheet is None:
+            rep = min(rep, ROWS - len(self.rows))
+            fit, why = _grid_room(clock, len(self.rows), width), "table(s) cut at %d cells" % CELLS
+        else:
+            fit, why = (_grid_room(clock, len(self.rows), width, SHEET_CELLS, DOC_SHEET_CELLS, clock.sheet_cells),
+                        "sheet(s) cut at %d cells" % SHEET_CELLS)
+            # k repeats of this row copy copies * k cells, and filled * (k - 1) more
+            left = min(CELLS - self.copies, DOC_CELLS - clock.copies - self.copies)
+            if copies + filled and (left + filled) // (copies + filled) < fit:
+                fit, why = (left + filled) // (copies + filled), "sheet(s) cut at %d cells its repeats copy" % CELLS
+        left = min(TABLE_BYTES - self.bytes, DOC_TABLE_BYTES - clock.table_bytes - self.bytes)
+        if size and left // size < fit:
+            fit, why = left // size, "table(s) cut at %d MB of text" % (TABLE_BYTES >> 20)
+        if fit < rep:
+            rep = max(0, fit)
+            self.cut = True
+            clock.cut(why)
+        if rep:
+            self.width = width
+            self.bytes += size * rep
+            self.copies += copies * rep + filled * (rep - 1)
+            self.rows.extend([cells] * rep)
+
+    def blocks(self, finishing=False):
+        """The table's blocks (`finishing`: written with no clock, the time being up)."""
+        clock = self.odt.clock
+        if self.sheet is None:
+            clock.cells += len(self.rows) * self.width
+        else:
+            clock.sheet_cells += len(self.rows) * self.width
+            clock.copies += self.copies
+        clock.table_bytes += self.bytes
+        return _table_blocks(self.rows, None if finishing else clock)
+
+
+class _Sheet(object):
+    """One sheet as it is read: its name; whether it is hidden; whether it is an external link's cache
+    - a hidden sheet with a table:table-source, a copy of another file's sheet that no one opening the
+    workbook sees (LibreOffice writes their cells, and such a sheet read as one of the workbook's,
+    named "'file:///C:/...'#$Sheet1"; Excel's hold values alone, 556 of them in one workbook); its
+    grid; its shapes' blocks, a text box's paragraphs, a shape's text and a picture, whether on its
+    page (table:shapes) or in a cell; its comments, each with its label."""
+    __slots__ = ("odt", "el", "name", "hidden", "linked", "grid", "shapes", "comments")
+
+    def __init__(self, odt, el):
+        self.odt, self.el = odt, el
+        self.name = el.get(O_TABLE_NAME) or ""
+        self.hidden = bool(odt.s.get("table", el.get(O_TABLE_STYLE), "hidden"))
+        self.linked = False
+        self.grid = _Grid(odt, 1, None, self)
+        self.shapes, self.comments = [], []
+
+    def cache(self):
+        return self.linked and self.hidden
+
+    def child(self, ch):
+        """One of the sheet's own elements: a row, rows, its shapes, its link to another file."""
+        tag = ch.tag
+        if tag == O_TABLE_SOURCE:
+            self.linked = True
+        elif self.cache():
+            return
+        elif tag == O_ROW:
+            self.row(ch)
+        elif tag in O_ROWS:
+            self.grid.walk(ch, 1)
+        elif tag == O_SHAPES:
+            self.shapes.extend(self.odt.blocks_of(list(ch), 2))
+
+    def row(self, r):
+        if self.cache():
+            return
+        try:
+            self.grid.row(r)
+        except (Late, MemoryError):
+            raise
+        except Exception as e:                                 # noqa: BLE001  (this row, not the sheet)
+            name = type(e).__name__
+            self.odt.broke[name] = self.odt.broke.get(name, 0) + 1
+
+
+class _Body(ET.TreeBuilder):
+    """content.xml's tree as it is parsed (_feed): a spreadsheet's rows are read as each one ends and
+    dropped, its sheets' other parts as they end, so a workbook costs what its rows hold, not what its
+    XML holds - Excel writes a cell to ODS in 120 bytes: of 17 workbooks from government sites
+    (2026-11-26), one of 2.7 MB had a content.xml of 142 MB and one of 1.8 MB of 41 MB, both cut at 32
+    MB, the first's tree of 32 MB taking 205 MB. A text's or a presentation's body is built whole,
+    for _Odt.doc()."""
+
+    def __init__(self, odt):
+        ET.TreeBuilder.__init__(self)
+        self.odt, self.stack, self.sheet, self.sheets, self.root = odt, [], None, False, None
+
+    def start(self, tag, attrs):
+        el = ET.TreeBuilder.start(self, tag, attrs)
+        st = self.stack
+        st.append(el)
+        if len(st) == 1:
+            self.root = el
+        elif len(st) == 3 and tag == O_SHEET_BODY and st[1].tag == O_BODY:
+            self.sheets = True
+        elif len(st) == 4 and self.sheets and tag == O_TABLE and st[2].tag == O_SHEET_BODY:
+            self.sheet = _Sheet(self.odt, el)
+        return el
+
+    def end(self, tag):
+        el = ET.TreeBuilder.end(self, tag)
+        st = self.stack
+        st.pop()
+        n = len(st)
+        if n == 1 and tag in O_STYLE_BOXES:
+            self.odt.s.load_box(el)            # content.xml's own styles, before its body
+        elif self.sheets and n == 3:
+            if self.sheet is not None and el is self.sheet.el:
+                self.sheet_done()
+            st[2].remove(el)                   # a sheet read, or the workbook's other parts
+        elif self.sheet is not None and n == 4:
+            self.sheet.child(el)
+            st[3].remove(el)
+        elif self.sheet is not None and tag == O_ROW and n - 4 <= DEPTH and all(e.tag in O_ROWS for e in st[4:]):
+            self.sheet.row(el)
+            st[-1].remove(el)
+        return el
+
+    def sheet_done(self, finishing=False):
+        """The sheet read: its blocks. The time running out while they are written, they are written
+        with no clock, and the reading stops (Late)."""
+        sheet, odt = self.sheet, self.odt
+        try:
+            odt.out.extend(odt.sheet_blocks(sheet, finishing))
+        except Late:
+            odt.clock.finishing()
+            odt.out.extend(odt.sheet_blocks(sheet, True))
+            raise
+        finally:
+            self.sheet = None
+
+    def broken(self):
+        """The XML broke, or was cut: the text of the element still open goes to it, and the row then
+        open is read as far as it goes (a part cut at its size limit kept no word of its last
+        paragraph); the root built so far, or None."""
+        try:
+            self.start(_CUT, {})
+            self.end(_CUT)
+            root = self.close()
+        except Exception:                                      # noqa: BLE001
+            return None
+        if self.sheet is not None:
+            st = self.stack
+            k = next((i for i in range(4, len(st)) if st[i].tag not in O_ROWS), None)
+            if k is not None and st[k].tag == O_ROW:
+                try:
+                    self.sheet.row(st[k])
+                except Late:
+                    pass                       # the time is up: the rows before it stand
+        return root
+
+
+def _prolog(data):
+    """What an XML part's start holds before its first element: "doctype" when it declares a DOCTYPE
+    (or an entity), "element" when its first element starts within `data` (or its XML breaks first:
+    the parser says how), "" when `data` ends before either."""
+    p = expat.ParserCreate()
+    seen = []
+
+    def doctype(*_a):
+        seen.append("doctype")
+        raise _Stop()
+
+    def element(*_a):
+        seen.append("element")
+        raise _Stop()
+    p.StartDoctypeDeclHandler = doctype
+    p.EntityDeclHandler = doctype
+    p.StartElementHandler = element
+    try:
+        p.Parse(data, False)
+    except _Stop:
+        pass
+    except expat.ExpatError:
+        return "element"
+    return seen[0] if seen else ""
+
+
+def _feed(zf, name, b, clock):
+    """The part `name` given to `b` (a _Body) as it unpacks, a MB at a time, one MB in memory: up to
+    SHEET_BYTES once its body is a spreadsheet's, else PART_BYTES. A DOCTYPE is refused before the
+    builder sees a byte (a billion laughs on an expat with no limit of its own). Returns (why, late,
+    read, size): why it stopped before its end ("" when it did not; XML that breaks keeps what came
+    before that point), whether the time ran out, the bytes read, and the size its archive gives."""
+    real = zf.name(name)
+    size = zf.z.getinfo(real).file_size if real is not None else 0
+    parser = ET.XMLParser(target=b)
+    head, started, got, why, late = b"", False, 0, "", False
+    pieces = zf.chunks(name)
+    try:
+        for chunk in pieces:
+            if not started:
+                head += chunk
+                seen = _prolog(head)
+                if seen == "doctype":
+                    return "it declares a DOCTYPE", False, len(head), size
+                if not seen and len(head) < (1 << 20):
+                    continue
+                if not seen:
+                    return "its first element does not start in its first MB", False, len(head), size
+                started, chunk = True, head
+            cap = SHEET_BYTES if b.sheets else PART_BYTES
+            if got + len(chunk) > cap:
+                parser.feed(chunk[:cap - got])
+                got = cap
+                why = "%s is over the size limit, %d MB: what comes after that is missing" % (name, cap >> 20)
+                break
+            got += len(chunk)
+            parser.feed(chunk)
+            if clock.late():
+                raise Late()
+        if not started and head:
+            parser.feed(head)                  # under a MB, its first element never started: the parser says why
+            started = True
+        if not started:
+            return "it is empty", False, 0, size
+        if not why:
+            parser.close()
+    except ET.ParseError as e:
+        why = "its XML breaks (%s): what comes after that point is missing" % str(e)[:60]
+    except Late:
+        late = True
+    finally:
+        pieces.close()
+    return why, late, got, size
 
 
 def odt_md(path, until=None, finish=None):
     """An OpenDocument text, spreadsheet or presentation (ODT, ODS, ODP) as Markdown: content.xml's
-    body, whichever it holds (_Odt.doc), with styles.xml for what its styles say."""
+    body, whichever it holds, read as it unpacks (_feed: a spreadsheet's rows as they come, _Body; a
+    text's or a presentation's tree, _Odt.doc), with styles.xml for what its styles say."""
     clock = _Clock(until, finish)
     with zipfile.ZipFile(path) as z:
         zf = _Zip(z)
-        data = zf.read("content.xml")
-        if not data:
-            return "", _join("no content.xml in this file" if data is None else "its content.xml is empty",
-                             zf.note())
-        root, why = _xml(data, clock)
-        if root is None:
-            return "", "content.xml could not be read: %s" % why
+        if zf.name("content.xml") is None:
+            return "", _join("no content.xml in this file", zf.note())
         styles, swhy = _OdfStyles(), ""
         sdata = zf.read("styles.xml", 16 << 20)
         if sdata:
@@ -2347,16 +2669,37 @@ def odt_md(path, until=None, finish=None):
             styles.load(sroot)
             if swhy:
                 swhy = "styles.xml could not be read%s: %s" % (" whole" if sroot is not None else "", swhy)
-        styles.load(root)
         odt = _Odt(styles, clock, zf)
-        md, late = odt.doc(root)
+        b = _Body(odt)
+        why, late, got, size = _feed(zf, "content.xml", b, clock)
+        if b.root is None:
+            if not got and zf.bad:
+                return "", _join("content.xml could not be read", zf.note())
+            return "", ("its content.xml is empty" if why == "it is empty" else
+                        "content.xml could not be read: %s" % (why or "it holds no element"))
+        if late and not b.sheets:
+            raise Late()
+        if why and not late:
+            b.broken()
+        if b.sheets:
+            if b.sheet is not None:
+                if late:
+                    clock.finishing()
+                try:
+                    b.sheet_done(late)
+                except Late:
+                    late = True
+            md, _late = odt.finish(odt.out, late)
+            done = float(got) / size if size else 0
+        else:
+            md, late = odt.doc(b.root)
+            done = float(odt.done) / odt.of if odt.of else 0
         broke = ""
         if odt.broke:
             broke = "%d element(s) could not be read and were left out (%s)" % (
                 sum(odt.broke.values()), ", ".join(sorted(odt.broke)))
         note = _join(why, swhy, zf.note(), broke, clock.said(),
-                     "the time ran out before the end of the document%s" % clock.more(
-                         float(odt.done) / odt.of if odt.of else 0) if late else "")
+                     "the time ran out before the end of the document%s" % clock.more(done) if late else "")
         return md, note
 
 

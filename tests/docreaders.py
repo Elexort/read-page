@@ -412,8 +412,8 @@ md, note = docreaders.read(p, "ods")
 check("ods: each sheet a heading and its table; rows repeated as the sheet says, empty ones and empty sheets left out",
       "## Sales" in md and "| Region | Q1 | Q2 |" in md and "| North | 12 | 24 |" in md
       and md.count("| Zero | 0 | 0 |") == 100 and "Empty" not in md, "%r %r" % (md[:120], note))
-check("ods: a sheet of one column is its paragraphs, a cell's comment left out",
-      "## Notes" in md and "ONE-COLUMN-NOTE" in md and "COMMENT-WORD" not in md, repr(md[-80:]))
+check("ods: a sheet of one column is its paragraphs, a cell's comment a note of its cell",
+      "## Notes" in md and "ONE-COLUMN-NOTE [^1]" in md and "[^1]: COMMENT-WORD" in md, repr(md[-80:]))
 ODP_BODY = (
     '<office:presentation><draw:page draw:name="page1">'
     '<draw:frame presentation:class="title"><draw:text-box><text:p>SLIDE-ONE-TITLE</text:p></draw:text-box></draw:frame>'
@@ -438,6 +438,120 @@ check("odp: a slide a heading, its title, its list, its picture, then its notes"
 check("odp: a table in a frame is a table; a shape's and a group's text are kept",
       "| CELL-A | CELL-B |" in md and "| CELL-C | CELL-D |" in md and "SHAPE-TEXT" in md and "GROUPED-TEXT" in md,
       repr(md[-160:]))
+
+# ------------------------------------------------ ODS as real files have them (2026-11-26: 33 workbooks and 16 decks
+# from data.gov.uk, data.gouv.fr, Zenodo and LibreOffice's own tests, each against its content.xml read apart)
+NS_ODS = NS_PRES + ' xmlns:dc="http://purl.org/dc/elements/1.1/"'
+
+
+def ods(name, sheets, styles=""):
+    """An ODS whose content.xml has `styles` (its automatic styles) and `sheets` (its body's pieces, written as
+    they come: a big one is never one string)."""
+    with zipfile.ZipFile(path(name), "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/vnd.oasis.opendocument.spreadsheet")
+        with z.open("content.xml", "w") as fh:
+            fh.write(('<?xml version="1.0" encoding="UTF-8"?><office:document-content %s office:version="1.3">'
+                      '<office:automatic-styles>%s</office:automatic-styles><office:body><office:spreadsheet>'
+                      % (NS_ODS, styles)).encode("utf-8"))
+            for piece in sheets:
+                fh.write(piece.encode("utf-8"))
+            fh.write(b"</office:spreadsheet></office:body></office:document-content>")
+    return path(name)
+
+
+def excel_rows(n):
+    """Rows as Excel writes them to ODS - a style on every row and cell, a value twice - 300 bytes of XML each: a
+    workbook of 2.7 MB had a content.xml of 142 MB."""
+    for k in range(n):
+        yield ('<table:table-row table:style-name="ro1"><table:table-cell table:style-name="ce17" office:value-type='
+               '"string"><text:p>Region %d of the survey, by its official name</text:p></table:table-cell>'
+               '<table:table-cell table:style-name="ce18" office:value-type="float" office:value="%d"><text:p>%d'
+               '</text:p></table:table-cell></table:table-row>' % (k, 3 * k, 3 * k))
+
+
+def stored_rows(n, width):
+    for r in range(n):
+        yield "<table:table-row>%s</table:table-row>" % "".join(
+            '<table:table-cell office:value-type="float"><text:p>%d</text:p></table:table-cell>' % (r * width + c)
+            for c in range(width))
+
+
+ods("big-xml.ods", [
+    '<table:table table:name="Big">'] + list(excel_rows(120000)) + [
+    '<table:table-row><table:table-cell><text:p>LAST-ROW-OF-BIG</text:p></table:table-cell>'
+    '<table:table-cell><text:p>end</text:p></table:table-cell></table:table-row></table:table>'
+    '<table:table table:name="After"><table:table-row><table:table-cell><text:p>SECOND-SHEET-FACT</text:p>'
+    '</table:table-cell><table:table-cell><text:p>2</text:p></table:table-cell></table:table-row></table:table>'])
+md, info = hostile("big-xml.ods", "ods", secs=60, wall=120, mb=800)
+check("ods: a sheet whose content.xml is over 32 MB is read whole, its rows as they come (it was cut at 32 MB)",
+      fine(info, 60, 200) and "Region 119999 of the survey" in md and "LAST-ROW-OF-BIG" in md
+      and "SECOND-SHEET-FACT" in md and "limit" not in info.get("note", ""), show(info, md))
+ods("stored.ods", ['<table:table table:name="Stored">'] + list(stored_rows(25000, 12)) + ['</table:table>'])
+md, info = hostile("stored.ods", "ods", secs=60, wall=120, mb=800)
+check("ods: a sheet of 300 000 cells it stores itself is read whole; the 250 000 are what repeats copy",
+      fine(info, 60, 300) and "| 299988 |" in md and "| 299999 |" in md and "cut" not in info.get("note", ""),
+      show(info, md))
+odt("big.odt", "".join("<text:p>%s</text:p>" % ("a word of the long text " * 20) for _k in range(70000)))
+md, info = hostile("big.odt", "odt", secs=60, wall=120, mb=800)
+check("an ODT over its 32 MB is said to be cut at its size limit, not to be XML that breaks",
+      "a word of the long text" in md and "32 MB" in info.get("note", "") and "breaks" not in info.get("note", ""),
+      show(info, md))
+HIDE = ('<style:style style:name="ta1" style:family="table"><style:table-properties table:display="true"/>'
+        '</style:style><style:style style:name="ta2" style:family="table"><style:table-properties '
+        'table:display="false"/></style:style>')
+
+
+def ods_row(*texts):
+    return "<table:table-row>%s</table:table-row>" % "".join(
+        "<table:table-cell><text:p>%s</text:p></table:table-cell>" % t for t in texts)
+
+
+p = ods("linked.ods", [
+    '<table:table table:name="Own" table:style-name="ta1">%s</table:table>' % ods_row("OWN-SHEET-FACT", "3"),
+    '<table:table table:name="&apos;file:///C:/work/other.ods&apos;#$Sheet1" table:style-name="ta2" '
+    'table:print="false"><table:table-source table:mode="copy-results-only" xlink:href="../other.ods" '
+    'table:table-name="Sheet1"/>%s</table:table>' % ods_row("CACHED-COPY-OF-ANOTHER-FILE", "1"),
+    '<table:table table:name="Linked" table:style-name="ta1"><table:table-source table:mode="copy-all" '
+    'xlink:href="../shown.ods"/>%s</table:table>' % ods_row("LINKED-SHEET-SHOWN", "4"),
+    '<table:table table:name="HiddenOwn" table:style-name="ta2">%s</table:table>' % ods_row("HIDDEN-OWN-FACT", "5")],
+    styles=HIDE)
+md, note = docreaders.read(p, "ods")
+check("ods: an external link's cache - a hidden sheet copied from another file - is left out; a sheet linked "
+      "and shown stays, and so does a hidden sheet of its own",
+      "OWN-SHEET-FACT" in md and "LINKED-SHEET-SHOWN" in md and "HIDDEN-OWN-FACT" in md
+      and "CACHED-COPY" not in md and "other.ods" not in md, repr(md[:300]))
+p = ods("shapes.ods", [
+    '<table:table table:name="Intro"><table:shapes><draw:frame draw:name="logo"><draw:image '
+    'xlink:href="Pictures/logo.png"/><svg:title>THE LOGO</svg:title></draw:frame><draw:custom-shape><text:p>'
+    'PAGE-BOX-ONE</text:p><text:p>PAGE-BOX-TWO</text:p></draw:custom-shape></table:shapes>'
+    '<table:table-row><table:table-cell><text:p>Heading cell</text:p><draw:frame><draw:text-box><text:p>addresses'
+    '</text:p><text:p>Projects scheduled</text:p><text:list><text:list-item><text:p>Item one</text:p>'
+    '</text:list-item></text:list></draw:text-box></draw:frame></table:table-cell><table:table-cell><text:p>B1'
+    '</text:p></table:table-cell></table:table-row>%s</table:table>' % ods_row("A2", "B2"),
+    '<table:table table:name="Boxes only"><table:shapes><draw:frame><draw:text-box><text:p>ONLY-IN-A-BOX</text:p>'
+    '</draw:text-box></draw:frame></table:shapes></table:table>'])
+md, note = docreaders.read(p, "ods")
+at = [md.find(x) for x in ("## Intro", "![THE LOGO](Pictures/logo.png)", "PAGE-BOX-ONE", "addresses",
+                           "| Heading cell | B1 |", "## Boxes only", "ONLY-IN-A-BOX")]
+check("ods: a sheet's shapes and text boxes - on its page or in a cell - are its paragraphs and pictures before its "
+      "table, their words apart (they were lost, or glued into the cell: addressesProjects)",
+      min(at) >= 0 and at == sorted(at) and "PAGE-BOX-TWO" in md and "Projects scheduled" in md
+      and "addressesProjects" not in md and "- Item one" in md, "%s %r" % (at, md[:400]))
+p = ods("comments.ods", [
+    '<table:table table:name="Table_2_5">%s<table:table-row><table:table-cell office:value-type="float" '
+    'office:value="1997"><office:annotation><dc:creator>Author</dc:creator><dc:date>2019-05-01T00:00:00</dc:date>'
+    '<text:p>Author:</text:p><text:p>FIGURES-REMOVED: wrong routing in 1997.</text:p></office:annotation><text:p>'
+    '1997</text:p></table:table-cell><table:table-cell><text:p>n/a</text:p></table:table-cell></table:table-row>'
+    '<table:table-row><table:table-cell><text:p>1998</text:p></table:table-cell><table:table-cell><office:annotation>'
+    '<text:p>ON-AN-EMPTY-CELL</text:p></office:annotation></table:table-cell></table:table-row></table:table>'
+    % ods_row("Year", "UK"),
+    '<table:table table:name="Next">%s</table:table>' % ods_row("NEXT-SHEET", "1")])
+md, note = docreaders.read(p, "ods")
+at = [md.find(x) for x in ("| 1997 [^1] | n/a |", "| 1998 | [^2] |", "[^1]: Author: FIGURES-REMOVED: wrong routing in 1997.",
+                           "[^2]: ON-AN-EMPTY-CELL", "## Next")]
+check("ods: a cell's comment is a note of its cell, after its sheet's table (comments were left out: a sheet's "
+      "note on why its figures are missing went)", min(at) >= 0 and at == sorted(at) and "2019-05-01" not in md,
+      "%s %r" % (at, md[:500]))
 
 # ------------------------------------------------ RTF
 R = (b"{\\rtf1\\ansi\\ansicpg1252\\deff0{\\fonttbl{\\f0\\fswiss\\fcharset0 Arial;}{\\f1\\fcharset204 Times;}"
