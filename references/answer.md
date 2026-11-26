@@ -360,5 +360,6 @@ inline_images?, refresh?, clear_cookies?, file?, from?)` and `read(dir, file?, f
 goes on in the text read last. `read` also opens `manifest.json`, and a picture as an image block.
 `inline_images=true` attaches the text's content pictures (not icons, logos or decorations) as
 image blocks right after their markers, as PNG or JPEG up to 1 568 px, the whole answer inside
-25 000 tokens; leave it off below a 1M context. Calls run four at a time, and a cancelled call is
+25 000 tokens, and the blocks of the result together inside the text's 7 900 characters (the text gives up the room
+the notes and the pictures take); leave it off below a 1M context. Calls run four at a time, and a cancelled call is
 killed. Details: [mcp.md](mcp.md).

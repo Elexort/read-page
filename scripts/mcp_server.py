@@ -69,6 +69,10 @@ PATH_LINE_TOKENS = 150                # the line with a picture's path that Clau
 ANSWER_PICTURES = 256                 # Qwen 3.6-plus, for the whole request
 ANSWER_BYTES = 20 * 1024 * 1024       # Gemini, the whole request with its text
 DECOR_SIDE, DECOR_BYTES, DECOR_REPEAT = 48, 1024, 3
+# What the blocks of one result may come to together (`counted`): the answer's own block, the text with the notes
+# after it and a stand-in for each image. The keywords are answer.render's.
+LIMITS = {"chars": answer.BUDGET_CHARS, "budget": answer.BUDGET_BYTES, "max_lines": answer.BUDGET_LINES}
+IMAGE_STANDIN = "[image attached]"
 NAMED_SIDE = 100
 NAMED = re.compile(r"(?i)logo|icon|avatar|badge|sprite|favicon|emoji|gravatar|spinner")
 
@@ -453,7 +457,7 @@ def image_block(path, dims=None):
 
 # ---------------------------------------------------------------- content assembly
 
-def content_blocks(workdir, body, inline=True, images=None, tiles=None, uses=None):
+def content_blocks(workdir, body, inline=True, images=None, tiles=None, uses=None, converted=None):
     """The answer as MCP blocks: its text, and with inline_images an image block right after the
     line that holds a picture's marker, in reading order. The marker stays in the
     text: a client that shows no image still has the path.
@@ -461,13 +465,17 @@ def content_blocks(workdir, body, inline=True, images=None, tiles=None, uses=Non
     Which pictures: the screenshots asked for first, then the content pictures (content_picture),
     the biggest first, while the answer stays inside 25 000 tokens, 256 pictures and 20 MB. A
     picture that did not fit keeps its marker, and a note counts it. The text is already inside
-    its own budget (answer.render), so nothing is cut here.
+    its own budget (answer.render), so nothing is cut here. `converted` keeps what inline_image made of
+    each file, for a caller that asks again with another text.
     """
     state = {"attached": 0, "skipped": 0, "count": 0, "bytes": 0, "why": {},
              "tokens": len((body or "").encode("utf-8")) / 3.0}
 
     def take(path):
-        got = inline_image(path)
+        if converted is None:
+            got = inline_image(path)
+        else:
+            got = converted.get(path) or converted.setdefault(path, inline_image(path))
         if got[0] is None:
             return None, got[1]
         data, mime, w, h = got
@@ -517,6 +525,78 @@ def content_blocks(workdir, body, inline=True, images=None, tiles=None, uses=Non
     if body[pos:]:
         blocks.append(text(body[pos:]))
     return blocks, state, shots
+
+
+def result_blocks(manifest, said, workdir, inline, images, tiles, uses, shots, converted):
+    """All the blocks of a read_url answer: the text with its pictures (content_blocks), then what the server
+    says after it - the pictures it could not attach, the screens - and the screens' own images. A single image or
+    sound the URL served comes after the text. (blocks, state)."""
+    status = manifest.get("status") or "error"
+    files = manifest.get("files") or {}
+    blocks, state, shots_done = content_blocks(workdir, said, inline, images, tiles, uses, converted)
+    if status == "media_only":
+        media = ownenv.fs_path(files.get("media") or "")
+        kind = (manifest.get("content") or {}).get("kind") or ""
+        if media and kind == "image":
+            # single-file endpoint: the point is to see the picture in one hop, not to read a path
+            block, caption = image_block(media)
+            if block:
+                blocks.append(block)
+                state["attached"] = 1
+            else:
+                blocks.append(text("the image could not be attached: " + caption))
+        elif media and kind == "audio" and os.environ.get("READ_PAGE_MCP_MEDIA", "off") == "audio":
+            try:
+                data = open(media, "rb").read()
+                if len(data) <= IMG_BYTES:
+                    blocks.append({"type": "audio", "data": base64.b64encode(data).decode("ascii"),
+                                   "mimeType": MIME.get(os.path.splitext(media)[1].lower(), "audio/mpeg")})
+            except OSError:
+                pass
+        return blocks, state
+    if state.get("skipped"):
+        whys = sorted(set(state["why"].values()))
+        blocks.append(text("[read-page] %d picture(s) not attached (%s); their markers name the files"
+                           % (state["skipped"], "; ".join(whys)[:200])))
+    if tiles:
+        sig = manifest.get("signals") or {}
+        taken = sig.get("screens") or len(tiles)
+        total = max(taken, sig.get("screens_needed") or 0)
+        more = "" if total <= taken else (" of %d the page has; ask for more with "
+                                          "screenshots=N" % total)
+        blocks.append(text("[read-page] %d screen(s)%s in %d image(s), %d px wide, not scaled"
+                           % (taken, more, len(tiles), tiles[0].get("width") or 1280)))
+
+        def which(e):
+            sc = e.get("screens") or []
+            return ("screens %d-%d" % (sc[0], sc[-1]) if len(sc) > 1 else
+                    "screen %d" % sc[0] if sc else "screenshot") + " of %d" % total
+        for e, block, info in shots_done:
+            if not block:
+                blocks.append(text("%s not attached: %s" % (which(e), info)))
+                continue
+            blocks.append(text("%s · %sx%s · %s"
+                               % (which(e), e.get("width"), e.get("height"),
+                                  readpage.human_bytes(e.get("bytes")))))
+            blocks.append(block)
+            state["attached"] += 1
+    elif shots:
+        why = ((manifest.get("signals") or {}).get("screenshot_unsupported")
+               or (manifest.get("missing") and "browser")
+               or "")
+        if why:
+            blocks.append(text("[read-page] no screenshots: %s" % why))
+    return blocks, state
+
+
+def counted(blocks):
+    """What a client that counts a result's characters sees of its blocks. Cline's SDK, which cuts a tool
+    result's middle past 8 000 characters, MCP results too, counts the text of all the blocks together and an
+    image block as `[image attached]` (session/services/tool-result-cache.ts, read 2026-11-27): so the text of
+    every block, an image as that, one to a line - a little more than the client counts. As answer.render's
+    keywords: UTF-16 units, bytes, lines."""
+    joined = "\n".join(b.get("text", "") if b.get("type") == "text" else IMAGE_STANDIN for b in blocks)
+    return {"chars": answer.u16(joined), "budget": len(joined.encode("utf-8")), "max_lines": joined.count("\n")}
 
 
 def mcp_next(n, total, view):
@@ -649,7 +729,6 @@ def tool_read_url(args):
                                      "ocr": manifest["ocr"]})
 
     status = manifest.get("status") or "error"
-    files = manifest.get("files") or {}
     # the folder as the answer names it - in the user's locale's letters, which under a POSIX locale that is not
     # UTF-8 are other bytes than this process's name for it (KNOWN-ISSUES 175)
     workdir = ownenv.fs_path(manifest.get("dir") or "")
@@ -669,69 +748,30 @@ def tool_read_url(args):
     body = ""
     if workdir and os.path.isfile(os.path.join(workdir, view)):
         body = open(os.path.join(workdir, view), encoding="utf-8", errors="replace").read()
-    if lost:
-        said, nxt = answer.not_found(manifest, body, view, quote), None
-    else:
-        said, nxt = answer.render(manifest, body, view, start, mcp_next, to=to, call=mcp_call)
-
     # how often each picture stands in the whole text: 3+ times is a decoration
     uses = {}
     for n, _rel in ANY_MARKER.findall(body):
         uses[int(n)] = uses.get(int(n), 0) + 1
     tiles = manifest.get("screenshots") or []
-    blocks, state, shots_done = content_blocks(workdir, said, inline, images, tiles, uses)
-    if status == "media_only":
-        media = ownenv.fs_path(files.get("media") or "")
-        kind = (manifest.get("content") or {}).get("kind") or ""
-        if media and kind == "image":
-            # single-file endpoint: the point is to see the picture in one hop, not to read a path
-            block, caption = image_block(media)
-            if block:
-                blocks.append(block)
-                state["attached"] = 1
-            else:
-                blocks.append(text("the image could not be attached: " + caption))
-        elif media and kind == "audio" and os.environ.get("READ_PAGE_MCP_MEDIA", "off") == "audio":
-            try:
-                data = open(media, "rb").read()
-                if len(data) <= IMG_BYTES:
-                    blocks.append({"type": "audio", "data": base64.b64encode(data).decode("ascii"),
-                                   "mimeType": MIME.get(os.path.splitext(media)[1].lower(), "audio/mpeg")})
-            except OSError:
-                pass
-    else:
-        if state.get("skipped"):
-            whys = sorted(set(state["why"].values()))
-            blocks.append(text("[read-page] %d picture(s) not attached (%s); their markers name the files"
-                               % (state["skipped"], "; ".join(whys)[:200])))
-        if tiles:
-            sig = manifest.get("signals") or {}
-            taken = sig.get("screens") or len(tiles)
-            total = max(taken, sig.get("screens_needed") or 0)
-            more = "" if total <= taken else (" of %d the page has; ask for more with "
-                                              "screenshots=N" % total)
-            blocks.append(text("[read-page] %d screen(s)%s in %d image(s), %d px wide, not scaled"
-                               % (taken, more, len(tiles), tiles[0].get("width") or 1280)))
-
-            def which(e):
-                sc = e.get("screens") or []
-                return ("screens %d-%d" % (sc[0], sc[-1]) if len(sc) > 1 else
-                        "screen %d" % sc[0] if sc else "screenshot") + " of %d" % total
-            for e, block, info in shots_done:
-                if not block:
-                    blocks.append(text("%s not attached: %s" % (which(e), info)))
-                    continue
-                blocks.append(text("%s · %sx%s · %s"
-                                   % (which(e), e.get("width"), e.get("height"),
-                                      readpage.human_bytes(e.get("bytes")))))
-                blocks.append(block)
-                state["attached"] += 1
-        elif shots:
-            why = ((manifest.get("signals") or {}).get("screenshot_unsupported")
-                   or (manifest.get("missing") and "browser")
-                   or "")
-            if why:
-                blocks.append(text("[read-page] no screenshots: %s" % why))
+    # The text is rendered inside its block; the notes after it and the stand-ins of the pictures come on top, and a
+    # client counts the blocks together (counted). So the text gives up the room they take: it is rendered again
+    # inside what is left, until the blocks fit (a picture is converted once, whatever the number of passes). A
+    # quote no line holds (the outline) and a range (`to`, sent whatever the block) have no block to give up.
+    converted = {}
+    room = dict(LIMITS)
+    for _ in range(4):
+        if lost:
+            said, nxt = answer.not_found(manifest, body, view, quote), None
+        else:
+            said, nxt = answer.render(manifest, body, view, start, mcp_next, to=to, call=mcp_call, **room)
+        blocks, state = result_blocks(manifest, said, workdir, inline, images, tiles, uses, shots, converted)
+        used, own = counted(blocks), counted([text(said)])
+        over = {k: used[k] - LIMITS[k] for k in LIMITS if used[k] > LIMITS[k]}
+        # the text ends at a paragraph, short of its room: what it must lose is counted from what it has
+        shrunk = {k: max(min(room[k], own[k]) - over[k], LIMITS[k] // 2) if k in over else room[k] for k in room}
+        if lost or to or status == "media_only" or shrunk == room:
+            break
+        room = shrunk
 
     structured = {k: v for k, v in manifest.items() if not k.startswith("_")}
     structured["mcp"] = {"file": view, "from": start, "to": to, "next_from": nxt,

@@ -120,7 +120,7 @@ context; three groups, the first one reached cuts:
 
 | Limit | Value | Who enforces it |
 |---|---|---|
-| the text | 7 900 characters, 9 980 bytes and 495 lines, as on the CLI | Cline (8 000 characters a tool result, MCP too), Codex, Roo Code (`answer.py`) |
+| the text | 7 900 characters, 9 980 bytes and 495 lines, as on the CLI - the blocks of one result together: its text, the notes after it and a stand-in of 16 characters for each image | Cline (8 000 characters a tool result, MCP too), Codex, Roo Code (`answer.py`) |
 | one picture | PNG or JPEG; a long side over 1 568 px is scaled down, proportions kept; at most 3.75 MB, a heavier PNG becomes one JPEG at q95 | xAI takes only PNG and JPEG; Claude on Bedrock 5 MB of base64; 8 000 px, and ~2 000 px when a request has more than 20 pictures |
 | the whole answer | 25 000 tokens: the text plus `ceil(w/28)*ceil(h/28)` and ~150 for the path line a picture costs | Claude Code (measured: going over keeps the pictures but tells the model "OUTPUT TRUNCATED") |
 | | 256 pictures | Qwen 3.6-plus, for the whole request |
@@ -132,7 +132,12 @@ or address. Screenshots asked for go first, then the biggest pictures; each stan
 marker. A picture that did not fit keeps its marker, and a note counts it (`images_skipped`,
 `structuredContent.mcp.tokens` is the estimate). Converting needs Pillow (GIF, WebP, AVIF, BMP,
 scaling) and PyMuPDF (SVG); without them only a PNG or JPEG that already fits goes in, the rest
-stays a marker - the setup report names both. Text is never cut for pictures.
+stays a marker - the setup report names both. The text gives up the room the pictures and the notes take: the
+server counts the blocks of one result together - the text of every block, and for each image block the 16
+characters of `[image attached]`, which is what Cline's SDK counts for it - and when `inline_images` or
+`screenshots` would push them past the three limits of the text, the text is rendered again inside what is left
+(a block ends at a paragraph, so it loses a paragraph at most more than it must); the pointer to the next line
+names where the shorter block ends. A range (`to`) and a quote that no line holds are not shortened.
 
 ## Degradation
 

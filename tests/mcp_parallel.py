@@ -17,6 +17,7 @@ import json
 import math
 import os
 import queue
+import re
 import struct
 import subprocess
 import sys
@@ -126,9 +127,18 @@ def many_page():
                       for i in range(12)) + "</article></body></html>").encode()
 
 
+def fill_page():
+    # text enough to fill the answer's block, and a picture in every part: with inline_images and screenshots the
+    # notes and the picture stand-ins come on top of it (KNOWN-ISSUES 273)
+    return ("<!doctype html><html><head><title>Fill</title></head><body><article><h1>Fill</h1>"
+            + "".join("<h2>Part %d</h2><p>PART%d %s</p><p><img src='/m/%d.png' alt='Big picture %d'></p>"
+                      % (i, i, EN * 4, i, i) for i in range(12)) + "</article></body></html>").encode()
+
+
 PNG_H = {"Content-Type": "image/png"}
 routes = {"/slow/%d" % i: slow for i in range(4)}
 routes.update({"/trickle": trickle, "/pics": (200, H, pics_page()), "/many": (200, H, many_page()),
+               "/fill": (200, H, fill_page()),
                "/i/icon.png": (200, PNG_H, png(16, 16, (0, 160, 0))),
                "/i/photo.png": (200, PNG_H, png(600, 400)),
                "/i/logo.png": (200, PNG_H, png(90, 40, (10, 10, 10))),
@@ -262,6 +272,72 @@ try:
     check("the whole answer stays inside 25 000 tokens; the rest stay markers and are counted",
           0 < len(pics) < 12 and tokens <= 25000 and "not attached" in note,
           "%d pictures, ~%d tokens; %s" % (len(pics), tokens, note[:70]))
+
+    # ------------------------------------------------ the counted blocks of one result stay inside the block
+    # (KNOWN-ISSUES 273). Cline counts a tool result's characters, MCP results too: its SDK counts the text of all the
+    # blocks together and an image block as "[image attached]" (tool-result-cache.ts), then cuts the middle past
+    # 8 000. So the text of every block together, an image as that word, stays within 7 900 UTF-16 units, 9 980
+    # bytes and 495 lines.
+    def counted(blocks):
+        joined = "\n".join(b.get("text", "") if b.get("type") == "text" else "[image attached]" for b in blocks)
+        return len(joined.encode("utf-16-le")) // 2, len(joined.encode("utf-8")), joined.count("\n")
+
+    def with_screens(argv):
+        # a page read with screenshots, the way a browser's capture leaves them: two tiles of 1280x1568 in shots/
+        rc, out, e = real_run_cli(argv)
+        man = json.loads(out)
+        os.makedirs(os.path.join(man["dir"], "shots"), exist_ok=True)
+        tiles = []
+        for k in (1, 2):
+            data = png(1280, 1568, (30 * k, 90, 120))
+            with open(os.path.join(man["dir"], "shots", "%02d.png" % k), "wb") as fh:
+                fh.write(data)
+            tiles.append({"file": "shots/%02d.png" % k, "width": 1280, "height": 1568, "bytes": len(data),
+                          "format": "png", "screens": [1, 2] if k == 1 else [3]})
+        man["screenshots"] = tiles
+        man.setdefault("signals", {}).update(screens=3, screens_needed=9)
+        return rc, json.dumps(man, ensure_ascii=False), e
+
+    real_run_cli = mcp.run_cli
+    plain = mcp.tool_read_url({"url": s.url("/fill")})
+    p_chars, p_bytes, p_lines = counted(plain["content"])
+    check("a long page with no notes: its block is as long as ever (the baseline of what follows)",
+          7000 < p_chars <= 7900 and p_bytes <= 9980, "%d chars, %d bytes, %d lines" % (p_chars, p_bytes, p_lines))
+    try:
+        mcp.run_cli = with_screens
+        busy = mcp.tool_read_url({"url": s.url("/fill"), "inline_images": True, "screenshots": 3, "refresh": True})
+    finally:
+        mcp.run_cli = real_run_cli
+    bb = busy.get("content") or []
+    n_img = sum(1 for b in bb if b.get("type") == "image")
+    notes = " ".join(b.get("text") or "" for b in bb if b.get("type") == "text" and (
+        "not attached" in (b.get("text") or "") or "screen(s)" in (b.get("text") or "")))
+    c_chars, c_bytes, c_lines = counted(bb)
+    check("inline_images and screenshots: the notes and the pictures are there (the test is not empty)",
+          n_img >= 4 and "not attached" in notes and "screen(s)" in notes and "of 9 the page has" in notes,
+          "%d image blocks; %s" % (n_img, notes[:100]))
+    check("... and the blocks together stay within 7 900 characters, 9 980 bytes and 495 lines "
+          "(the text gave up the room the notes and the pictures take)",
+          c_chars <= 7900 and c_bytes <= 9980 and c_lines <= 495,
+          "%d chars, %d bytes, %d lines" % (c_chars, c_bytes, c_lines))
+    check("... and the text gave up no more than it had to (not more than two paragraphs of it)",
+          c_chars > p_chars - 2 * 700, "%d chars against %d without the notes" % (c_chars, p_chars))
+    sc = busy.get("structuredContent") or {}
+    said = "".join(b.get("text") or "" for b in bb if b.get("type") == "text")
+    nxt = re.search(r"── next: line (\d+) of \d+ → read\(dir, file=\"content.md\", from=(\d+)\) ──", said)
+    last = re.search(r"── content\.md: lines 1-(\d+) of \d+ ──", said)
+    check("... the pointer is the line after the block's last one",
+          nxt and last and int(nxt.group(1)) == int(last.group(1)) + 1 == (sc.get("mcp") or {}).get("next_from"),
+          "%s %s next_from=%s" % (nxt and nxt.group(1), last and last.group(1), (sc.get("mcp") or {}).get("next_from")))
+    more = mcp.tool_read({"dir": sc["dir"], "from": int(nxt.group(1))}) if nxt else {}
+    mt = "".join(b.get("text") or "" for b in more.get("content") or [] if b.get("type") == "text")
+    check("... and read(dir, from=next) goes on from there",
+          nxt and ("── content.md: lines %s-" % nxt.group(1)) in mt, mt[:120].replace("\n", " | "))
+    again = mcp.tool_read_url({"url": s.url("/fill"), "inline_images": True})
+    a_chars, a_bytes, a_lines = counted(again["content"])
+    check("inline_images alone: within the block as well",
+          a_chars <= 7900 and a_bytes <= 9980 and a_lines <= 495,
+          "%d chars, %d bytes, %d lines" % (a_chars, a_bytes, a_lines))
 finally:
     s.close()
 

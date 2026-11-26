@@ -8,6 +8,13 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **An MCP result with pictures or screenshots stays within the block** (KNOWN-ISSUES 273): the notes the server
+  adds after the text (pictures not attached, the screens and their captions) and the image blocks were not counted
+  against the 7 900 characters, so a page near the limit with `inline_images` and `screenshots` came back over it, and
+  Cline cuts a tool result's middle past 8 000. The blocks of one result are counted together now - the text of every
+  block, 16 characters for each image block, as Cline's SDK counts it - and the text is rendered again inside what
+  is left; the pointer to the next line names where the shorter block ends. 12 big pictures and two screenshot tiles:
+  7 993 -> 7 300 characters; 60 small pictures: 8 463 -> 7 769.
 - **A quote that ends inside a marker is found** (KNOWN-ISSUES 269): `--from "text"` compared a quote with each
   line in its folded form, a marker reduced to its type and name (`[img #3]`, `[tab · Name]`), so the words an agent
   has when its harness cut the answer in the middle of a picture's or a tab's line - `#299997 · 100x80 3K ·
