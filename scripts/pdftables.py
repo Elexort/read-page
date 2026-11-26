@@ -19,7 +19,8 @@ caption's lines (Table 3: ...) never are - they stay text where they stood; each
 the cell that holds its centre or else the nearest. A line of prose or a note that the grid's
 column lines cut at a mere space, where a cell holds two lines or more, stays text too, before
 or after the table (a form's instructions, a table's footnotes). Cells that one header spans are
-joined by the gap between their words alone. A table stands in place of its blocks only when its
+joined by the gap between their words alone; rows and columns of the page that the grid holds as
+one are split again (split_rows, split_cols). A table stands in place of its blocks only when its
 cells hold exactly their words: that check guards against a word lost or put in twice, not
 against a word in the wrong cell. On 29 PDFs (398 pages, 9 papers with known cells): no word lost
 or added (187 and 277 before), 142 caption lines of 142 (137), the papers' rows whole on a line
@@ -59,6 +60,8 @@ SPAN_GAP = 0.35        # of a word's height: two cells of a row whose words stan
 BOX_CUTS = True        # a table whose box runs through a word of the page is left as text
 CUT_LINES = True       # a line the column lines cut at a mere space, in a cell of two lines, is text
 SPLIT_ROWS = True      # two rows of the page in one row of the grid are two rows (split_rows)
+SPLIT_COLS = True      # columns of the page in one column of the grid are columns (split_cols)
+COL_EDGE = 1.0         # pt: the words of one column of the page share an edge (left, right or middle) this close
 NUMBER = re.compile(r"^[-+−–±$€£(]?\d[\d.,]*%?\)?[*†‡§]*$")
 TICK = 0.5             # seconds between the words of the process's pace while nothing else is said
 
@@ -205,14 +208,16 @@ def _phrase_gap(lw, rw, dirs):
             and -1 <= rw[0] - lw[2] <= SPAN_GAP * (lw[3] - lw[1]))
 
 
-def mend(put, rows, dirs=None):
+def mend(put, rows, dirs=None, keep=()):
     """A cell that spans columns stands in the model's grid as several ("BLEU" over two columns,
     one value under both as "3.3 ·" and "1018" - which reads as two values). Two neighbouring cells
     of one line are one when the last word of the left one and the first of the right one stand
     as near as words of a phrase do (SPAN_GAP of the word's height, on one baseline), wherever the
     grid line runs: the text goes into the first and the second is left empty. Not cells of two
-    lines (a spanning line above cells of their own: joining them would mix the two), and not a
-    word on its side ("Caltech101" and "CIFAR-100" are two headers)."""
+    lines (a spanning line above cells of their own: joining them would mix the two), not a word
+    on its side ("Caltech101" and "CIFAR-100" are two headers), and not across a line of `keep`
+    (its index in the grid's xs): split_cols drew it between two columns of the page, whose names
+    may stand a word's space apart (GPT-3's "Med Large", 2 pt at a 6 pt font)."""
     out = [list(r) for r in rows or []]
     for r, row in enumerate(out):
         anchor = None
@@ -220,7 +225,7 @@ def mend(put, rows, dirs=None):
             left = anchor if anchor is not None else k
             one, two = str(row[left] or "").strip(), str(row[k + 1] or "").strip()
             lws, rws = put.get((r, k)), put.get((r, k + 1))
-            if not one or not two or "\n" in one or "\n" in two or not lws or not rws:
+            if not one or not two or "\n" in one or "\n" in two or not lws or not rws or k + 1 in keep:
                 anchor = None
                 continue
             lw, rw = max(lws, key=lambda w: w[2]), min(rws, key=lambda w: w[0])
@@ -307,6 +312,67 @@ def split_rows(put, ys):
             above = max([a[i - 1][1]] + [t[1] for v in cells for t in v if t[1] <= top + 0.5])
             extra.append((above + top) / 2.0)
     return sorted(set(ys) | set(extra)) if extra else ys
+
+
+def _one_column(ws):
+    """Do these words stand in one column of the page: their left edges, their right edges or their
+    middles within COL_EDGE of each other?"""
+    for edge in (lambda w: w[0], lambda w: w[2], lambda w: (w[0] + w[2]) / 2.0):
+        at = [edge(w) for w in ws]
+        if max(at) - min(at) <= COL_EDGE:
+            return True
+    return False
+
+
+def split_cols(put, xs):
+    """The grid's column lines with more where a column of the grid holds columns of the page
+    (KNOWN-ISSUES 209: GPT-3's Table H.1, its 30 columns in the model's 14 - "54.7 62.8 67.4 70.9
+    78.9" under "XL 2.7B 6.7B 13B 175B" in one cell). A column is cut at the gaps no word of its rows
+    crosses, from its first row or from its second (a header over several columns - "Zero-Shot" -
+    may cross them above the names), when that row has a word that is no number in every part,
+    every row under it is numbers alone, three at least with numbers in two parts, and each part's
+    words stand in one column of the page (_one_column). The page's columns there are 1.9-2.5 pt
+    apart at a 6 pt font - a word's space: the gap alone tells nothing, the shared edges and the
+    names do; a cell of two numbers under one name ("27.3 (0.4)" under "BLEU") stays one. Measured
+    2026-11-26 on the corpus with no time limit: the papers' rows with each cell its own 654 -> 726
+    of 889 (H.1 1 -> 59 of 65, Faster R-CNN's Table VI 1 -> 7, ResNet's Table 10 0 -> 8), no other
+    page's tables changed. Returns (xs, the indices in it of the lines drawn)."""
+    extra = []
+    for c in range(len(xs) - 1):
+        rows = defaultdict(list)
+        for (r, cc), ws in put.items():
+            if cc == c and ws:
+                rows[r].extend(ws)
+        for s in sorted(rows)[:2]:
+            under = [r for r in rows if r > s]
+            if len(under) < 3 or not all(NUMBER.match(w[4]) for r in under for w in rows[r]):
+                continue
+            ws = sorted((w for r in rows if r >= s for w in rows[r]), key=lambda w: w[0])
+            cuts, right = [], ws[0][2]
+            for w in ws[1:]:
+                if w[0] > right and xs[c] < (right + w[0]) / 2.0 < xs[c + 1]:
+                    cuts.append((right + w[0]) / 2.0)
+                right = max(right, w[2])
+            if not cuts:
+                continue
+            bounds = [-1e9] + cuts + [1e9]
+
+            def part(w):
+                return bisect.bisect_right(bounds, (w[0] + w[2]) / 2.0) - 1
+            parts = defaultdict(list)
+            for w in ws:
+                parts[part(w)].append(w)
+            if ({part(w) for w in rows[s] if not NUMBER.match(w[4])} != set(range(len(cuts) + 1))
+                    or sum(1 for r in under if len({part(w) for w in rows[r]}) >= 2) < 3
+                    or not all(_one_column(p) for p in parts.values())):
+                continue
+            extra += cuts
+            break
+    if not extra:
+        return xs, set()
+    new = sorted(set(xs) | set(extra))
+    drawn = set(extra)
+    return new, {i for i, x in enumerate(new) if x in drawn}
 
 
 def alone(lines, n):
@@ -407,8 +473,14 @@ def page_tables(doc, i):
             around[k] = ("".join(said[key] + "\n" for key in up),
                          "".join(said[key] + "\n" for key in sorted(gone) if key not in up))
             notes.append("%d lines of prose kept out of a table" % len(gone))
+        keep = set()
+        if SPLIT_COLS:
+            cols_at, keep = split_cols(put, xs)
+            if keep:
+                xs = cols_at
+                put = fill(ws, xs, ys)
         rows = [[cell_text(put.get((r, c), ())) for c in range(len(xs) - 1)] for r in range(len(ys) - 1)]
-        md = gfm_table(mend(put, rows, dirs))
+        md = gfm_table(mend(put, rows, dirs, keep))
         if md and wordbag(md) == wordbag(" ".join(w[4] for w in ws)):
             tables[k] = md
         elif md:

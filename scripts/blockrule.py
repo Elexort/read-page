@@ -25,6 +25,8 @@ ITEM = re.compile(r"\s*([*+-]|\d+[.)])\s")
 URL_DEBRIS = re.compile(r"\]\([^)\s]*\)?|<?\b(?:https?|ftp)://[^\s>)\]]+>?")
 TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$")    # ---|--- under a header
 HEADING = re.compile(r"#{1,6}\s+\S")
+# a tab's or a section's marker (tabs.py) heads its panel as a heading does, and stands beside it
+MARKER = re.compile(r"\\?\[(tab|section|select) · [^\n]*\]\s*$")
 # a banner says one of these and is short; a long paragraph about privacy is prose
 BOILER = re.compile(r"(?i)cookie|privacy|copyright|©|all rights reserved|subscribe|newsletter|"
                     r"sign(ed)? (in|up|out)|"
@@ -89,6 +91,8 @@ def kind(b, ws=None):
         return "code"
     if len(lines) == 1 and HEADING.match(s):
         return "heading"
+    if len(lines) == 1 and MARKER.match(s):
+        return "marker"
     items = [ln for ln in lines if ITEM.match(ln)]
     # the words around the pictures decide: a picture's alt is not a link, and a link that only
     # wraps a picture (a thumbnail to its full size) is not navigation
@@ -119,7 +123,7 @@ def kind(b, ws=None):
     return "short"
 
 
-def restore(content, page, base=""):
+def restore(content, page, base="", out=()):
     """The text with the dropped blocks of page.md back in place, and the numbers for the manifest:
     {"restored": blocks put back, "restored_bytes": their size, "pictures": pictures put back,
     "outside": bytes still only in page.md}. A text that already holds every block comes back
@@ -128,7 +132,9 @@ def restore(content, page, base=""):
     Pictures follow their blocks: a picture block between shown blocks goes back
     where it stood, and a picture the extractor took out of a paragraph it kept goes back right
     after that paragraph. A picture next to a menu or a footer stays out with it. `base` resolves
-    page.md's relative addresses, so the same picture is recognised in both files."""
+    page.md's relative addresses, so the same picture is recognised in both files. `out` are texts
+    that stay in page.md alone (a hidden tab panel too long for the text): a block of theirs is not
+    put back."""
     info = {"restored": 0, "restored_bytes": 0, "pictures": 0, "outside": 0}
     if not (content or "").strip() or not (page or "").strip() or len(page) > MAX_PAGE:
         return content, info
@@ -136,6 +142,9 @@ def restore(content, page, base=""):
     pw = [words(b) for b in pb]
     cw = words(content)
     have = set(runs(cw))
+    away = set()
+    for t in out or ():
+        away.update(runs(words(t)))
     short = set()
     for n in range(1, K):
         short.update(" ".join(cw[i:i + n]) for i in range(len(cw) - n + 1))
@@ -157,10 +166,23 @@ def restore(content, page, base=""):
     back, seen = [False] * len(pb), set()
     for i, k in enumerate(kinds):
         if kept[i] is False and k in BACK:
+            rs = runs(pw[i]) if away else []
+            if rs and sum(1 for r in rs if r in away) / len(rs) >= 0.5:
+                continue                       # a block of a text that stays in page.md
             key = " ".join(pw[i])
             if key not in seen:                # a paragraph the page repeats goes back once
                 seen.add(key)
                 back[i] = True
+    for i in range(len(pb)):                   # a marker goes with the text beside it, kept or put back
+        if kept[i] is False and kinds[i] == "marker":
+            near = []
+            for step in (1, -1):
+                j = i + step
+                while 0 <= j < len(pb) and (kinds[j] == "marker" or kept[j] is None):
+                    j += step
+                if 0 <= j < len(pb):
+                    near.append(j)
+            back[i] = any(back[j] or (kept[j] and len(pw[j]) >= K) for j in near)
     for i in range(len(pb) - 1, -1, -1):       # backwards: an h2 above an h3 above a paragraph
         if kept[i] is False and kinds[i] == "heading":
             j = i + 1

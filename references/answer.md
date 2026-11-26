@@ -1,7 +1,7 @@
 # The answer, its files and its rules
 
 What `SKILL.md` says in a line, in full: the answer, the files it points at, every status, every
-flag, the privacy and network rules, the limits, cookies, pictures and video.
+flag, the privacy and network rules, the limits, cookies, pictures, tabs and video.
 
 ## The answer
 
@@ -62,7 +62,7 @@ so a file tool that stops at 2 000 still sees every word.
 | `blocked` | an anti-bot wall: a challenge header or markup, a wall's words (20 languages), or HTTP 403/419/429/451 | follow `advice`: `--allow-external` for a public URL; once the readers were stopped too, no flag opens it (`--alternate` opened none of 8 measured walls) - another source, or the user |
 | `login_required` | an account is needed (a password form with its sign-in label on a short page, a sentence of a wall - "sign in to continue", "for subscribers only" - in 20 languages, redirect to /login, 401/407) | not this skill: the user's own browser, or their paste |
 | `not_found` | 404 or a soft 404 (a 200 page that says it is not there, in 20 languages: in its title or heading, or with few words; the browser's page counts); the archive was tried with `--allow-external` | report it |
-| `empty` | no usable text: an app shell, an error stub, or a binary body; a document with no word of its own; a file named as an archive that is none (a `.doc` saved as `.docx`: `advice` says what it is) | follow `advice`: `--alternate` when the browser has not rendered it, `--screenshots` when it has; for a file that is no archive, what reads it |
+| `empty` | no usable text: an app shell, an error stub, or a binary body; a document with no word of its own; a file named as an archive that is none (a `.doc` saved as `.docx`: `advice` says what it is); a page whose text is a loading message where its content goes and little else (`Loading organization limits...` beside under 150 words: the content its scripts fetch never came - `signals.loading`, quoted in `reason:`) | follow `advice`: `--alternate` when the browser has not rendered it, `--screenshots` when it has; for a file that is no archive, what reads it; for a loading message, a page behind a sign-in most often: "When nothing works" |
 | `media_only` | the URL *is* a file (image/audio/video), whole; it is saved, not converted | the text names the file: open it |
 | `too_large` | the file or page is over the cap, or a document or a media file was still arriving when its time ran out | the `reason:` line names the cap, or how much arrived; `--download` lifts policy limits and the time limit |
 | `error` | network, DNS, timeout; a transfer the server stopped (a stub, or a document or a media file stuck halfway); the server's own HTTP 4xx/5xx page (kept as the text); or an archive cut or damaged (a DOCX, an EPUB, a ZIP) whose whole members - and the one it was cut in, as far as it arrived, where a reader can take one in part - hold under 40 words of their own (`signals.broken_archive`) | retry later; for a public page `--allow-external` also tries a reader and the archive; for a cut or damaged archive what `advice` says - a whole copy of a file on this machine, `--refresh` for a server's |
@@ -81,7 +81,16 @@ share is named only where it decides something, and `content.cover` keeps it for
 early, and the advice says how to get the rest. `signals.paywall` (and an advice saying so) is a page that says it is paywalled - schema.org's
 `isAccessibleForFree: false` in its JSON-LD or microdata, with the `cssSelector` of the hidden part when it names one -
 while the status stays `ok`: the text is what the server sent, the whole article a script hides or only the part open
-to everyone, and the page cannot tell which; a container named `paywall` is no such word (free pages carry them).
+to everyone, and the page cannot tell which; a container named `paywall` is no such word (free pages carry them). A
+paywalled page whose text is also under a third of its words is the part open to everyone and no more: the block rule
+has put back every paragraph `page.md` has, so the rest of `page.md` is the site's menus and links. Its first line
+says `paywalled: the rest of the article is not in the page` in place of `maybe a fragment`, and the answer shows
+`content.md`, with no `next:` line leading on through the menus (Spiegel's and Le Monde's paywalled articles, the
+bench's two paywalled fragments: a model read on through `page.md` and could not tell whether the article was hidden
+or absent). A deep address whose redirects end on the site's home page (`groq.com/pricing` went to `groq.com/`) is
+`ok` with an advice that says so - the page asked for may be gone or moved - and `signals.redirect_root`; the home
+page by another name (`/index.html`, `/home`, `/en/`) is no such case, and none of 292 addresses of the bench, the
+corpus and the campaign was.
 `charset gb18030 (guessed)` there means the page named no encoding and its text was read by
 what its characters are (`guessed, doubtful` when little text, two readings alike or a reading that fits no language
 well make it a close call: some characters, or the whole alphabet, may be wrong - nothing an option changes; the same
@@ -251,6 +260,43 @@ line. A scanned PDF's pages are read each with the pack of the script tesseract 
 ([documents.md](documents.md#ocr-on-when-tesseract-is-there)). The `ocr:`
 line names the picture, the engine and the pass - or why there is no text: no such picture, not
 on disk, no OCR engine.
+
+## Tabs, sections and selects
+
+A page shows one tab of a set and folds its other panels and sections away; the text says where each one is and
+what state it is in, with markers of one grammar - the type, the state, what more there is to say, the name last:
+
+```
+[tab · shown · Free Plan Limits]
+[tab · hidden, but extracted · Developer Plan Limits]        its text follows, as the page has it
+[tab · loads on click, not extracted · Batch Limits]         not in the page: only a click would fetch it
+[tab · hidden, but extracted · 6.0 KB, too long for here: page.md from line 410 · Go]
+[section · hidden, but extracted · Specifications]           a closed <details>, a collapsed accordion
+[select · chosen: EU · also US, APAC · Region]
+```
+
+A hidden panel's text is in `content.md` under its marker - a FAQ's answers are folded by default, a plan's table is
+what was asked - unless it is over 4 KB: then it stays in `page.md`, and the marker names its line there (the largest
+hidden panel of the 34 pages measured was 3.4 KB, a quickstart's other way to sign in). `page.md` has every panel under
+its marker, the browser's copy too. A tab that loads on click is named, not extracted: this skill clicks nothing.
+`signals.tabs` counts them all.
+
+What is marked is the main content's: nothing inside a nav, a header or footer, an aside, a form or a dialog, by tag
+or by role. A tab set is `role=tablist` with its `role=tab`s and their panels (`aria-controls`, `aria-labelledby`, or
+the tabpanels in order); a set of links is navigation and stays as it is. The shown tab is the one `aria-selected`,
+else `data-state=active`, else the one panel not hidden, else the first. A section is a closed `<details>` with a
+summary, or a button with `aria-expanded` whose `aria-controls` region the page holds as text - not a menu of links or
+a form folded away (a responsive menu, a feedback popover). A table whose header cell holds two to eight buttons and
+nothing else has tabs of its own (Groq's plans: the shown tab is named above the table, the others below it). A select
+names its chosen option and five others. A panel keeps its place and its attributes, but those that hide it; the
+engines are weighed without the markers and without the text they did not see before, so no engine is chosen by them.
+
+Not marked yet: tabs made of radio inputs and CSS alone (MkDocs Material, sphinx-inline-tabs), groups of buttons
+elsewhere (on the 34 pages most were feedback buttons, toolbars and players), and the short panels of a tab box an
+extractor drops whole (Docusaurus's examples: their code and prose come back by the block rule, with their markers;
+a five-word panel does not). Measured 2026-11-26 on 34 public pages with tabs, accordions or `<details>` in their main
+content, and on 109 saved pages of the bench and the corpus read offline before and after: the 89 with nothing to
+mark came back the same, file for file.
 
 ## Video
 

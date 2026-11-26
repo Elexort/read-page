@@ -117,6 +117,7 @@ import screens                                                      # noqa: E402
 import settle                                                       # noqa: E402
 import siteapi                                                      # noqa: E402
 import subtitles                                                    # noqa: E402
+import tabs                                                         # noqa: E402
 from engines import (crude_text, html2text_full, readability_text,  # noqa: E402,F401
                      trafilatura_text, visible_len, visible_text)
 
@@ -3061,6 +3062,7 @@ def inline_svg_text(md):
 
 
 _DD = {"worker": None, "spawn": None}     # this read's defuddle worker (ddworker.py)
+_TABS = {"last": None}                    # what the last extract() marked (tabs.py): its counts, its long panels
 
 
 def defuddle_worker(wait=True):
@@ -3392,16 +3394,34 @@ def extract(html, url, c, workdir, inner=None, want_all=False, page_html="", aft
     """
     html = pictures.real_srcs(html)       # a lazy picture's real address, for every extractor
     if not want_all and is_huge(html):
+        _TABS["last"] = None
         return huge_page(html, url, inner)
+    # tabs, collapsed sections and selects: a marker each, a hidden panel's text under its own (tabs.py);
+    # page.md's copy keeps a panel too long for the text whole
+    t_tabs = now()
+    marked, tabs_info = tabs.mark(html)
+    page_src = marked
+    if tabs_info["long"]:
+        page_src, page_info = tabs.mark(html, page=True)
+        tabs_info["page_long"] = page_info["page_long"]
+    if page_html:
+        page_html, page_info = tabs.mark(page_html, page=True)
+        tabs_info["page_long"] = page_info["page_long"]
+    original, html = html, marked
+    _TABS["last"] = tabs_info
+    if any(tabs_info["counts"].values()):
+        budget.record("tabs", t_tabs, note="%d KB of HTML" % (len(html) // 1024))
     t_dd = now()
     job = defuddle_start(html, workdir, url)
     t_py = now()
-    vis = visible_len(html)
+    # the engines are weighed without the markers: a marker's few words chose defuddle alone over the
+    # fuller texts on a page whose defuddle text was near half the page (Notion's pricing, 17 sections)
+    vis = visible_len(original)
     base = engines.page_base(html, url)   # page.md's links are whole addresses, as content.md's
     main_md, main_links = main_block(html, base)
     page = html2text_full(page_html, base=base) if page_html else ""
     if len(page.strip()) < 200:
-        page = inner if (inner and len(inner) > 500) else html2text_full(html, vis, base=base)
+        page = inner if (inner and len(inner) > 500) else html2text_full(page_src, vis, base=base)
     budget.record("page.md", t_py, note="%d KB of HTML, beside defuddle" % (len(html) // 1024))
     dd_cap = budget.cap(EXTRACT_FUSE, floor=0.5)
     dd, dd_why = job.result(dd_cap)
@@ -3422,7 +3442,10 @@ def extract(html, url, c, workdir, inner=None, want_all=False, page_html="", aft
     cands = {}
     if dd.strip():
         cands["defuddle"] = dd
-    cover_dd = (len(dd) / vis) if vis else 0.0
+    # ... nor the hidden panels it now reads: unhidden, arXiv's labs tools took defuddle past half the page,
+    # and its text without the paper's title and metadata won alone over the fuller one
+    extra = tabs_info.get("extra") or 0
+    cover_dd = (max(0, len(tabs.unmarked(dd)) - extra) / vis) if vis else 0.0
     if (want_all or not dd.strip() or cover_dd < 0.5) and budget.left() > 1:
         if after is not None:
             # on a weak laptop two extractor processes beside Chrome's start fight it for the CPU;
@@ -3433,7 +3456,7 @@ def extract(html, url, c, workdir, inner=None, want_all=False, page_html="", aft
         if rd.strip():
             cands["readability"] = rd
             if not dd.strip():
-                cover_dd = (len(rd) / vis) if vis else 0.0
+                cover_dd = (max(0, len(tabs.unmarked(rd)) - extra) / vis) if vis else 0.0
         tr = (got.get("trafilatura") or ("", ""))[0]
         if tr.strip():
             cands["trafilatura"] = tr
@@ -3446,18 +3469,22 @@ def extract(html, url, c, workdir, inner=None, want_all=False, page_html="", aft
         if crude.strip():
             cands["crude"] = crude
     if main_md and main_links >= 30:
-        best_clean = max((len(v.split()) for k, v in cands.items()
+        best_clean = max((len(tabs.unmarked(v).split()) for k, v in cands.items()
                           if k in ("defuddle", "readability", "trafilatura", "lynx", "w3m")), default=0)
-        if best_clean and len(main_md.split()) >= best_clean * 1.5:
+        if best_clean and len(tabs.unmarked(main_md).split()) >= best_clean * 1.5:
             cands["main"] = main_md
             trace("extract.main", words=len(main_md.split()), links=main_links, best=best_clean)
     if page.strip():
         cands["full"] = page
+    if any(tabs_info["counts"].values()):
+        # a converter escapes a marker's brackets (defuddle's Turndown: "\[tab · shown · X\]"): they are ours
+        cands = dict((k, tabs.unescape_markers(v)) for k, v in cands.items())
+        page = cands.get("full", tabs.unescape_markers(page))
     pool = [n for n in EXTRACTORS if n in cands]
     if pool and cover_dd >= 0.5 and "defuddle" in cands and "main" not in cands:
         primary_name, why = "defuddle", "defuddle covered half the visible text or more"
     elif pool:
-        primary_name = max(pool, key=lambda n: text_score(cands[n]))   # best-structured clean text
+        primary_name = max(pool, key=lambda n: text_score(tabs.unmarked(cands[n])))   # best-structured clean text
         why = "the best score (words + 2 a heading) of the clean texts"
     elif "crude" in cands:
         primary_name, why = "crude", "no extractor found text; tags stripped"
@@ -3482,13 +3509,26 @@ BROWSER_TIMEOUT_MS = 20000
 SHOT_WIDTH = 1280              # pages are laid out for this width; nothing is scaled after
 SHOT_HEIGHT = 1568             # the long edge a vision host keeps without resizing
 # the DOM as page.md sees it: what the page shows, without what it hides (menus folded away,
-# templates, the cookie dialog's other tabs); Chrome 105+ has checkVisibility
+# templates, the cookie dialog's other tabs); Chrome 105+ has checkVisibility. What the main content
+# folds away - a tab's panel, a closed <details>, a collapsed section's region - stays: tabs.py marks it
+# "hidden, but extracted", in page.md as in the text
 VISIBLE_DOM = """() => {
-  const src = document.documentElement, copy = src.cloneNode(true);
+  const src = document.documentElement;
   if (typeof src.checkVisibility !== 'function') return '';
+  const out = 'nav, header, footer, aside, form, dialog, template, [role=navigation], [role=banner], ' +
+              '[role=contentinfo], [role=complementary], [role=dialog], [role=alertdialog], [aria-modal=true]';
+  const keep = [];
+  const mark = el => { if (el && !el.closest(out)) keep.push(el); };
+  src.querySelectorAll('[role=tabpanel], details').forEach(mark);
+  src.querySelectorAll('[aria-expanded][aria-controls]').forEach(b => {
+    for (const id of (b.getAttribute('aria-controls') || '').split(/\\s+/)) if (id) mark(document.getElementById(id)); });
+  const kept = new Set(keep);
+  const inKept = el => { for (let p = el; p; p = p.parentElement) if (kept.has(p)) return true; return false; };
+  const copy = src.cloneNode(true);
   const a = src.querySelectorAll('body *'), b = copy.querySelectorAll('body *');
   if (a.length !== b.length) return '';
   for (let i = a.length - 1; i >= 0; i--) {
+    if (kept.size && inKept(a[i])) continue;
     if (a[i].checkVisibility({checkVisibilityCSS: true, visibilityProperty: true})) continue;
     if (getComputedStyle(a[i]).display === 'contents') continue;     // no box of its own, children shown
     if (b[i].parentNode) b[i].parentNode.removeChild(b[i]);
@@ -3622,6 +3662,38 @@ STATIC_SHELL = re.compile(r"(?is)<(div|main)\b[^>]*\bid=[\"'](root|app|__next|__
 # and the same on one (a GitHub issue). No wider rule held: of 26 more script-heavy pages under
 # 2 000 words the browser added half as much again on four and lost text on two.
 THIN_APP_WORDS = 200
+# A line of its own that says the content is still coming, and little else in the text: the page's scripts fetch
+# what it shows. console.groq.com/settings/limits (signed in) read `ok` with its intro and "Loading organization
+# limits...". Measured 2026-11-26: 294 pages' text (the bench, the corpus, the campaign, the tab set) had 5 such
+# lines - arXiv's abstracts and weather.gov beside 480-870 words, Pinterest's "Loading today's picks..." beside 79
+# (a script's shell, which the browser fills) and Groq's beside 61-100
+LOADING_LINE = re.compile(r"(?i)^\W{0,3}(loading|please wait|fetching|retrieving|загрузка|подождите|cargando|"
+                          r"chargement|wird geladen|caricamento|carregando|読み込み中|加载中|載入中|로딩)\b[^\n]{0,60}?"
+                          r"(\.{2,}|…)\W{0,3}$")
+LOADING_WORDS = 150
+
+
+def loading_stub(text):
+    """The loading message the text holds where its content goes, when little else is there; else ""."""
+    if not text or len(text) > 20000:
+        return ""
+    lines = [ln.strip() for ln in text.split("\n")]
+    hits = [ln for ln in lines if LOADING_LINE.match(ln)]
+    if not hits:
+        return ""
+    rest = sum(len(ln.split()) for ln in lines if not LOADING_LINE.match(ln))
+    return hits[0].strip("#*_ ")[:120] if rest <= LOADING_WORDS else ""
+
+
+def lands_on_root(asked, final):
+    """A deep address that a redirect took to the home page of a site: the page asked for may be gone (groq.com/pricing
+    went to groq.com/). The home page by another name (/index.html, /home, /en/) is no such case. On 292 addresses of
+    the bench, the corpus and the campaign none did (30 redirected: moved pages, sign-ins, a locale)."""
+    a, b = urllib.parse.urlsplit(asked or ""), urllib.parse.urlsplit(final or "")
+    if not b.netloc or (b.path or "/") != "/" or b.query:
+        return False
+    path = (a.path or "/").rstrip("/")
+    return bool(path) and not re.match(r"(?i)^/((index|default|home|start|main)(\.\w+)?|[a-z]{2}([-_][a-z]{2})?)$", path)
 THIN_APP_STATE = 40000
 _STATE_GLOBAL = re.compile(r"__NEXT_DATA__|__NUXT__|__INITIAL_STATE__|__APOLLO_STATE__|__PRELOADED_STATE__"
                            r"|window\.__[A-Za-z_]+\s*=\s*[\[{]")
@@ -9955,6 +10027,7 @@ def read(args):
         return finish(workdir, manifest, t0, args, None)
 
     raw_name, text, page_text, engine, visible, html = "raw.bin", "", "", "", None, ""
+    tabs_info = None                       # the markers of the extraction whose text this is (tabs.py)
     route_skipped = False                  # a #/ route's landing page, left for the browser
     browser_inside = ""                    # where the browser reached inside, when its text was dropped
     visible_words = None
@@ -10161,6 +10234,7 @@ def read(args):
                 text, engine, cands, page_text = extract(
                     html, f["final"] or url, c, workdir, want_all=args.alternate,
                     after=_BROWSER_UP if early_render is not None else None)
+                tabs_info = _TABS["last"]
                 trace("extract", engine=engine, chars=len(text),
                       cands=",".join("%s:%d" % (k, len(v)) for k, v in (cands or {}).items()),
                       visible=visible)
@@ -10216,8 +10290,9 @@ def read(args):
     has_scripts = bool(html and re.search(r"(?i)<script\b", html))
     thin_app = bool(html and is_page and has_scripts and len(text) >= 400 and word_count < THIN_APP_WORDS
                     and shipped_state(html) >= THIN_APP_STATE)
+    loading_http = bool(html and is_page and loading_stub(text))   # its scripts fetch the content: the browser's turn
     weak_http = bool(html and not network_fail and not f.get("partial") and (
-        static_shell or len(text) < 400 or thin_app
+        static_shell or len(text) < 400 or thin_app or loading_http
         or ((visible or 0) > 3000 and len(text) < (visible or 0) * 0.05)))
     # a 404, 410 or 5xx is the server's answer, and a browser gets the same one (a 404 took 4.4 s
     # of browser for its error page); the archive and the readers are the rescue there - unless
@@ -10277,6 +10352,7 @@ def read(args):
             visible2, words2 = len(vis2), len(vis2.split())
             t2, eng2, cands2, page2 = extract(r["html"], r.get("final") or url, c, workdir, inner=r.get("inner"),
                                               page_html=r.get("visible") or "", want_all=args.alternate)
+            tabs2 = _TABS["last"]
             b_words = words_of(t2)
             b_wall = wall_signal({}, r["html"], title_of(r["html"]), first_heading(r["html"]), t2, b_words)
             if args.alternate:
@@ -10303,6 +10379,7 @@ def read(args):
                                    if hash_route else "the HTTP text was weak" if text_reason else "screenshots only"))
             if take:
                 text, engine, page_text, html, visible = t2, eng2, page2, r["html"], visible2
+                tabs_info = tabs2
                 visible_words = words2
                 source, source_code = "browser", r.get("status")
                 if source_code is None and f["status"]:
@@ -10331,6 +10408,7 @@ def read(args):
         # the browser did not read the route (none would start, or it failed): the landing page
         # is still better than nothing, and the answer says it is the server's page
         text, engine, cands, page_text = extract(html, f["final"] or url, c, workdir)
+        tabs_info = _TABS["last"]
         manifest["chain"]["tried"].append("extract:" + (engine or "none"))
         manifest["candidates"] = [{"engine": k, "chars": len(v)} for k, v in cands.items()]
 
@@ -10435,10 +10513,13 @@ def read(args):
     pic_base = image_base(html, f["final"] or url) if html else (f["final"] or url)
     text = inline_svg_text(text)
     restored = {}
+    tabs_info = tabs_info if source in ("http", "browser") else None
     if (html and text and page_text and source in ("http", "browser", "archive")
             and str(engine or "").split("(")[0].split(":")[0] in EXTRACTORS):
         t_bl = now()
-        text, restored = blockrule.restore(text, page_text, base=pic_base)
+        # a hidden panel too long for the text stays in page.md: its marker in the text says where
+        text, restored = blockrule.restore(text, page_text, base=pic_base,
+                                           out=[x["text"] for x in (tabs_info or {}).get("long") or []])
         budget.record("blocks", t_bl, note="+%d blocks" % (restored.get("restored") or 0))
         if restored.get("restored") or restored.get("pictures"):
             manifest["chain"]["tried"].append("blocks:+%d" % (restored.get("restored") or 0))
@@ -10453,8 +10534,9 @@ def read(args):
 
     # ---------------------------------------------------------------- artefacts
     manifest["page"] = page_meta(html, url)
-    # words, not characters: a page with 10 000 short comments used to look like a fragment
-    text_words = len((text or "").split())
+    # words, not characters: a page with 10 000 short comments used to look like a fragment; a marker of a tab
+    # or a section (tabs.py) is no word of the page's
+    text_words = len(tabs.unmarked(text or "").split())
     cover = round(min(1.0, text_words / visible_words), 3) if visible_words else None
     # "fragment" means more content exists that we did not take. A low cover alone is not enough:
     # nav-heavy pages (github trending, k8s docs) keep 10-30 % of the visible text legitimately.
@@ -10500,7 +10582,6 @@ def read(args):
         raw_path = take_body(f, raw_path)
 
     content_path = os.path.join(workdir, "content.md")
-    write_view(content_path, text or "")
     page_path = os.path.join(workdir, "page.md")
     # page.md is the whole page; the text stands in only when it is no page (a script shell the
     # browser filled, a site API's own page): fewer than half the text's words. Characters were
@@ -10508,6 +10589,11 @@ def read(args):
     # (SQLite, namu.wiki, opennet...) lose their menus and links to a copy of the text.
     whole = bool(page_text) and (len(page_text) >= len(text or "")          # no counting on a 16 MB spec
                                  or len(blockrule.words(page_text)) * 2 >= len(blockrule.words(text or "")))
+    if tabs_info and tabs_info.get("long"):
+        # a hidden panel too long for the text: its marker names the line of page.md where it is
+        page_view = answer.split_long_lines(short_data_uris(page_text if whole else (text or "")))
+        text = tabs.place_lines(text, page_view, tabs_info.get("page_long") or {})
+    write_view(content_path, text or "")
     write_view(page_path, page_text if whole else (text or ""))
 
     quality = {"defuddle": "high", "trafilatura": "high", "readability": "medium",
@@ -10527,6 +10613,9 @@ def read(args):
     if restored.get("outside"):
         manifest["content"]["outside"] = restored["outside"]
     manifest["signals"].update({"fragment": fragment, "js_shell": js_shell})
+    marked = dict((k, v) for k, v in ((tabs_info or {}).get("counts") or {}).items() if v)
+    if marked:
+        manifest["signals"]["tabs"] = marked        # tab sets, panels extracted, not extracted, too long; sections, selects
     if len(clean) >= 2:
         manifest["signals"]["extractors_agree"] = agree
     manifest["files"] = {"content": content_path, "page": page_path, "raw": raw_path}
@@ -10607,6 +10696,10 @@ def read(args):
         # API *is* the answer (a DOI resolver returns 143 characters of citation metadata), and so
         # are a document's few words of its own (a DOCX that is one formula: `E = mc^2`)
         manifest["status"] = "empty"
+    elif is_page and source in ("http", "browser") and loading_stub(text):
+        # what the page shows is its loading message: the content its scripts fetch never came
+        manifest["status"] = "empty"
+        manifest["signals"]["loading"] = loading_stub(text)
     else:
         manifest["status"] = "ok"
 
@@ -10620,7 +10713,9 @@ def read(args):
         "not_found": ("HTTP %s" % f["status"]) if f["status"] in (404, 410)
                      else "the text says the page is not there",
         "empty": ("binary body" if manifest["signals"].get("binary") else
-                  broke["reason"] if broke else ("no text found (%d words)" % word_count)),
+                  broke["reason"] if broke else
+                  "the page shows a loading message where its content goes: \"%s\"" % manifest["signals"]["loading"]
+                  if manifest["signals"].get("loading") else ("no text found (%d words)" % word_count)),
         "media_only": "the URL is a file, not a page",
         "too_large": ((manifest["signals"].get("limit") or "over the limit")),
         "ok": "%d words, engine %s" % (word_count, engine or "?"),
@@ -10692,6 +10787,13 @@ def read(args):
         elif manifest["signals"].get("ocr_error"):
             manifest["advice"] = ("this PDF is a scan and OCR does not start here (%s): look at the rendered "
                                   "pages in files.pages" % manifest["signals"]["ocr_error"])
+        elif manifest["signals"].get("loading"):
+            # the HTML is the page's frame; what it shows comes from its scripts, and did not
+            manifest["advice"] = (
+                "the content the page's scripts fetch did not arrive%s: a page behind a sign-in often does this, and "
+                "this skill cannot sign in - see \"When nothing works\" in SKILL.md" % (
+                    ", in the browser either" if browser_ran else "" if not browser_here
+                    else " (--alternate renders the page in the browser)"))
         elif browser_ran or not browser_here:
             # the browser has rendered it (or none is here): --alternate would only do it again
             manifest["advice"] = (("the page has no text as rendered: --screenshots shows what it draws"
@@ -10719,18 +10821,30 @@ def read(args):
     elif cut:
         manifest["advice"] = ("%s, so the text may stop early: --refresh tries again, --download "
                               "waits as long as the server takes" % cut_said(f, size))
+    elif manifest["signals"].get("paywall") and fragment:
+        # the teaser of a paywalled article beside the site's menus: every paragraph page.md has is in the text
+        # (the block rule put back what the extractor dropped), so the rest is not in the page at all
+        manifest["advice"] = ("the page says it is paywalled (schema.org isAccessibleForFree: false), and only the "
+                              "part open to everyone is in it: the text is %d%% of the page's words and the rest of "
+                              "the article is not in the page - page.md holds the site's menus and links, not more "
+                              "of it; this skill cannot subscribe" % int(round((cover or 0) * 100)))
     elif manifest["signals"].get("paywall"):
         manifest["advice"] = ("the page says it is paywalled (schema.org isAccessibleForFree: false): the text is what "
                               "the server sent and may be only the part open to everyone, or the whole article a "
                               "script hides; this skill cannot subscribe")
-        if fragment:
-            manifest["advice"] += "; " + fragment_advice(cover)
     elif fragment:
         manifest["advice"] = fragment_advice(cover)
     elif state == "weak":
         manifest["advice"] = "the page mentions signing in; the text may be partial"
     elif manifest["status"] == "ok" and tables_said and tables_advice(_PDF):
         manifest["advice"] = tables_advice(_PDF)            # the read's own lists, not the ranges
+    final_url = str((manifest.get("url") or {}).get("final") or "")
+    if manifest["status"] == "ok" and is_page and lands_on_root(url, final_url):
+        # the answer said it only by its url: line, and a model took the home page for the page it asked for
+        manifest["signals"]["redirect_root"] = final_url
+        manifest["advice"] = ("the address redirected to the site's home page (%s): the page asked for may be gone "
+                              "or moved, and the text is the home page's" % final_url[:160]
+                              + ("; " + manifest["advice"] if manifest["advice"] else ""))
     if video_advice:
         # why the video gave no subtitles comes first: what follows is only what its page says
         manifest["advice"] = video_advice + ("; " + manifest["advice"] if manifest["advice"] else "")
@@ -10895,8 +11009,9 @@ def answer_view(manifest, workdir, asked="", continuing=False):
     last = (manifest or {}).get("_view")
     if continuing and last in VIEWS and os.path.isfile(os.path.join(workdir, last)):
         return last
-    if (manifest.get("signals") or {}).get("fragment") and os.path.isfile(os.path.join(workdir, "page.md")):
-        return "page.md"
+    sig = manifest.get("signals") or {}
+    if sig.get("fragment") and not sig.get("paywall") and os.path.isfile(os.path.join(workdir, "page.md")):
+        return "page.md"                   # a paywall's fragment is its teaser: page.md has no more of it
     return "content.md"
 
 

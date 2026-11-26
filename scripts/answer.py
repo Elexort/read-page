@@ -177,7 +177,11 @@ def header(manifest, view, total_lines, text_bytes):
             # blocks the extractor dropped and the text got back from page.md
             engine += " + %d block%s of page.md" % (content["restored"], "" if content["restored"] == 1 else "s")
         first.append(engine)
-        if signals.get("fragment"):
+        if signals.get("fragment") and signals.get("paywall"):
+            # a paywall's teaser beside the site's menus: page.md has no more of the article (the block rule put
+            # back every paragraph the extractor dropped), and its next: line led a model on through the menus
+            first.append("paywalled: the rest of the article is not in the page")
+        elif signals.get("fragment"):
             # the share only where it decides something: a text under a third of the page's words. On a
             # whole text "49% of the page" read as "half the content", and an agent kept re-reading
             # (menus, links and footers make the rest); content.cover keeps it in the manifest
