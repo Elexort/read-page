@@ -23,13 +23,13 @@ error, so a prompt-injected model cannot turn the tool into a general file reade
 
 ```
 read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?,
-         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?)
-read(dir, file?, from=1)
+         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, to?, probe?)
+read(dir, file?, from=1, to?)
 ```
 
 Arguments are the CLI flags without dashes: `--allow-external` -> `allow_external`, `--from` ->
 `from`, and so on; `inline_images` is the one argument the CLI does not have. An argument outside
-the schema, or a value a tool cannot use (`from: "abc"`), does not refuse the call: it is left out
+the schema, or a value a tool cannot use (`from: -3`), does not refuse the call: it is left out
 and the answer's `ignored:` line names it - an old `offset`, `limit` or `allow_images` among them -
 as the CLI does with a flag that is not its own. A misspelled argument (`allow_externl`) is the one
 meant. `read_url(..., ocr=N)` answers with the text drawn in picture N, as `--ocr N` does, and
@@ -54,8 +54,20 @@ the saved copy, with no network. A call that names no `file` goes on in the text
 (a named one becomes the text being read; `read_url` without `from` starts at `content.md`, or
 `page.md` for a fragment), so a model that drops `file` still reads the same text under the
 same line numbers. The full manifest is in `structuredContent` and in
-`dir/manifest.json`; `structuredContent.mcp` adds `file`, `from`, `next_from`, `total_lines` and
+`dir/manifest.json`; `structuredContent.mcp` adds `file`, `from`, `to`, `next_from`, `total_lines` and
 the picture counts.
+
+`from` takes a piece of text as well as a line number (both tools, as the CLI's `--from "text"`): the
+answer starts at the first line that holds it - whitespace folded, then without case; when several do,
+the first at or after where the last answer of that file started - and a marker is found by its type
+and name, a picture by its number: `from="[tab · Developer Plan Limits]"`, `from="[img #3]"`. No line
+holds it: the answer says so and shows the outline, `structuredContent` names no `next_from`.
+
+`to` (both tools) is the CLI's `--to`: the lines from `from` up to it at once, past one block, for a
+client that shows more - said to be sent, not shown, with the way on at the top and at the bottom in
+`read()`'s words: `read(dir, file="content.md", from=301, to=600)` for the next range, and
+`read(dir, file="content.md", from="<its words>")` for a tool that cut the answer. One before `from` is
+left out and named on the `ignored:` line.
 
 `read` behaves by file type:
 
@@ -64,6 +76,15 @@ the picture counts.
 | text (`content.md`, `page.md`, `manifest.json`, `raw.html`) | the block that starts at line `from`, inside the same budget, naming the next line. A line longer than a whole answer (a minified `raw.html`) shows its head and says so |
 | image (`img/03-alt.png`, `raw.jpg`) | a native `image` block and a caption `[WxH size] name` |
 | audio / video / other binary | metadata only (name, type, size); audio is attached only with `READ_PAGE_MCP_MEDIA=audio` |
+
+## A probe, for testing a client
+
+`read_url(url="probe", probe=N)` answers with N characters of numbered lines and nothing else, as
+`readpage.py --probe N` prints them, with no network - each line its number and how many characters stand
+before it, a head and a tail sentinel, ASCII - so what a client shows of a tool's result, and where it cut,
+can be read off what reaches the model (Cline's SDK runtime keeps about 3 985 characters at each end of
+8 000). `read_url(url="probe:N")` is a page of the same lines answered the normal way, and with `from` and
+`to` it shows what a range sends. It is for testing the skill, not for reading; SKILL.md does not name it.
 
 ## The header
 
@@ -98,7 +119,7 @@ context; three groups, the first one reached cuts:
 
 | Limit | Value | Who enforces it |
 |---|---|---|
-| the text | 9 980 bytes and 495 lines, as on the CLI | Codex, Roo Code, Cline (`answer.py`) |
+| the text | 7 900 characters, 9 980 bytes and 495 lines, as on the CLI | Cline (8 000 characters a tool result, MCP too), Codex, Roo Code (`answer.py`) |
 | one picture | PNG or JPEG; a long side over 1 568 px is scaled down, proportions kept; at most 3.75 MB, a heavier PNG becomes one JPEG at q95 | xAI takes only PNG and JPEG; Claude on Bedrock 5 MB of base64; 8 000 px, and ~2 000 px when a request has more than 20 pictures |
 | the whole answer | 25 000 tokens: the text plus `ceil(w/28)*ceil(h/28)` and ~150 for the path line a picture costs | Claude Code (measured: going over keeps the pictures but tells the model "OUTPUT TRUNCATED") |
 | | 256 pictures | Qwen 3.6-plus, for the whole request |

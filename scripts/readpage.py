@@ -4322,15 +4322,20 @@ class _ZipOut(object):
         self.dest, self.w, self.names, self.held = dest, None, [], []
         self.partial, self.lost = "", None     # the member read up to the cut; what lost strings cost
         self.strings = array.array("q")      # the shared strings a workbook's sheets hold, by index
+        # a workbook's sheets as its list names them, and the rows its cut sheet lost (_sheet_plan, _cut_rows)
+        self.sheets, self.cut_rows = None, None
 
     def add(self, name, data, partial=False):
         """One member; `partial`: what arrived of the one the archive was cut in (a sheet of it is
-        taken up to its last whole row). False when nothing of it can be read."""
+        taken up to its last whole row, and the rows it lost are noted). False when nothing of it can
+        be read."""
         sheet = bool(_XL_SHEET.match(name))
         if partial and sheet:
+            rows = _cut_rows(data)
             data = _cut_sheet(data)
             if data is None:
                 return False
+            self.cut_rows = dict(rows, part=name) if rows else None
         if partial:
             self.partial = name
         self.names.append(name)
@@ -4404,6 +4409,63 @@ def _cut_sheet(data):
     if not rows:
         return None
     return data[:rows.end()] + (b"" if rows.group(1) else b"</%ssheetData>" % p) + b"</%sworksheet>" % p
+
+
+_XL_ROW = re.compile(rb"<(?:\w{1,32}:)?row\b([^<>]{0,%d})>|</(?:\w{1,32}:)?row\s*>" % docreaders.TAG_MAX)
+_XL_ROW_R = re.compile(rb"\br\s*=\s*[\"'](\d{1,7})[\"']")
+_XL_DIMENSION = re.compile(rb"<(?:\w{1,32}:)?dimension\b[^<>]{0,%d}?\bref\s*=\s*[\"']([^\"'<>]{1,40})[\"']"
+                           % docreaders.TAG_MAX)
+SHEET_ROWS = 1048576                   # an Excel sheet's rows: a range past it is no extent
+
+
+def _cut_rows(data):
+    """What a sheet the archive was cut in lost: {"after": the last whole row's number (0: none), "to": the
+    sheet's last row by its extent, `<dimension ref="A1:G78954"/>` at its top - Excel and openpyxl write it,
+    so the total is known though the rows are gone - or None}; None when no row was lost (the cut came after
+    its rows). A row with no number of its own is the one after the row before it."""
+    after, last_open = 0, 0
+    for m in _XL_ROW.finditer(data):
+        if m.group(1) is not None:
+            r = _XL_ROW_R.search(m.group(1))
+            last_open = int(r.group(1)) if r else last_open + 1
+            if m.group(0).endswith(b"/>"):
+                after = last_open                    # <row r="5"/>: a whole row with no cells
+        else:
+            after = last_open
+    dim = _XL_DIMENSION.search(data[:4096])
+    to = None
+    if dim:
+        r = re.findall(rb"(\d{1,7})", dim.group(1).split(b":")[-1])
+        to = int(r[-1]) if r and 0 < int(r[-1]) <= SHEET_ROWS else None
+    if to is not None and to <= after:
+        return None                                   # every row its extent names arrived
+    return {"after": after, "to": to}
+
+
+def _sheet_plan(wb, rels):
+    """A workbook's sheets in its list's order, [{"name", "part"}] (part: the worksheet the relationship
+    names, "" for a chart sheet), from workbook.xml and its relationships as they arrived; None without
+    either."""
+    if not wb or not rels:
+        return None
+    targets = {}
+    for m in re.finditer(rb"(?is)<(?:\w{1,32}:)?Relationship\b[^<>]{0,%d}?/?>" % TAG_MAX, rels):
+        tag = m.group(0).decode("utf-8", "replace")
+        rid, target = _attr(tag, "Id") or "", _attr(tag, "Target") or ""
+        if (_attr(tag, "TargetMode") or "").lower() == "external" or not target:
+            continue
+        part = posixpath.normpath(target.lstrip("/") if target.startswith("/") else
+                                  posixpath.join("xl", urllib.parse.unquote(target))).lstrip("/")
+        targets[rid] = part if _XL_SHEET.match(part) else ""
+    plan = []
+    for m in re.finditer(rb"(?is)<(?:\w{1,32}:)?sheet\b[^<>]{0,%d}?/?>" % TAG_MAX, wb):
+        tag = m.group(0).decode("utf-8", "replace")
+        name = _attr(tag, "name")                      # unescaped
+        rid = next((v for _k, v in re.findall(r'\b(\w{1,32}:id)\s*=\s*"([^"]*)"', tag)), "")
+        if not name or rid not in targets:
+            return None                                # a sheet the relationships do not name: no plan
+        plan.append({"name": name, "part": targets[rid]})
+    return plan or None
 
 
 def _strings_close(out, names):
@@ -4492,6 +4554,12 @@ def _package_close(out, kind, names):
         with open(held[name], "rb") as fh:
             return fh.read()
     main = _PACKAGE_MAIN[kind]
+    if kind == "xlsx":
+        # the sheets the workbook's list names, as it arrived: a sheet the cut took whole is named where it
+        # would stand (office_fast), before the list is made to hold together without it
+        rels_main = "xl/_rels/workbook.xml.rels"
+        plan = _sheet_plan(part(main) if main in held else b"", part(rels_main) if rels_main in held else b"")
+        out.sheets = [dict(e, here=e["part"] in names) for e in plan] if plan else None
     dropped, sheets = {}, sorted((n for n in names if re.match(r"xl/worksheets/sheet\d+\.xml$", n)),
                                  key=lambda n: int(re.sub(r"\D", "", posixpath.basename(n)) or 0))
     made = []                        # index parts written here, as the package lacked them
@@ -4544,7 +4612,7 @@ def _package_close(out, kind, names):
                                              % (_RELS, main)]))
         names = names | {"_rels/.rels"}
     if "[Content_Types].xml" in held:
-        out._write("[Content_Types].xml", part("[Content_Types].xml"))
+        out._write("[Content_Types].xml", _types_kept(part("[Content_Types].xml"), names))
     else:
         exts = sorted({n.rsplit(".", 1)[-1].lower() for n in names if "." in posixpath.basename(n)} & set(_DEFAULT_TYPES))
         over = []
@@ -4569,6 +4637,19 @@ def _rels_doc(rels):
 
 def _xml_attr(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
+
+
+def _types_kept(data, names):
+    """A package's [Content_Types].xml with every Override for a part the archive lacks taken out: openpyxl
+    reads the shared strings its types name, and a workbook cut in its first sheet - no sheet, so no strings
+    made for it - read nothing ("There is no item named 'xl/sharedStrings.xml'")."""
+    have = {n.lower() for n in names}                 # a part's name is not case-sensitive in a package
+
+    def keep(m):
+        part = urllib.parse.unquote(_attr(m.group(0).decode("utf-8", "replace"), "PartName") or "").lstrip("/")
+        return m.group(0) if not part or part.lower() in have else b""
+    return re.sub(rb"(?is)<Override\b[^<>]{0,%d}/>|<Override\b[^<>]{0,%d}>\s*</Override\s*>" % (TAG_MAX, TAG_MAX),
+                  keep, data)
 
 
 def _rels_kept(name, data, names):
@@ -4742,7 +4823,8 @@ def zip_salvage(path, dest, until=None):
             pos = end
     out.close()
     return {"how": how, "members": found, "whole": whole, "broken": broken, "at": at, "size": size,
-            "more": more, "all_members": toc, "partial": out.partial, "lost": out.lost}
+            "more": more, "all_members": toc, "partial": out.partial, "lost": out.lost,
+            "sheets": out.sheets, "cut_rows": out.cut_rows}
 
 
 def zip_mend(path, dest, until=None):
@@ -5011,12 +5093,45 @@ def docx_para(p, qn):
     return "".join(out)
 
 
-def office_fast(path, sub):
+LOST = tabs.STATE["cut"]               # the state of what a cut archive lost, in its markers
+LOST_MARK = re.compile(r"\[(?:rows|sheet) · %s · [^\]\n]*\]" % re.escape(LOST))
+
+
+def _xlsx_cut(sheets, sheet, out, broke):
+    """A workbook's sheets written by `sheet(ws)` in its list's order; one the archive was cut in says after its last
+    row which rows it lost, `[rows · lost in the cut · 54-78954 · Third]` (`54-?` with no extent), and one the cut
+    took whole stands where it would, `[sheet · lost in the cut · Fourth]` - its name is in workbook.xml, which
+    Excel writes at the top. A sheet is known by its part (openpyxl's read-only sheet keeps it), else by its title."""
+    cut = broke if (broke or {}).get("how") == "cut" else {}
+    plan, rows = cut.get("sheets") or [], cut.get("cut_rows")
+    by_part = {getattr(ws, "_worksheet_path", "") or "": ws for ws in sheets}
+    by_name = {ws.title: ws for ws in sheets}
+    done = set()
+
+    def one(ws):
+        sheet(ws)
+        done.add(id(ws))
+        if rows and (getattr(ws, "_worksheet_path", "") or "") == rows["part"]:
+            out.append(tabs.marker("rows", "cut", ws.title, "%d-%s" % (rows["after"] + 1, rows["to"] or "?")))
+    for entry in plan:
+        ws = by_part.get(entry["part"]) if entry["part"] else None
+        ws = ws if ws is not None else (by_name.get(entry["name"]) if entry["here"] else None)
+        if ws is not None and id(ws) not in done:
+            one(ws)
+        elif entry["part"] and not entry["here"]:
+            out.append(tabs.marker("sheet", "cut", entry["name"]))
+    for ws in sheets:
+        if id(ws) not in done:
+            one(ws)                        # a sheet the list does not name (it was lost, and made here)
+
+
+def office_fast(path, sub, broke=None):
     """The fast path: a library that reads the format directly, no markitdown startup.
 
     The libraries check the file extension, and our download is raw.zip - so feed them bytes.
     What stopped it is in _OFFICE: a member that does not unpack ("damaged"), or the library not
-    installed here ("missing", its name on PyPI).
+    installed here ("missing", its name on PyPI). `broke`: what was wrong with the archive (zip_salvage) -
+    a workbook cut short says where it lost its rows and its sheets (_xlsx_cut).
     """
     import io
     import zipfile
@@ -5084,12 +5199,14 @@ def office_fast(path, sub):
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
             out = []
-            for ws in wb.worksheets:
+
+            def sheet(ws):
                 out.append("## " + ws.title)
                 for row in ws.iter_rows(values_only=True):
                     cells = ["" if v is None else str(v) for v in row]
                     if any(cells):
                         out.append(" | ".join(cells))
+            _xlsx_cut(wb.worksheets, sheet, out, broke)
             return "\n".join(out)
         if sub == "pptx":
             from pptx import Presentation
@@ -5925,7 +6042,7 @@ def own_doc(path, kind, pictures=None):
     if rc == -1:
         budget.record("docreader", t0, budget.ended(CONVERTER_TIMEOUT, secs), own=CONVERTER_TIMEOUT, given=secs,
                       note=kind)
-        return "", "the %s reader did not finish in %.0f s and was stopped" % (kind.upper(), secs or 0)
+        return "", "the %s reader did not finish in %.0f s and was stopped" % (kind.partition("+")[0].upper(), secs or 0)
     try:
         if rc != 0:
             raise ValueError("exit code %s" % rc)
@@ -6724,7 +6841,7 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
     sub = zip_subtype(path) if kind == "zip" else ""
     secs = budget.cap(CONVERTER_TIMEOUT, floor=1.0)
     if sub in ("docx", "xlsx", "pptx"):
-        fast = office_fast(path, sub)
+        fast = office_fast(path, sub, state["broke"])
         if len(fast.strip()) <= 5 and not state["broke"] and _OFFICE.get("damaged"):
             # a member python-docx, python-pptx or openpyxl met does not unpack: the ones that do
             dest = os.path.join(workdir, "_mended-%s.zip" % hashlib.sha1(
@@ -6750,7 +6867,7 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 if not info["whole"]:
                     return "", ""
                 path = dest
-                fast = office_fast(path, sub)
+                fast = office_fast(path, sub, info)
         if len(fast.strip()) > 5:
             return fast, ""
     if kind == "rtf" or sub in ("odt", "ods", "odp"):
@@ -6762,7 +6879,11 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
         pics = os.path.join(workdir, RTF_PICTURES) if kind == "rtf" and not name else None
         if pics:
             shutil.rmtree(pics, ignore_errors=True)
-        md, why = own_doc(path, "rtf" if kind == "rtf" else sub, pics)
+        broke = state["broke"] or {}
+        # an archive cut in its content.xml, or before it: where the XML breaks is the cut, and a spreadsheet says
+        # what it lost (docreaders._cut_lost)
+        cut = "+cut" if broke.get("how") == "cut" and "content.xml" not in (broke.get("whole") or []) else ""
+        md, why = own_doc(path, ("rtf" if kind == "rtf" else sub) + cut, pics)
         again = _by_headers(path, workdir, state) if kind == "zip" and not md.strip() and \
             "could not be unpacked" in why else None
         if again:
@@ -8958,8 +9079,8 @@ def picture_lines(entries, text, page_text):
             e["line"] = ln
 
 
-def window_pictures(workdir, manifest, url, view, start, public):
-    """A call downloads the pictures of the lines it prints that
+def window_pictures(workdir, manifest, url, view, start, public, to=None):
+    """A call downloads the pictures of the lines it prints (from `start`, to `to` when --to asks) that
     have no file yet - never printed, cut by the 6 s phase, lost to the network, or named by a
     --deny-images run - and rewrites their markers in place; no line moves. A picture outside
     every printed window stays a numbered address. Moscow's first read took 8.6 s with its 146
@@ -8974,7 +9095,7 @@ def window_pictures(workdir, manifest, url, view, start, public):
         # pictures are in: look again, while there is time
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
-        _, nxt = answer.render(public, text, view, start or 1, cli_next)
+        _, nxt = answer.render(public, text, view, start or 1, cli_next, to=to, call=cli_call)
         lines = text.split("\n")
         shown = "\n".join(lines[(start or 1) - 1:(nxt or len(lines) + 1) - 1])
         nums = {int(x) for x in re.findall(r"\[img #(\d+)", shown)} - asked
@@ -9016,7 +9137,9 @@ def _window_round(workdir, manifest, url, view, start, nums, files, seconds, pha
                       view, len(todo), sum(1 for e in todo if (got.get(e["url"]) or {}).get("data")
                                           or (got.get(e["url"]) or {}).get("link")
                                           or (got.get(e["url"]) or {}).get("unchanged")), late))
-    old_marks = {e["n"]: pictures.marker(e) for e in todo}
+    # a marker as this code writes it, and as the code before 2026-11-26 wrote a picture not on disk (the
+    # state after the alt): a page folder that older code read is rewritten too
+    old_marks = {e["n"]: (pictures.marker(e), pictures.marker(e, legacy=True)) for e in todo}
     spent = sum(int(e.get("bytes") or 0) for e in entries)
     fresh, gone = {}, set()
     for e in todo:
@@ -9040,8 +9163,9 @@ def _window_round(workdir, manifest, url, view, start, nums, files, seconds, pha
         with open(p, encoding="utf-8", errors="replace") as fh:
             body = fh.read()
         new_body = body
-        for num, old in old_marks.items():
-            new_body = new_body.replace(old, "" if num in gone else pictures.marker(fresh[num]))
+        for num, forms in old_marks.items():
+            for old in forms:
+                new_body = new_body.replace(old, "" if num in gone else pictures.marker(fresh[num]))
         if new_body != body:
             write_view(p, new_body)
     sig = manifest.setdefault("signals", {})
@@ -9467,8 +9591,8 @@ def ignored_flags(extra, args, known):
         flag = item.split("=")[0].split(" ")[0]
         if not flag.startswith("-"):
             notes.append("%s (not a flag; one URL a call)" % item)
-        elif flag in ("--to", "--till", "--until", "--end", "--lines", "--limit", "--max-lines"):
-            notes.append("%s (no such flag: an answer prints what fits and names the next line, --from N)" % item)
+        elif flag in ("--till", "--until", "--end", "--lines", "--limit", "--max-lines"):
+            notes.append("%s (no such flag: --from N --to M prints lines N to M)" % item)
         else:
             notes.append("%s (no such flag)" % item)
     return notes
@@ -9508,16 +9632,34 @@ def main(argv=None):
     ap.add_argument("--file", default="", metavar="{content.md,page.md}",
                     help="which text to print: content.md (the text, default) or page.md (the whole page)")
     ap.add_argument("--from", dest="from_line", default="0", metavar="N",
-                    help="print the block that starts at line N of the saved copy (no network)")
+                    help="print the block that starts at line N of the saved copy (no network), or at the line "
+                         "that holds a piece of text: --from \"words of a line\", --from \"[tab · Plans]\", "
+                         "--from \"[img #3]\"")
+    ap.add_argument("--to", dest="to_line", default="", metavar="M",
+                    help="with --from: print the lines up to M, more than one block if need be, for a tool "
+                         "that shows that much; the answer says they were sent and how to go on if they were cut")
     ap.add_argument("--json", action="store_true", help="print the manifest instead of the text")
     ap.add_argument("--ocr", default="", metavar="N",
                     help="print the text drawn in picture N (the number on its marker) instead of the "
                          "page's text: for a model that cannot see pictures")
     ap.add_argument("--dir", default="")
+    ap.add_argument("--probe", default="", metavar="N",
+                    help="for testing a harness, not for reading: print N characters of numbered lines and nothing "
+                         "else, no network (what it shows of a command's output); probe:N read as an address is a "
+                         "page of them, for --from and --to")
     known = [s for a in ap._actions for s in a.option_strings if s.startswith("--")]
     argv = [(typo_fixed(t.partition("=")[0], known) + t.partition("=")[1] + t.partition("=")[2])
             if t.startswith("--") else t for t in (sys.argv[1:] if argv is None else argv)]
     args, extra = ap.parse_known_args(argv)
+    if str(args.probe).strip():
+        # numbered lines and nothing else, outside the answer's block (answer.probe): what a harness shows
+        try:
+            n = int(str(args.probe).strip())
+        except ValueError:
+            return usage_error("--probe takes a number of characters, such as --probe 8000")
+        sys.stdout.write(answer.probe(n))
+        sys.stdout.flush()
+        return 0
     args.ignored = ignored_flags(extra, args, known)
     # a value we cannot use is left out the same way: the read goes on with the default
     view = (args.file or "").strip().lower()
@@ -9526,14 +9668,29 @@ def main(argv=None):
         args.ignored.append("--file %s (content.md or page.md)" % args.file)
         view = ""
     args.file = view
+    args.from_text = ""
     try:
         args.from_line = int(str(args.from_line).strip())
     except ValueError:
-        args.ignored.append("--from %s (a line number)" % args.from_line)
-        args.from_line = 0
+        # a piece of text: the answer starts at the line holding it (answer.find), in the saved copy
+        args.from_text, args.from_line = str(args.from_line), 1
+        if not args.from_text.strip():
+            args.ignored.append("--from %r (a line number, or words of a line)" % args.from_text)
+            args.from_text, args.from_line = "", 0
     if args.from_line < 0:
         args.ignored.append("--from %d (a line number, 1 or more)" % args.from_line)
         args.from_line = 0
+    try:
+        args.to_line = int(str(args.to_line).strip() or 0)
+    except ValueError:
+        args.ignored.append("--to %s (a line number)" % args.to_line)
+        args.to_line = 0
+    if args.to_line < 0:
+        args.ignored.append("--to %d (a line number, 1 or more)" % args.to_line)
+        args.to_line = 0
+    elif args.to_line and args.to_line < max(1, args.from_line):
+        args.ignored.append("--to %d (before --from %d)" % (args.to_line, max(1, args.from_line)))
+        args.to_line = 0
     try:
         args.ocr = int(str(args.ocr).strip() or 0)
     except ValueError:
@@ -9568,6 +9725,33 @@ def main(argv=None):
         restore()
         if mask is not None:
             os.umask(mask)
+
+
+PROBE_URL = re.compile(r"(?i)probe:(\d{1,8})$")
+
+
+def probe_page(args, n, t0):
+    """`probe:N` read as an address: a page whose text is answer.probe(N), answered as any page is - its
+    outline, its block, `--from`, `--to` and a quote - so a harness's tester sees what an answer and a range
+    send. No network; the text is the same every time, so a continuation reads it from the folder."""
+    url = "probe:%d" % n
+    workdir = args.dir or page_dir(url)
+    os.makedirs(workdir, exist_ok=True)
+    prev = load_manifest(workdir) or {}
+    content, page = os.path.join(workdir, "content.md"), os.path.join(workdir, "page.md")
+    text = answer.probe(n)
+    for p in (content, page):
+        write_view(p, text)
+    manifest = {
+        "schema": SCHEMA, "generator": "read-page", "status": "ok",
+        "url": {"requested": url, "final": url},
+        "content": {"engine": "probe", "chars": len(text), "words": len(text.split()), "cover": 1.0},
+        "candidates": [], "signals": {}, "chain": {"tried": ["probe"], "skipped": []},
+        "files": {"content": content, "page": page}, "missing": [], "improve": [], "advice": "",
+        "cache": "hit" if prev.get("url", {}).get("requested") == url else "miss",
+        "privacy": {"mode": "sensitive", "refused": ["external"], "why": "a probe: no network"},
+        "_view": prev.get("_view"), "_from": prev.get("_from")}
+    return finish(workdir, manifest, t0, args)
 
 
 def read(args):
@@ -9611,6 +9795,9 @@ def read(args):
     if not args.url:
         print(setup_report(caps(fresh=True)))  # no URL: the "what is missing" report, asked now
         return 0
+    probe = PROBE_URL.match(args.url.strip())
+    if probe:
+        return probe_page(args, int(probe.group(1)), t0)
     url = args.url
     # a file on this machine (a path or a file:// URL) goes through the same
     # converters, with no network at all: no reader, archive, browser or picture download
@@ -10653,9 +10840,10 @@ def read(args):
     # an archive that is cut, damaged or no ZIP at all: what was read of it is the text
     broke = _ZIPS.get("read") if kind == "zip" and source == "http" else None
     complete = bool(broke and broke.get("all_members") and not broke.get("broken"))   # only its index is broken
-    if broke and (broke.get("lost") or {}).get("cells"):
-        # a cut workbook's cells whose text was lost read LOST_TEXT: the skill's words, not the document's
-        word_count = words_of((pictures.unmarked(text) if doc_engine else text).replace(LOST_TEXT, " "))
+    if broke and ((broke.get("lost") or {}).get("cells") or LOST in text):
+        # a cut workbook's cells whose text was lost read LOST_TEXT, and its rows and sheets the cut took are
+        # marked (LOST_MARK): the skill's words, not the document's
+        word_count = words_of(LOST_MARK.sub(" ", (pictures.unmarked(text) if doc_engine else text).replace(LOST_TEXT, " ")))
     if network_fail and source == "http":          # no reader or archive answered for it
         manifest["status"] = "error"
         error_why = "the host did not answer" + (": " + str(f.get("error"))[:160] if f.get("error") else "")
@@ -10928,10 +11116,20 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
     view = answer_view(manifest, workdir, getattr(args, "file", "") if args is not None else "", continuing)
     ocr_n = (getattr(args, "ocr", 0) or 0) if args is not None else 0
     ocr = None
+    start = (getattr(args, "from_line", 0) or 1) if args is not None else 1
+    quote = (getattr(args, "from_text", "") or "") if args is not None else ""
+    lost = False                       # a quote no line holds: the answer is the outline
+    if quote and not ocr_n:
+        start = start_of(workdir, manifest, view, quote)
+        lost = start is None
+        start = start or 1
+        if not lost and 0 < (getattr(args, "to_line", 0) or 0) < start:
+            args.ignored.append("--to %d (before line %d, where the quote is)" % (args.to_line, start))
+            args.to_line = 0
     if ocr_n:
         # --ocr N answers with picture N's text: the window's other pictures are not wanted
         manifest, ocr = ocr_answer(workdir, manifest, ocr_n)
-    elif (args is not None and not (getattr(args, "deny_images", False) or "images" in SKIP)
+    elif (args is not None and not (getattr(args, "deny_images", False) or "images" in SKIP) and not lost
             and not str((manifest.get("url") or {}).get("final") or "").startswith("file:")):
         # the pictures of the lines this answer prints: the first read's
         # window, a continuation's, page.md's when page.md is printed. The page is not read again
@@ -10939,8 +11137,9 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         url = (manifest.get("url") or {}).get("requested") or (manifest.get("url") or {}).get("final") or ""
         before = json.dumps(manifest.get("images"), sort_keys=True)
         try:
-            manifest = window_pictures(workdir, manifest, url, view, getattr(args, "from_line", 0) or 1,
-                                       shown_paths(_prune({k: v for k, v in manifest.items() if not k.startswith("_")})))
+            manifest = window_pictures(workdir, manifest, url, view, start,
+                                       shown_paths(_prune({k: v for k, v in manifest.items() if not k.startswith("_")})),
+                                       getattr(args, "to_line", 0) or None)
         except Exception as e:                                 # noqa: BLE001
             debuglog.exc("pictures: window", e)
             trace("images.window", error=str(e)[:120])
@@ -10954,6 +11153,8 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
             debuglog.exc("finish: prune", _dbg_e)
     if not as_json and not ocr_n:
         manifest["_view"] = view              # the file read last (answer_view); a picture's text is not one
+        if not lost:
+            manifest["_from"] = {"view": view, "line": start}     # where a later quote is looked for first
     public = shown_paths(_prune({k: v for k, v in manifest.items() if not k.startswith("_")}))
     if getattr(args, "ignored", None):
         # this call's left-out flags: the answer and --json say so, the saved manifest does not
@@ -10993,7 +11194,11 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         if os.path.isfile(path):
             with open(path, encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
-        out, _ = answer.render(public, text, view, getattr(args, "from_line", 0) or 1, cli_next)
+        if lost:
+            out = answer.not_found(public, text, view, quote)
+        else:
+            out, _ = answer.render(public, text, view, start, cli_next, to=getattr(args, "to_line", 0) or None,
+                                   call=cli_call)
         sys.stdout.write(out)
     sys.stdout.flush()
     return 0                           # an answer was printed, whatever its status
@@ -11015,12 +11220,28 @@ def answer_view(manifest, workdir, asked="", continuing=False):
     return "content.md"
 
 
-def remember_view(workdir, view):
-    """The MCP server renders its own answer: it keeps the file a reading started with here."""
+def start_of(workdir, manifest, view, quote):
+    """The line a `--from "text"` starts at in the saved `view`, or None when no line holds it: the first
+    at or after where the last answer of that file started (`_from`), when several do (answer.find)."""
+    try:
+        with open(os.path.join(workdir, view), encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().split("\n")
+    except OSError:
+        return None
+    last = (manifest or {}).get("_from") or {}
+    return answer.find(lines, quote, last.get("line") if last.get("view") == view else 1)
+
+
+def remember_view(workdir, view, start=None):
+    """The MCP server renders its own answer: it keeps the file a reading started with here, and the line
+    the answer started at (`_from`, where a later quote is looked for first)."""
     m = load_manifest(workdir)
-    if not m or view not in VIEWS or m.get("_view") == view:
+    if not m or view not in VIEWS or (m.get("_view") == view and (
+            start is None or m.get("_from") == {"view": view, "line": start})):
         return
     m["_view"] = view
+    if start is not None:
+        m["_from"] = {"view": view, "line": start}
     try:
         write_manifest(os.path.join(workdir, "manifest.json"), m)
     except OSError:
@@ -11030,6 +11251,11 @@ def remember_view(workdir, view):
 def cli_next(n, total, view):
     # the file is named even when it is the default: a continuation never depends on a guess
     return "── next: line %d of %d → the same command with --from %d --file %s ──" % (n, total, n, view)
+
+
+def cli_call(frm, view, to=None):
+    # a --to answer's ways on: the next range, or a quote of the last line seen before a cut
+    return "the same command with --from %s%s --file %s" % (frm, " --to %d" % to if to else "", view)
 
 
 def ocr_next(n, total, view):

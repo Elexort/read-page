@@ -7,8 +7,10 @@ the same site already downloaded comes from that page's folder by a hard link, n
     lines = pictures.compact(lines)           # one answer: a repeat is [img #3], a tiny one its alt
 
 The number is the file's number, the alt stays inside the brackets, the path comes last. A picture
-that was not downloaded says why and keeps its address. This module holds no network code: the
-fetching (cookies, redirect checks, Referer) stays in readpage.py. Standard library only.
+that was not downloaded says why and keeps its address. The marker has the grammar of every marker
+the text holds (tabs.py too): its type, its state, what more there is to say, its name last -
+`[img #3 · not downloaded: 404 · alt] https://...`. This module holds no network code: the fetching
+(cookies, redirect checks, Referer) stays in readpage.py. Standard library only.
 """
 import glob
 import json
@@ -134,10 +136,11 @@ def size(n):
     return "%dB" % n
 
 
-def marker(e):
+def marker(e, legacy=False):
     """The marker of one picture. On disk: `[img #3 · 100x80 3K · alt] img/03-alt.png`. Not on
-    disk: `[img #3 · alt · not downloaded: 404] https://...` - the address stays, so it can be
-    fetched another way."""
+    disk: `[img #3 · not downloaded: 404 · alt] https://...` - the state before the alt, as every
+    marker has it; the address stays, so it can be fetched another way. `legacy`: the form before
+    2026-11-26, the state after the alt (a page folder read by the older code is rewritten from it)."""
     parts = ["img #%d" % e["n"]]
     alt = clean_alt(e.get("alt"))
     if e.get("file"):
@@ -146,9 +149,8 @@ def marker(e):
         if alt:
             parts.append(alt)
         return "[%s] %s" % (" · ".join(parts), e["file"])
-    if alt:
-        parts.append(alt)
-    parts.append("not downloaded" + (": " + e["why"] if e.get("why") else ""))
+    state = ["not downloaded" + (": " + e["why"] if e.get("why") else "")]
+    parts += (([alt] if alt else []) + state) if legacy else (state + ([alt] if alt else []))
     url = e.get("url") or ""
     if url.startswith("data:"):
         url = "(an inline picture)"
@@ -231,8 +233,9 @@ def compact(lines):
             seen.add(n)
             return m.group(0)
         parts = [p.strip() for p in m.group(2).split(" · ") if p.strip()]
+        # on disk: its size, then its alt; not on disk: its state first, so no size and never tiny
         dims = re.match(r"(\d+)x(\d+)\b", parts[0]) if parts else None
-        alt = parts[1] if len(parts) > 1 and not parts[1].startswith("not downloaded") else ""
+        alt = parts[1] if len(parts) > 1 and dims else ""
         if dims and max(int(dims.group(1)), int(dims.group(2))) <= TINY_SIDE and 0 < len(alt) <= TINY_ALT:
             return alt
         return "[img #%s]" % n

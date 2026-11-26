@@ -32,14 +32,43 @@ the next level down is listed thinned evenly, the coarser rows kept, and a last 
 are between them; a text without headings gets a row per block, thinned the same way. Either way
 the outline reaches the end of the text.
 
-Every answer fits the smallest output an agent harness passes on (9 980 bytes, 495 lines): Codex
-passes 10 000 bytes of output to a non-OpenAI model, Roo Code 10 240, Cline 500 lines, and past
-that each one cuts differently, so nothing is cut between the script and the agent. `--from N`
+Every answer fits the smallest output an agent harness passes on (7 900 characters, 9 980 bytes, 495
+lines), as the harnesses' code had it on 2026-11-26: Cline's SDK runtime (its CLI, and the VS Code
+windows on that bundle) cuts every tool result, MCP too, at 8 000 characters - UTF-16 units - keeping
+about 3 985 at each end; Codex passes 10 000 bytes of output to a model outside its OpenAI catalogue,
+Roo Code 10 240; Cline's VS Code extension shows 500 lines. Past that each one cuts differently, so
+nothing is cut between the script and the agent. English text meets the characters first: a block is
+about 7 700 characters where it was 9 850 (Node's fs reference, 381 KB, takes 54 answers instead of
+43); Cyrillic and CJK text meet the bytes, as before. `--from N`
 prints the block that starts at line N - the next one, or a heading from the outline - of the same
 file, from the saved copy, with no network; without `--file` it goes on in the file read last
 (`--file` switches it). If the copy is gone the page is read again and a `note:` line says the
 lines may have moved. The files stay in the work folder: the per-URL cache entry under the system
 temp directory, or `--dir DIR`.
+
+`--from "text"` starts at the first line that holds a piece of text, whitespace folded and then without case; when
+several do, the first at or after where the last answer of that file started, so an agent that quotes the last line
+it saw goes on from its own place. A quote cut in the middle of a line matches, one of several lines is looked for
+by its first, and a marker is found by its type and name - a picture by its number - whatever its state and
+properties say: `--from "[tab · Developer Plan Limits]"`, `--from "[img #3]"`. When no line holds it, the answer says
+so and shows the outline (its line numbers are what `--from N` takes), and no text. It works on `content.md` and
+`page.md` alike.
+
+`--from N --to M` prints lines N to M whatever the block, for a harness that shows more than one (Codex with an
+OpenAI model shows about 40 000 bytes, Claude Code 30 000, goose and OpenCode 50 000), at most 150 KB a call; `--to`
+alone reads from line 1, and one before `--from` is left out and named on the `ignored:` line. The skill cannot see
+what the harness shows, so such an answer never says its lines were shown: it says they were sent, and carries the
+way on at its top and at its bottom, as most harnesses keep both ends of what they cut:
+
+```
+── content.md: lines 1-300 of 812 sent; cut by your tool? go on from the last line before the cut: the same command with --from "<its words>" --file content.md ──
+(lines 1-300)
+── next: line 301 of 812 → the same command with --from 301 --to 600 --file content.md; cut by your tool? go on from the last line before the cut: the same command with --from "<its words>" --file content.md ──
+```
+
+The text's own lines carry no numbers, as an editor would show them; the range sent, the pointers and the
+outline (an answer from line 1 has it) keep theirs. The next range is as long as this one; at the end of the file
+the bottom line says so.
 
 | File | What it is |
 |---|---|
@@ -115,7 +144,8 @@ A PDF's tables come as Markdown tables where the layout model is installed (`--s
 
 | Flag | Meaning |
 |---|---|
-| `--from N` | print the block that starts at line N of the saved copy, no network; without `--file` it goes on in the file read last (`--file` switches it) |
+| `--from N` | print the block that starts at line N of the saved copy, no network; without `--file` it goes on in the file read last (`--file` switches it). `--from "text"`: from the first line that holds it, a marker by its type and name (see The answer) |
+| `--to M` | with `--from N`: lines N to M at once, past one block, for a harness that shows more; said to be sent, with the way on at both ends (see The answer) |
 | `--file page.md` | answer with the whole page (default: `content.md`, or `page.md` for a fragment) |
 | `--json` | print the manifest instead of the answer |
 | `--ocr N` | answer with the text drawn in picture N, the number on its marker, instead of the page's text: for a model that cannot see pictures (see Pictures) |
@@ -228,8 +258,11 @@ of a paragraph comes back after it), a reader, a site's API; a DOCX, PPTX, EPUB,
 where the document has it, and pictures a document does not place are listed after the text, in document
 order. In one answer a repeat prints as `[img #3]` (a tiny picture with a short alt as the alt,
 `✓`); `content.md` keeps every marker full. A picture that was not downloaded says why and keeps
-its address: `[img #5 · chart · not downloaded: 404] https://…`. Tracking pixels and spacers are
-shown nowhere; a lazy picture is its real address, not its placeholder.
+its address: `[img #5 · not downloaded: 404 · chart] https://…` - its state before its alt, as every
+marker has it (the type, the state, what more there is to say, the name last; see Tabs, sections and
+selects). Until 2026-11-26 the state came after the alt; a page folder written so is rewritten when its
+pictures come. Tracking pixels and spacers are shown nowhere; a lazy picture is its real address, not its
+placeholder. `--from "[img #5]"` goes to a picture's line, whatever its marker says.
 
 What is downloaded follows what is printed: every picture of `content.md` and `page.md` is
 numbered and listed in the manifest from the first call (with its line), and an answer downloads
@@ -264,7 +297,9 @@ on disk, no OCR engine.
 ## Tabs, sections and selects
 
 A page shows one tab of a set and folds its other panels and sections away; the text says where each one is and
-what state it is in, with markers of one grammar - the type, the state, what more there is to say, the name last:
+what state it is in, with markers of one grammar - the type, the state, what more there is to say, the name last
+(the pictures' markers have it too, and a cut workbook's: `[rows · lost in the cut · 54-78954 · Third]`, `[sheet · lost
+in the cut · Fourth]`, [documents.md](documents.md)):
 
 ```
 [tab · shown · Free Plan Limits]

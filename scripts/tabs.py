@@ -11,7 +11,8 @@ not at all (Go's examples, Node's history tables); four people's biographies on 
 no name above any; and Groq's rate limits showed the default tab's table under the site's own note that
 the limits below are the Developer plan's, with no word of which tab it was.
 
-Every marker has one grammar - its type, its state, what more there is to say, its name last:
+Every marker has one grammar - its type, its state, what more there is to say, its name last (a picture's
+too, pictures.marker: `[img #3 · not downloaded: 404 · alt] https://...`):
 
     [tab · shown · Free Plan Limits]
     [tab · hidden, but extracted · Developer Plan Limits]       its text follows
@@ -34,7 +35,8 @@ import re
 from html import unescape
 from html.parser import HTMLParser
 
-STATE = {"shown": "shown", "hidden": "hidden, but extracted", "missing": "loads on click, not extracted"}
+STATE = {"shown": "shown", "hidden": "hidden, but extracted", "missing": "loads on click, not extracted",
+         "cut": "lost in the cut"}         # the last: a cut workbook's rows and sheets (readpage._xlsx_cut, docreaders)
 TOO_LONG = "%s, too long for here: page.md from line %s"
 PANEL_LIMIT = 4096          # bytes of a hidden panel's text; the largest of the 34 pages measured was 3.4 KB
 MAX_HTML = 3 * 1024 * 1024  # as readpage.HUGE_HTML: above it no extractor runs

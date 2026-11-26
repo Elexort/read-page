@@ -117,16 +117,30 @@ class _Clock(object):
         return "; --download reads it whole" if 0 < done and spent / done <= PROMISE else ""
 
 
+LOST = "lost in the cut"     # tabs.STATE["cut"], which this module, the standard library alone, does not import
+SHEET_ROWS = 1048576         # a sheet's rows at most: past it no row is lost
+
+
+def lost_marker(kind, name, *props):
+    """What a cut archive lost, where it was lost, in the grammar of every marker (tabs.marker): its type, its
+    state, what more there is to say, its name last - `[rows · lost in the cut · 54-? · Third]`."""
+    name = re.sub(r"\s+", " ", (name or "").replace("[", "(").replace("]", ")").replace("·", "-")).strip()
+    name = name if len(name) <= 200 else name[:199].rstrip() + "…"
+    return "[%s]" % " · ".join([kind, LOST] + [p for p in props if p] + ([name] if name else []))
+
+
 def read(path, kind, until=None, finish=None, pictures=None):
     """(markdown, note) of an EPUB, an OpenDocument file (ODT, ODS, ODP) or an RTF file; ("", why)
     when it gives no text. A part or an element that breaks loses that part, and the note names it;
     a reader that breaks as a whole leaves the document's plain text (its words in order, no
-    tables), and says so. `pictures`: a folder an RTF's pictures are written to (rtf_md)."""
+    tables), and says so. `pictures`: a folder an RTF's pictures are written to (rtf_md). KIND "ods+cut":
+    the copy of an archive cut in its content.xml, whose break is the cut (odt_md names what it lost)."""
+    kind, _plus, how = kind.partition("+")
     try:
         if kind == "epub":
             return epub_md(path, until, finish)
         if kind in ("odt", "ods", "odp"):
-            return odt_md(path, until, finish)
+            return odt_md(path, until, finish, cut=how == "cut")
         if kind == "rtf":
             with open(path, "rb") as fh:            # read(n) sets n bytes aside first: no more than the file has
                 data = fh.read(min(os.fstat(fh.fileno()).st_size, RTF_BYTES) + 1)
@@ -2462,7 +2476,7 @@ class _Sheet(object):
     named "'file:///C:/...'#$Sheet1"; Excel's hold values alone, 556 of them in one workbook); its
     grid; its shapes' blocks, a text box's paragraphs, a shape's text and a picture, whether on its
     page (table:shapes) or in a cell; its comments, each with its label."""
-    __slots__ = ("odt", "el", "name", "hidden", "linked", "grid", "shapes", "comments")
+    __slots__ = ("odt", "el", "name", "hidden", "linked", "grid", "shapes", "comments", "at", "open_at")
 
     def __init__(self, odt, el):
         self.odt, self.el = odt, el
@@ -2471,6 +2485,9 @@ class _Sheet(object):
         self.linked = False
         self.grid = _Grid(odt, 1, None, self)
         self.shapes, self.comments = [], []
+        # the rows that ended, their repeats counted (the row a cut came in: `open_at`): a cut sheet says
+        # from which row it lost them (odt_md)
+        self.at, self.open_at = 0, 0
 
     def cache(self):
         return self.linked and self.hidden
@@ -2490,6 +2507,7 @@ class _Sheet(object):
             self.shapes.extend(self.odt.blocks_of(list(ch), 2))
 
     def row(self, r):
+        self.at += min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), SHEET_ROWS)
         if self.cache():
             return
         try:
@@ -2512,6 +2530,7 @@ class _Body(ET.TreeBuilder):
     def __init__(self, odt):
         ET.TreeBuilder.__init__(self)
         self.odt, self.stack, self.sheet, self.sheets, self.root = odt, [], None, False, None
+        self.begun = []                        # the sheets begun: a cut names the others as lost (_cut_lost)
 
     def start(self, tag, attrs):
         el = ET.TreeBuilder.start(self, tag, attrs)
@@ -2523,6 +2542,7 @@ class _Body(ET.TreeBuilder):
             self.sheets = True
         elif len(st) == 4 and self.sheets and tag == O_TABLE and st[2].tag == O_SHEET_BODY:
             self.sheet = _Sheet(self.odt, el)
+            self.begun.append(self.sheet)
         return el
 
     def end(self, tag):
@@ -2571,6 +2591,7 @@ class _Body(ET.TreeBuilder):
             st = self.stack
             k = next((i for i in range(4, len(st)) if st[i].tag not in O_ROWS), None)
             if k is not None and st[k].tag == O_ROW:
+                self.sheet.open_at = self.sheet.at + 1             # its first cells stand; the rest is lost
                 try:
                     self.sheet.row(st[k])
                 except Late:
@@ -2653,15 +2674,48 @@ def _feed(zf, name, b, clock):
     return why, late, got, size
 
 
-def odt_md(path, until=None, finish=None):
+def _cut_lost(zf, b, sheet):
+    """What a spreadsheet cut in its content.xml lost, as markers: the rows of the sheet the cut came in, from the
+    first row not whole on - `[rows · lost in the cut · 54-? · Third]`, the extent not in the file (content.xml
+    names no sheet's size) -, then the sheets after it the file names elsewhere: LibreOffice's settings.xml lists
+    every sheet by name (in its own order, by name), its meta.xml how many there are; Excel writes neither (and
+    its content.xml first), so its cut ODS names no lost sheet."""
+    out = []
+    begun = [s.name for s in b.begun if not s.cache()]          # an external link's cache is no sheet of its own
+    if sheet is not None and not sheet.cache():
+        first = sheet.open_at or sheet.at + 1
+        if first <= SHEET_ROWS:
+            out.append(lost_marker("rows", sheet.name or "Sheet %d" % len(begun), "%d-?" % first))
+    settings, meta = zf.read("settings.xml", 16 << 20), zf.read("meta.xml", 1 << 20)
+    names = []
+    if settings:
+        box = re.search(rb'config:name="Tables"\s*>(.*?)</config:config-item-map-named>', settings, re.S)
+        names = [html.unescape(n.decode("utf-8", "replace"))
+                 for n in re.findall(rb'<config:config-item-map-entry\s+config:name="([^"]*)"', box.group(1))] \
+            if box else []
+    seen = set(s.name for s in b.begun)
+    out.extend(lost_marker("sheet", n) for n in names if n not in seen)
+    count = re.search(rb'meta:table-count="(\d{1,6})"', meta or b"")
+    if count and not names:
+        total = int(count.group(1))           # how many, not which: each by its place
+        out.extend(lost_marker("sheet", "the sheet %d of %d" % (k, total)) for k in range(len(begun) + 1, total + 1))
+    return out
+
+
+def odt_md(path, until=None, finish=None, cut=False):
     """An OpenDocument text, spreadsheet or presentation (ODT, ODS, ODP) as Markdown: content.xml's
     body, whichever it holds, read as it unpacks (_feed: a spreadsheet's rows as they come, _Body; a
-    text's or a presentation's tree, _Odt.doc), with styles.xml for what its styles say."""
+    text's or a presentation's tree, _Odt.doc), with styles.xml for what its styles say. `cut`: the file
+    is the copy of an archive cut in its content.xml, so where its XML breaks is the cut: a spreadsheet
+    says what it lost there (_cut_lost)."""
     clock = _Clock(until, finish)
     with zipfile.ZipFile(path) as z:
         zf = _Zip(z)
+        spreadsheet = (zf.read("mimetype", 200) or b"").strip() == b"application/vnd.oasis.opendocument.spreadsheet"
         if zf.name("content.xml") is None:
-            return "", _join("no content.xml in this file", zf.note())
+            # cut before anything of its content.xml unpacked: every sheet lost, named where the file names them
+            lost = _cut_lost(zf, _Body(None), None) if cut and spreadsheet else []
+            return "\n\n".join(lost), _join("no content.xml in this file", zf.note())
         styles, swhy = _OdfStyles(), ""
         sdata = zf.read("styles.xml", 16 << 20)
         if sdata:
@@ -2672,6 +2726,12 @@ def odt_md(path, until=None, finish=None):
         odt = _Odt(styles, clock, zf)
         b = _Body(odt)
         why, late, got, size = _feed(zf, "content.xml", b, clock)
+        if b.root is None and cut and not late and spreadsheet:
+            # cut before its first element ended: every sheet lost, named where the file names them
+            lost = _cut_lost(zf, b, None)
+            if lost:
+                return "\n\n".join(lost), _join("content.xml could not be read: %s" % (why or "it holds no element"),
+                                               zf.note())
         if b.root is None:
             if not got and zf.bad:
                 return "", _join("content.xml could not be read", zf.note())
@@ -2682,6 +2742,7 @@ def odt_md(path, until=None, finish=None):
         if why and not late:
             b.broken()
         if b.sheets:
+            open_sheet = b.sheet
             if b.sheet is not None:
                 if late:
                     clock.finishing()
@@ -2689,11 +2750,16 @@ def odt_md(path, until=None, finish=None):
                     b.sheet_done(late)
                 except Late:
                     late = True
+            if cut and why.startswith("its XML breaks") and not late:
+                odt.out.extend(_cut_lost(zf, b, open_sheet))
             md, _late = odt.finish(odt.out, late)
             done = float(got) / size if size else 0
         else:
             md, late = odt.doc(b.root)
             done = float(odt.done) / odt.of if odt.of else 0
+            if cut and why.startswith("its XML breaks") and not late and spreadsheet:
+                # a spreadsheet cut before its first sheet began (LibreOffice writes its styles first): every sheet lost
+                md = "\n\n".join(x for x in [md] + _cut_lost(zf, b, None) if x)
         broke = ""
         if odt.broke:
             broke = "%d element(s) could not be read and were left out (%s)" % (
@@ -3725,7 +3791,8 @@ def _limit_memory(nbytes):
 
 def main(argv):
     """python docreaders.py KIND PATH [UNTIL [KILL [PICTURES]]]: one document (KIND: epub, odt, ods, odp,
-    rtf), as JSON on stdout ({"md", "note", "limit"}: limit, whether its memory is held - false where
+    rtf; "ods+cut" and the like: the copy of an archive cut in its content.xml, read()), as JSON on stdout
+    ({"md", "note", "limit"}: limit, whether its memory is held - false where
     the OS holds none, or where holding it failed, which readpage's trace then says).
     UNTIL is when the reading stops (a time.time(); 0: no limit), KILL when readpage.py kills this
     process: what was read is written by the middle of the two. PICTURES: the folder an RTF's

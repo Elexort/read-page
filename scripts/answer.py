@@ -1,30 +1,66 @@
 """The answer an agent reads in one call: a header, then the text, inside the smallest output limit
 any harness enforces.
 
-Codex with a non-OpenAI model passes 10 000 bytes of stdout and stderr together, Roo Code 10 240,
-Cline 500 lines; past that every harness cuts in its own way (the head, the tail, the middle, or
-just a path to a file). So one answer is at most BUDGET_BYTES and BUDGET_LINES, counted on what
-is written: UTF-8 with LF. A text that fits is printed whole. A longer one gets an outline with
-line numbers first, then its beginning up to the limit, cut at a paragraph, and the exact line
-where it goes on; continuing from that line prints the next block of the same size.
+The harnesses' own code, read 2026-11-26: Cline's SDK runtime (its CLI, and the VS Code windows on
+that bundle) cuts every tool result, MCP too, at 8 000 characters - UTF-16 units, as JavaScript
+counts - keeping about 3 985 at each end; Codex with a model outside its OpenAI catalogue passes
+10 000 bytes of stdout and stderr together, Roo Code 10 240; Cline's VS Code extension shows 500
+lines. Past that every harness cuts in its own way (the head, the tail, the middle, or just a path
+to a file). So one answer is at most BUDGET_CHARS characters, BUDGET_BYTES bytes and BUDGET_LINES
+lines, counted on what is written: UTF-8 with LF; the characters leave Cline room for a line of
+its own. English text meets the characters first (a 9 980-byte block lost about 2 000 characters
+from its middle in Cline), Cyrillic and CJK text the bytes. A text that fits is printed whole. A
+longer one gets an outline with line numbers first, then its beginning up to the limit, cut at a
+paragraph, and the exact line where it goes on; continuing from that line prints the next block of
+the same size.
 """
 import os
 import re
 
 import pictures
 
+BUDGET_CHARS = 7900    # Cline's 8 000 per tool result, less room for its own marker
 BUDGET_BYTES = 9980
 BUDGET_LINES = 495
 OUTLINE_BYTES = 2500
 OUTLINE_MIN = 12       # an outline coarser than this, finer headings below it: those, thinned
-LINE_CHARS = 1998      # Read in Claude Code, OpenCode and Kimi CLI stop at 2 000; "\r\n" fits too
+LINE_CHARS = 1998      # the Read tools of OpenCode, Kilo Code, Cline, Crush, Gemini CLI and Qwen Code stop
+                       # a line at 2 000 characters; "\r\n" fits too
 LINE_BYTES = 6000      # keeps every line inside one block even with the outline above it
-POINTER_BYTES = 200    # the separator above the text and the pointer below it
+POINTER_BYTES = 200    # the separator above the text and the pointer below it (characters too)
+RANGE_BYTES = 150000   # a --to answer at most: the most a harness shows (Claude Code with its limit raised)
 OUTSIDE_SHOWN = 1024   # less than this outside the text (a footer line) is not worth a header row
+PROBE_LINE = 100       # characters a probe line takes, its "\n" too
+PROBE_MAX = 10000000   # characters a probe prints at most
 
 _SENTENCE_END = re.compile(r"[.!?…](?=\s)|[。！？]")     # CJK full stops need no space after
 _SPACE = re.compile(r"\s")
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+
+
+def probe(n):
+    """`readpage.py --probe N`: N characters of numbered lines and nothing else, for measuring what a harness
+    shows of a command's output or of a tool's result - no network, outside the answer's block. Each line says
+    its number and how many characters stand before it, the first and the last are sentinels, and a line is
+    PROBE_LINE characters (the last 100 to 199): what a harness cut shows as the lines and numbers missing, and
+    a line cut in its middle still names itself. ASCII alone, so its characters, bytes and UTF-16 units are one
+    count. `probe:N` read as an address is a page of the same text (readpage.probe_page)."""
+    n = max(0, min(int(n), PROBE_MAX))
+    if n < 2 * PROBE_LINE:
+        return ("PROBE HEAD AND TAIL: %d characters in one line " % n + "." * n)[:max(0, n - 1)] + ("\n" if n else "")
+    last = (n - PROBE_LINE) // PROBE_LINE + 1
+    out = []
+    for k in range(1, last + 1):
+        at = (k - 1) * PROBE_LINE
+        width = PROBE_LINE if k < last else n - at
+        if k == 1:
+            words = "PROBE HEAD: line 1, 0 characters before it, %d characters in %d lines" % (n, last)
+        elif k == last:
+            words = "PROBE TAIL: line %d, %d characters before it, the last of %d" % (k, at, n)
+        else:
+            words = "line %d, %d characters before it" % (k, at)
+        out.append((words + " " + "." * width)[:width - 1] + "\n")
+    return "".join(out)
 
 
 def _too_long(line):
@@ -83,6 +119,19 @@ def _bytes(rows):
     return sum(len(r.encode("utf-8")) + 1 for r in rows)
 
 
+def u16(s):
+    """Characters as Cline counts them: UTF-16 units, so a character past U+FFFF (an emoji) is two."""
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def _chars(rows):
+    return sum(u16(r) + 1 for r in rows)
+
+
+def _fits(out, budget, chars, max_lines):
+    return len(out.encode("utf-8")) <= budget and u16(out) <= chars and out.count("\n") <= max_lines
+
+
 def headings(lines):
     """(line number from 1, level, title) of every Markdown heading outside code fences."""
     out, fence = [], False
@@ -96,18 +145,22 @@ def headings(lines):
     return out
 
 
-def window(lines, start, byte_budget, line_budget):
+def window(lines, start, byte_budget, line_budget, char_budget=None):
     """Index after the last line of the block that starts at `start` (both from 1).
 
-    The block takes whole lines while they fit, then steps back to the last blank line in its
-    second half, so it ends between paragraphs. It always takes at least one line.
+    The block takes whole lines while they fit its bytes, lines and characters, then steps back to
+    the last blank line in its second half, so it ends between paragraphs. It always takes at least
+    one line.
     """
-    end, used = start, 0
+    end, used, used_c = start, 0, 0
     while end <= len(lines) and end - start < line_budget:
         size = len(lines[end - 1].encode("utf-8")) + 1
-        if used + size > byte_budget and end > start:
+        size_c = u16(lines[end - 1]) + 1 if char_budget is not None else 0
+        if (used + size > byte_budget or (char_budget is not None and used_c + size_c > char_budget)) \
+                and end > start:
             break
         used += size
+        used_c += size_c
         end += 1
     if end <= len(lines):
         for i in range(end - 1, start + (end - start) // 2, -1):
@@ -272,11 +325,104 @@ def header(manifest, view, total_lines, text_bytes):
     return rows
 
 
-def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_lines=BUDGET_LINES):
+def _sent(head, rows, lines, view, start, to, total, call):
+    """--from N --to M: lines N to M, past one block, for a harness that shows more (Codex with an
+    OpenAI model passes about 40 000 bytes). The skill cannot see what the harness shows, so the
+    answer says the lines were sent, not shown, and carries the way back at its top and its bottom -
+    most harnesses keep both ends of what they cut: the next range, and a quote of the last line seen
+    before a cut (`--from "text"`). RANGE_BYTES at most, past what any harness shows."""
+    way = "cut by your tool? go on from the last line before the cut: %s" % call('"<its words>"', view)
+    room = RANGE_BYTES - _bytes(head + rows) - 2 * POINTER_BYTES - 2 * len(way.encode("utf-8"))
+    end, used = start, 0
+    while end <= to:
+        size = len(lines[end - 1].encode("utf-8")) + 1
+        if used + size > room and end > start:
+            break
+        used += size
+        end += 1
+    capped = " (%d KB at most a call)" % (RANGE_BYTES // 1000) if end <= to else ""
+    top = "── %s: lines %d-%d of %d sent%s; %s ──" % (view, start, end - 1, total, capped, way)
+    if end <= total:
+        nxt = min(total, end + (end - start) - 1)
+        tail = "── next: line %d of %d → %s; %s ──" % (end, total, call(end, view, nxt), way)
+    else:
+        tail = "── the end of %s; %s ──" % (view, way)
+    out = "\n".join(head + rows + [top] + pictures.compact(lines[start - 1:end - 1]) + [tail]) + "\n"
+    return out, (end if end <= total else None)
+
+
+def _call(frm, view, to=None):
+    """How a caller that names none goes on: the command line's flags."""
+    return "the same command with --from %s%s --file %s" % (frm, " --to %d" % to if to else "", view)
+
+
+# an element's marker, `[tab · hidden, but extracted · 6.0 KB, ... · Go]`: its type, then its state, what more
+# there is to say, its name last (tabs.py, and a cut workbook's rows and sheets)
+ELEMENT = re.compile(r"\[(tab|section|select|rows|sheet) · ([^\]\n]*)\]")
+
+
+def _plain(s):
+    """A line as a quote is matched against it: a marker is its type and name alone (a picture its number),
+    whitespace folded - so `[tab · Developer Plan Limits]` finds the marker whatever its state says."""
+    if "[" in s:
+        s = pictures.MARK.sub(lambda m: "[img #%s]" % m.group(1), s)
+        s = ELEMENT.sub(lambda m: "[%s · %s]" % (m.group(1), m.group(2).split(" · ")[-1].strip()), s)
+    return " ".join(s.split())
+
+
+def find(lines, quote, after=1):
+    """The line a quote starts at (`--from "text"`), from 1, or None: the first line holding it - whitespace
+    folded, then without case -, the first at or after `after` (where the last answer of the page started)
+    when there are several. A quote cut in the middle of a line matches; one of several lines is looked for
+    by its first, when it is not found whole."""
+    wants = [_plain(quote)]
+    rows = [r for r in str(quote).split("\n") if r.strip()]
+    if len(rows) > 1:
+        wants.append(_plain(rows[0]))
+    plain = folded = None
+    for want in wants:
+        if not want:
+            continue
+        if plain is None:
+            plain = [_plain(x) for x in lines]
+            folded = [x.casefold() for x in plain]
+        exact = [i for i, x in enumerate(plain, 1) if want in x]
+        loose = [i for i, x in enumerate(folded, 1) if want.casefold() in x]
+        # where the reading is first: an agent goes on from its own place, a retyped quote may differ in case
+        for hits in ([i for i in exact if i >= (after or 1)], [i for i in loose if i >= (after or 1)], exact, loose):
+            if hits:
+                return hits[0]
+    return None
+
+
+def not_found(manifest, text, view, quote):
+    """`--from "text"` that no line holds: the answer says so and shows the outline, whose line numbers
+    `--from N` takes."""
+    lines = (text or "").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    head = header(manifest, view, len(lines), len((text or "").encode("utf-8")))
+    q = " ".join(str(quote).split())
+    q = q if len(q) <= 80 else q[:79] + "…"
+    say = ['── not in %s: "%s", spaces and case aside; the outline below names its lines for --from N ──' % (view, q)]
+    room = min(OUTLINE_BYTES * 2, (BUDGET_BYTES - _bytes(head + say)) // 2, (BUDGET_CHARS - _chars(head + say)) // 2)
+    starts, n = [], 1
+    while n <= len(lines):
+        starts.append(n)
+        n = window(lines, n, BUDGET_BYTES - _bytes(head) - POINTER_BYTES, BUDGET_LINES - len(head) - 3,
+                   BUDGET_CHARS - _chars(head) - POINTER_BYTES)
+    rows = outline(lines, room, starts) if lines else []
+    return "\n".join(head + say + (["outline (line, heading):"] + rows if rows else [])) + "\n"
+
+
+def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_lines=BUDGET_LINES, chars=BUDGET_CHARS,
+           to=None, call=None):
     """The whole answer as one string, and the line the next block starts at (None at the end).
 
     `next_hint(n, total, view)` words the pointer for the caller: a flag on the command line, an
-    argument of an MCP tool.
+    argument of an MCP tool. `to`: the last line asked for (--to M), the lines up to it sent
+    whatever the block (_sent); `call(frm, view, to=None)` words a call of the caller's that starts at
+    `frm` - a line number, or a quote.
     """
     lines = (text or "").split("\n")
     if lines and lines[-1] == "":
@@ -290,18 +436,21 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
         head.append("note: the page was read again (no saved copy, or a refresh), so line %d may "
                     "not be where an earlier answer pointed; the outline is in the answer from line 1"
                     % start)
-    room_b, room_l = budget - _bytes(head), max_lines - len(head)
+    room_b, room_l, room_c = budget - _bytes(head), max_lines - len(head), chars - _chars(head)
 
     if total == 0:
         return "\n".join(head + ["── %s is empty ──" % view]) + "\n", None
     if start > total:
         return "\n".join(head + ["── %s has %d lines: line %d is past the end ──" % (view, total, start)]) + "\n", None
-    if start == 1 and _bytes(lines) + POINTER_BYTES <= room_b and total + 2 <= room_l:
+    whole = (start == 1 and _bytes(lines) + POINTER_BYTES <= room_b and _chars(lines) + POINTER_BYTES <= room_c
+             and total + 2 <= room_l)
+    to = int(to) if to and int(to) >= start else None
+    if whole and to is None:
         return "\n".join(head + ["── %s: all %d lines ──" % (view, total)] + pictures.compact(lines)) + "\n", None
 
-    block = room_b - POINTER_BYTES
+    block, block_c = room_b - POINTER_BYTES, room_c - POINTER_BYTES
     rows = []
-    if start == 1:
+    if start == 1 and not whole:
         # the blocks the answers will really have: the first one shares its room with the
         # outline, every continuation (no outline) gets the whole block. Two passes, because the
         # first block depends on the outline's size and a heading-less outline on the blocks.
@@ -309,23 +458,26 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
             out, n = [1], first_end
             while n <= total:
                 out.append(n)
-                n = window(lines, n, block, room_l - 3)
+                n = window(lines, n, block, room_l - 3, block_c)
             return out
 
-        rows = outline(lines, min(OUTLINE_BYTES, room_b // 3),
-                       starts_after(window(lines, 1, block - OUTLINE_BYTES, room_l - 60)))
-        first_end = window(lines, 1, block - _bytes(rows) - 30, room_l - len(rows) - 4)
-        rows = outline(lines, min(OUTLINE_BYTES, room_b // 3), starts_after(first_end))
+        room_o = min(OUTLINE_BYTES, room_b // 3, room_c // 3)
+        rows = outline(lines, room_o, starts_after(window(lines, 1, block - OUTLINE_BYTES, room_l - 60,
+                                                          block_c - OUTLINE_BYTES)))
+        first_end = window(lines, 1, block - _bytes(rows) - 30, room_l - len(rows) - 4, block_c - _chars(rows) - 30)
+        rows = outline(lines, room_o, starts_after(first_end))
         if rows:
             rows = ["outline (line, heading):"] + rows
-    end = window(lines, start, block - _bytes(rows), room_l - len(rows) - 3)
+    if to is not None:
+        return _sent(head, rows, lines, view, start, min(to, total), total, call or _call)
+    end = window(lines, start, block - _bytes(rows), room_l - len(rows) - 3, block_c - _chars(rows))
     while True:
         # a picture's first marker in this answer is full, a repeat short
         body = (["── %s: lines %d-%d of %d ──" % (view, start, end - 1, total)]
                 + pictures.compact(lines[start - 1:end - 1]))
         tail = [next_hint(end, total, view)] if end <= total else []
         out = "\n".join(head + rows + body + tail) + "\n"
-        if len(out.encode("utf-8")) <= budget and out.count("\n") <= max_lines:
+        if _fits(out, budget, chars, max_lines):
             return out, (end if end <= total else None)
         if end <= start + 1:
             break
@@ -336,7 +488,11 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
     line = lines[start - 1]
     size = len(line.encode("utf-8"))
     note = "── line %d is longer than one answer: the first %%s of %s shown ──" % (start, _human(size))
-    room = budget - _bytes(head + rows + body[:1] + tail) - len((note % "000.0 KB").encode("utf-8")) - 2
+    around = head + rows + body[:1] + tail
+    room = budget - _bytes(around) - len((note % "000.0 KB").encode("utf-8")) - 2
+    room_u = chars - _chars(around) - u16(note % "000.0 KB") - 2
     cut = line.encode("utf-8")[:max(0, room)].decode("utf-8", "ignore")
-    out = "\n".join(head + rows + body[:1] + [cut, note % _human(len(cut.encode("utf-8")))] + tail) + "\n"
+    while cut and u16(cut) > room_u:
+        cut = cut[:max(0, len(cut) - (u16(cut) - room_u))]       # each character is one unit or two
+    out = "\n".join(around[:len(head + rows + body[:1])] + [cut, note % _human(len(cut.encode("utf-8")))] + tail) + "\n"
     return out, (end if end <= total else None)
