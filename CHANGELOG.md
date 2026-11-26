@@ -8,6 +8,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **CI: the Ubuntu container's apt retries** (KNOWN-ISSUES 249): the Ubuntu 20.04 container of `install.yml` failed twice
+  on 2026-11-23 on apt's "Connection failed" to the mirrors, before any of our code ran (its re-run passed).
+  `tools/ci_container.sh` runs every `apt-get` with `-o Acquire::Retries=5`; `tests/environment.py` checks it.
 - **Row 186's last sentence is true again, and two by-design rows are filed** (KNOWN-ISSUES 186, 247, 248): row
   186 said the user's second OCR pack beside English had never been measured on every scan - since row 225 a scan
   is read with the pack of its own script, so the sentence now says what the code does and what row 225's

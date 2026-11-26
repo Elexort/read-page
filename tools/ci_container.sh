@@ -25,9 +25,11 @@ case "$img" in
      # Debian 11 has left its mirrors for archive.debian.org: the packages of its own security repository 404 on the old ones
      printf 'deb http://archive.debian.org/debian bullseye main\ndeb http://archive.debian.org/debian-security bullseye-security main\n' > /etc/apt/sources.list
      export DEBIAN_FRONTEND=noninteractive
-     apt-get -o Acquire::Check-Valid-Until=false update -qq >/dev/null && apt-get install -y -qq python3 git >/dev/null || exit 1 ;;
-  *) export DEBIAN_FRONTEND=noninteractive
-     apt-get update -qq >/dev/null && apt-get install -y -qq python3 git >/dev/null || exit 1 ;;
+     apt-get -o Acquire::Retries=5 -o Acquire::Check-Valid-Until=false update -qq >/dev/null \
+       && apt-get -o Acquire::Retries=5 install -y -qq python3 git >/dev/null || exit 1 ;;
+  *) # Ubuntu's mirrors drop a connection now and then ("Connection failed": the 20.04 container, twice on 2026-11-23)
+     export DEBIAN_FRONTEND=noninteractive
+     apt-get -o Acquire::Retries=5 update -qq >/dev/null && apt-get -o Acquire::Retries=5 install -y -qq python3 git >/dev/null || exit 1 ;;
 esac
 echo "image $img: $($py --version 2>&1), $(ldd --version 2>&1 | head -n 1)"
 skill="$HOME/.agents/skills/read-page"

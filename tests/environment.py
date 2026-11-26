@@ -3460,6 +3460,16 @@ attempt("the code page goes into a program's own manifest beside what it had (Py
                  and m_tw.count("<activeCodePage") == 1 and ">zh-TW</activeCodePage>" in m_tw
                  and "<activeCodePage" in ci_acp.with_code_page("", "ja-JP"), m_cn[-260:]))
 sh_ = shutil.which("sh")
+# KNOWN-ISSUES 249: Ubuntu 20.04's container failed twice on apt's "Connection failed" to the mirrors (its re-run
+# passed): every apt-get the script runs retries a fetch five times; and the script is still sh's (sh -n)
+with open(os.path.join(SKILL, "tools", "ci_container.sh"), encoding="utf-8") as fh_:
+    apt_lines = [ln_ for ln_ in fh_.read().splitlines() if "apt-get" in ln_ and not ln_.lstrip().startswith("#")]
+p_syn = subprocess.run([sh_, "-n", os.path.join(SKILL, "tools", "ci_container.sh")], capture_output=True, timeout=60) if sh_ else None
+attempt("ci_container.sh's apt retries a fetch the mirror dropped (Ubuntu 20.04's container failed twice on 'Connection "
+        "failed'), and the script is sh's still",
+        lambda: (len(apt_lines) >= 2 and all(ln_.count("apt-get") == ln_.count("apt-get -o Acquire::Retries=5") for ln_ in apt_lines)
+                 and (p_syn is None or p_syn.returncode == 0), "%s %s" % ([ln_.strip()[:90] for ln_ in apt_lines],
+                                                                          p_syn.stderr[-120:] if p_syn else "no sh to check the syntax")))
 if sh_ and not os.path.exists("/.dockerenv") and not os.path.exists("/run/.containerenv") and not os.environ.get("container"):
     no_path = tempfile.mkdtemp(prefix="rp-env-nopath-")       # nothing it could run is on PATH
     junk.append(no_path)
