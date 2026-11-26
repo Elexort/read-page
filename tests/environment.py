@@ -3481,6 +3481,32 @@ if sh_ and not os.path.exists("/.dockerenv") and not os.path.exists("/run/.conta
 else:
     print("SKIP ci_container.sh's refusal (no sh here, or this is a container)")
 
+# ci_install.py's suites line: a suite that printed its count and exited 1 read "no result line, exit 1" - CI's GBK job
+# had 137 ok, 2 failed in its log and the runner said it had no count. The words say the count, and the exit code when it
+# is not 0; "no result line" only when there is none; a suite that prints no count (NO_COUNT) that fails, its exit code.
+import ci_install                                        # noqa: E402
+import inspect                                           # noqa: E402
+
+
+def words_of(*a):
+    return ci_install.suite_words(*a)
+
+
+for label_, args_, want_ in (
+        ("a suite that ends green: its count", (True, 246, 0, 0), "246 ok, 0 failed"),
+        ("one that printed its count and exited 1: the count, and the exit code", (True, 137, 2, 1),
+         "137 ok, 2 failed, exit 1"),
+        ("one whose count is all ok and that still exits 2: the count and the exit code", (True, 10, 0, 2),
+         "10 ok, 0 failed, exit 2"),
+        ("one with no count at all: no result line, and the exit code", (False, 0, -1, 1), "no result line, exit 1"),
+        ("one with no count that exits 0: still no result line", (False, 0, -1, 0), "no result line, exit 0"),
+        ("a suite in NO_COUNT that ends green: nothing was counted", (False, 0, 0, 0, True), "0 ok, 0 failed"),
+        ("a suite in NO_COUNT that fails: its exit code, not \"no result line\"", (False, 0, -1, 1, True), "exit 1")):
+    attempt("ci_install.suite_words, %s" % label_, lambda a_=args_, w_=want_: (words_of(*a_) == w_, repr(words_of(*a_))))
+attempt("ci_install's `suites` prints those words (not its own condition on the exit code)",
+        lambda: ("suite_words(" in inspect.getsource(ci_install.cmd_suites)
+                 and "no result line" not in inspect.getsource(ci_install.cmd_suites), "cmd_suites"))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)

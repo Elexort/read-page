@@ -548,6 +548,18 @@ def cjk_reads(a, work, res):
 
 
 # ---------------------------------------------------------------- suites
+def suite_words(counted, ok, failed, rc, no_count=False):
+    """What the suites' list says of one suite's end: its count, and the exit code when that is not 0 - a suite that
+    printed `137 ok, 2 failed` and exited 1 was `no result line, exit 1`, as if it had printed nothing. "No result
+    line" only when there is none; a suite that prints no count (NO_COUNT) is `0 ok, 0 failed` when it ends green and
+    its exit code when it fails."""
+    if counted:
+        return "%d ok, %d failed%s" % (ok, failed, "" if rc == 0 else ", exit %s" % rc)
+    if no_count:
+        return "%d ok, %d failed" % (ok, failed) if rc == 0 else "exit %s" % rc
+    return "no result line, exit %s" % rc
+
+
 def cmd_suites(a):
     cjk = ["cjk"] if os.path.isfile(os.path.join(ROOT, "tests", "cjk.py")) else []
     names = [x for x in a.only.split(",") if x] or (OFFLINE + cjk + ([] if a.no_browser else [BROWSER_SUITE]))
@@ -593,9 +605,8 @@ def cmd_suites(a):
         skips = [ln for ln in out.splitlines() if ln.startswith("SKIP")]
         res[n] = {"ok": m_ok, "failed": m_failed, "rc": rc, "seconds": round(time.time() - t0), "skipped": len(skips)}
         print("%-5s %-16s %s  (%d s)%s" % ("ok" if good else "FAIL", n,
-                                           ("%d ok, %d failed" % (m_ok, m_failed)) if (m or n in NO_COUNT) and rc == 0
-                                           else "no result line, exit %s" % rc, time.time() - t0,
-                                           ("  %d skipped" % len(skips)) if skips else ""))
+                                           suite_words(m is not None, m_ok, m_failed, rc, n in NO_COUNT),
+                                           time.time() - t0, ("  %d skipped" % len(skips)) if skips else ""))
         for ln in skips[:6]:
             print("      " + ln[:200])
         if m_ok == 0 and good and n not in NO_COUNT:

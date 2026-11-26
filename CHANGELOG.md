@@ -15,6 +15,10 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   block, 16 characters for each image block, as Cline's SDK counts it - and the text is rendered again inside what
   is left; the pointer to the next line names where the shorter block ends. 12 big pictures and two screenshot tiles:
   7 993 -> 7 300 characters; 60 small pictures: 8 463 -> 7 769.
+- **CI's runner names a failing suite's count**: `tools/ci_install.py suites` printed `no result line, exit 1` for a suite
+  that had printed `137 ok, 2 failed` and exited 1 - the count was shown only when the exit code was 0. It says the
+  count, and the exit code when that is not 0 (`137 ok, 2 failed, exit 1`); `no result line` only when there is none; a
+  suite that prints no count (`NO_COUNT`) that fails, its exit code (`suite_words`, checked in `tests/environment.py`).
 - **`--from "text"` under a POSIX locale that is not UTF-8** (KNOWN-ISSUES 274): CI's GBK job passed the quote's
   `·` as the bytes A1 A4, which Python's UTF-8 mode holds as lone surrogates, so no line held the quote and its
   `not in` line raised. `ownenv.arg_text` reads an argument in the locale's code set only where it holds a lone
