@@ -220,7 +220,9 @@ them the screens come one by one and `improve:` names Pillow. Nothing is scaled.
 - The last screen of a page stops where the page ends; the part the screen before showed is cut,
   never repeated. `signals.screens` says how many screens came, `signals.screens_needed` how many the
   page has when that is more - `N` was smaller, or the read's deadline ended the loop with what was
-  taken.
+  taken. A step of the page that fails (the setup, or a screen's scroll, wait, hiding of the bars or capture) ends
+  the loop too, and `signals.screenshots_failed` - with a `screenshots:` line in the header - names the step and what
+  it said (`screen 2, capturing: TimeoutError: ...`); a capture took no picture in silence before.
 - PDFs go through `pymupdf` as the same 1280x1568 pictures of two screens; docx/xlsx/pptx/epub have
   no pages and say so.
 - Cost: a 1280x1568 picture is ~2 700 tokens (about w·h/750). Measured: MDN, three screens 6.9 s in

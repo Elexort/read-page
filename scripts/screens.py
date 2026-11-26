@@ -16,7 +16,9 @@ Now the page is laid out in a laptop's window, 1280x784, and scrolled screen by 
   case, is 5.76 MB as PNG and 2.25 MB as JPEG q95);
 - the context asks for reduced motion and animations are stopped, so a section is not caught
   halfway through its entrance;
-- the read's deadline ends the loop: what was taken is kept, and the answer says K of N.
+- the read's deadline ends the loop: what was taken is kept, and the answer says K of N;
+- a step of the page that fails (the setup, a screen) ends the loop too, and the answer says which step and what
+  it said (`signals.screenshots_failed`), so a capture that took no picture says why.
 """
 import io
 import os
@@ -149,35 +151,52 @@ def _alone(png, tool, page):
         return png, "png"
 
 
+def _why(step, e):
+    """A step's failure as one line: the step, the error's name and the first line of what it said."""
+    said = " ".join(str(e).split("\n", 1)[0].split())[:160]
+    return "%s: %s%s" % (step, type(e).__name__, (": " + said) if said else "")
+
+
 def capture(page, workdir, want, seconds_left=lambda: 1e9, per_screen=1.5):
     """The first `want` screens of the page into workdir/shots: (entries, screens the page has,
-    screens taken). Each entry is one picture: {file, width, height, bytes, format, screens}."""
+    screens taken, why). Each entry is one picture: {file, width, height, bytes, format, screens}.
+    `why` is "" unless a step of the page failed - the setup, or a screen - and then it names the step and
+    the error: a capture that took nothing, or stopped early, never does it in silence. The read's deadline
+    that ends the loop is no failure."""
     if want <= 0:
-        return [], 0, 0
+        return [], 0, 0, ""
+    step = "adding the style"
     try:
         page.add_style_tag(content=STYLE)
+        step = "measuring the page"
         page.evaluate(WATCH_JS)
         inner, height = page.evaluate(SCROLLER_JS)
         vh = int(page.evaluate("() => innerHeight") or SCREEN_H)
-    except Exception:                                         # noqa: BLE001
-        return [], 0, 0
+    except Exception as e:                                    # noqa: BLE001
+        return [], 0, 0, _why(step, e)
     height = max(int(height or 0), 1)
     needed = max(1, -(-height // vh))
     shots = os.path.join(workdir, "shots")
     os.makedirs(shots, exist_ok=True)
     tool = glue_tool()
     screens = []                                   # (png, overlap with the screen before)
+    why = ""
     for i in range(min(want, needed)):
         if i and seconds_left() < per_screen:
             break                                  # the deadline: keep what was taken
+        step = "scrolling"
         try:
             at = int(page.evaluate(SCROLL_JS, [bool(inner), i * vh]) or 0)
             page.evaluate(FRAMES_JS)
+            step = "waiting for the screen"
             _wait_ready(page)
+            step = "hiding the bars"
             page.evaluate(HIDE_JS, i + 1)
             page.evaluate(FRAMES_JS)
+            step = "capturing"
             png = page.screenshot(type="png")
-        except Exception:                                     # noqa: BLE001
+        except Exception as e:                                # noqa: BLE001
+            why = _why("screen %d, %s" % (i + 1, step), e)
             break
         # the last screen of a page stops where the page ends: the part screen i-1 showed is cut
         screens.append((png, max(0, i * vh - at) if i else 0))
@@ -200,4 +219,4 @@ def capture(page, workdir, want, seconds_left=lambda: 1e9, per_screen=1.5):
         entries.append({"file": rel, "width": int(w), "height": int(h), "bytes": len(data), "format": fmt,
                         "screens": list(range(first, first + len(g)))})
         first += len(g)
-    return entries, needed, len(screens)
+    return entries, needed, len(screens), why
