@@ -453,6 +453,10 @@
         },
         "screenshot_unsupported": {
           "type": "string"
+        },
+        "screenshots_failed": {
+          "type": "string",
+          "description": "--screenshots took no picture, or stopped early, because a step of the page failed: the step and what it said"
         }
       }
     },

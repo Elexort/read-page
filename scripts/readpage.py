@@ -3514,9 +3514,12 @@ def browsers_close(seconds=10.0):
     _BROWSER_THREADS[:] = [t for t in _BROWSER_THREADS if t.is_alive()]
 
 
-def apply_shots(manifest, workdir, entries, needed):
+def apply_shots(manifest, workdir, entries, needed, why=""):
     """Put the pictures into the manifest: files, per-picture facts, the screens they hold, and how
-    many screens the page has when that is more (the deadline, or N smaller than the page)."""
+    many screens the page has when that is more (the deadline, or N smaller than the page). `why`:
+    what failed when a capture took no picture or stopped early (screens.capture) - the answer says it."""
+    if why:
+        manifest["signals"]["screenshots_failed"] = why
     if not entries:
         return
     manifest["files"]["screenshots"] = [os.path.join(workdir, e["file"]) for e in entries]
@@ -3531,13 +3534,14 @@ def apply_shots(manifest, workdir, entries, needed):
 
 
 def capture_shots(page, workdir, want):
-    """The first `want` screens of the page (screens.py): (entries, screens the page has)."""
+    """The first `want` screens of the page (screens.py): (entries, screens the page has, why it stopped -
+    "" unless a step of the page failed)."""
     t_sc = now()
-    entries, needed, taken = screens.capture(page, workdir, want, seconds_left=lambda: budget.left())
-    budget.record("screens", t_sc, "deadline" if taken < min(want, needed) else "ok",
-                  note="%d of %d asked, the page has %d" % (taken, want, needed))
-    trace("shots", pictures=len(entries), screens=taken, needed=needed, glue=screens.glue_tool() or "-")
-    return entries, needed
+    entries, needed, taken, why = screens.capture(page, workdir, want, seconds_left=lambda: budget.left())
+    budget.record("screens", t_sc, "fail" if why else "deadline" if taken < min(want, needed) else "ok",
+                  note="%d of %d asked, the page has %d%s" % (taken, want, needed, "; " + why if why else ""))
+    trace("shots", pictures=len(entries), screens=taken, needed=needed, glue=screens.glue_tool() or "-", why=why)
+    return entries, needed, why
 
 
 def pdf_shots(path, workdir, want):
@@ -3879,9 +3883,9 @@ def _render(url, c, shots, shot_dir, box, ready, wall=False):
         except Exception as _dbg_e:                        # noqa: BLE001
             debuglog.exc("browser: visible DOM", _dbg_e)
             visible = ""
-        shot_entries, shot_needed = ([], 0)
+        shot_entries, shot_needed, shot_why = ([], 0, "")
         if shots and shot_dir and not _RENDER_STOP.is_set():
-            shot_entries, shot_needed = capture_shots(page, shot_dir, shots)
+            shot_entries, shot_needed, shot_why = capture_shots(page, shot_dir, shots)
             if shot_entries and not html:
                 try:                                        # the DOM the tiles show, for the text
                     html = page.content()
@@ -3896,7 +3900,7 @@ def _render(url, c, shots, shot_dir, box, ready, wall=False):
             t_page - t0, loaded - t_page, t_dom - loaded, now() - t_dom)
         inside = sorted(set(inside_watch or []))
         return {"html": html, "inner": inner, "visible": visible, "waited": waited,
-                "shots": shot_entries, "shots_needed": shot_needed,
+                "shots": shot_entries, "shots_needed": shot_needed, "shots_why": shot_why,
                 "status": status or None, "final": landed, "load_cap": load_cap, "phases": phases,
                 "error_page": browser_error_page(html, inner, landed), "inside": inside,
                 "partial": partial, "engine": label, "ms": int((now() - t0) * 1000)}
@@ -9718,7 +9722,7 @@ def read(args):
 
     kind, type_conflict = detect_kind(f.get("head") or body_bytes(f, 512), f["ct"],
                                       urllib.parse.urlparse(url).path)
-    shot_entries, shot_needed = [], 0      # filled by the browser tier or by pdf_shots()
+    shot_entries, shot_needed, shot_why = [], 0, ""      # filled by the browser tier or by pdf_shots()
     if type_conflict:
         manifest["signals"]["type_conflict"] = True
 
@@ -10067,6 +10071,7 @@ def read(args):
             manifest["signals"]["browser_blocked"] = len(r.get("blocked") or []) + len(r["inside"])
             manifest["signals"]["browser_inside"] = browser_inside
             shot_entries, shot_needed = [], 0
+            shot_why = "the page reached into the local network; its screens are not used" if shots_want else ""
         elif r and r.get("error_page"):
             # Chrome's own page ("This site can't be reached", ERR_..., HTTP ERROR 503) is not the
             # site's: never its text
@@ -10077,7 +10082,7 @@ def read(args):
                 manifest["signals"]["render_status"] = r["status"]
             if r.get("blocked"):
                 manifest["signals"]["browser_blocked"] = len(r["blocked"])
-            shot_entries, shot_needed = r.get("shots") or [], r.get("shots_needed") or 0
+            shot_entries, shot_needed, shot_why = r.get("shots") or [], r.get("shots_needed") or 0, r.get("shots_why") or ""
         elif r:
             manifest["chain"]["tried"].append(r["engine"])
             vis2 = visible_text(r["html"])
@@ -10122,7 +10127,7 @@ def read(args):
                 manifest["signals"]["render_status"] = r["status"]
             if r.get("partial"):
                 manifest["signals"]["render_partial"] = True
-            shot_entries, shot_needed = r.get("shots") or [], r.get("shots_needed") or 0
+            shot_entries, shot_needed, shot_why = r.get("shots") or [], r.get("shots_needed") or 0, r.get("shots_why") or ""
             if r.get("waited"):
                 manifest["signals"]["browser_waited"] = r["waited"]
             if r.get("blocked"):
@@ -10337,7 +10342,7 @@ def read(args):
     if len(clean) >= 2:
         manifest["signals"]["extractors_agree"] = agree
     manifest["files"] = {"content": content_path, "page": page_path, "raw": raw_path}
-    apply_shots(manifest, workdir, shot_entries, shot_needed)
+    apply_shots(manifest, workdir, shot_entries, shot_needed, shot_why)
     if rendered_pages:
         manifest["files"]["pages"] = rendered_pages
     manifest["dir"] = workdir

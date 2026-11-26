@@ -6,11 +6,13 @@ flag, the privacy and network rules, the limits, cookies, pictures and video.
 ## The answer
 
 `readpage.py URL` prints a header - status, engine, size, the work folder, `reason:`, `ignored:`, `document:`,
-`advice:`, `missing:`/`improve:` - then the text: whole when it fits, otherwise an outline with line numbers,
+`screenshots:`, `advice:`, `missing:`/`improve:` - then the text: whole when it fits, otherwise an outline with line numbers,
 the first block and the line to go on from. `document:` is what a document's reader says of what it
 left out or could not read (parts that do not unpack, a table cut at its caps, pictures past its limit or in
-a format no browser shows, its time run out, its own error: `signals.document_note`); `missing:` is what this
-machine lacks, never that.
+a format no browser shows, its time run out, its own error: `signals.document_note`); `screenshots:` is there
+only when `--screenshots` took no picture (`none taken`) or stopped early (`stopped early`, beside the screens that
+came) because a step of the page failed - the step and what it said (`signals.screenshots_failed`); `missing:` is
+what this machine lacks, never that.
 
 ```
 read-page · ok · defuddle, 87% of the page · content.md 24.7 KB, 389 lines · 1.9 s

@@ -72,6 +72,9 @@ TALL = ("<!doctype html><html><head><meta charset='utf-8'><title>Tall</title>"
         + "".join("<p>Paragraph %d: the quick brown fox jumps over the lazy dog, twice over.</p>" % i
                   for i in range(60))
         + "</body></html>")
+# a page whose own script makes `innerHeight` throw: the screens cannot be measured, so it gives no picture - and says why
+BROKEN = TALL.replace("<body>", "<body><script>Object.defineProperty(window, 'innerHeight', "
+                      "{get: function () { throw new Error('no height here'); }});</script>")
 GATE_ARTICLE = ("<!doctype html><html><head><title>Members</title></head><body><h1>Members</h1><p>"
                 + WORDS + "</p></body></html>")
 GATE_SHELL = """<!doctype html><html><head><title>Members</title></head><body><div id="app"></div>
@@ -101,7 +104,7 @@ def serve(routes):
                     self.wfile.write(b)
                     return
             else:
-                body = {"shell": SHELL, "late": LATE, "tall": TALL, "tiny": TINY}.get(kind, SHELL)
+                body = {"shell": SHELL, "late": LATE, "tall": TALL, "tiny": TINY, "broken": BROKEN}.get(kind, SHELL)
             b = body.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -119,7 +122,7 @@ def serve(routes):
 
 
 cache = os.path.join(tempfile.mkdtemp(prefix="browser-live-"), "cache")
-srv, port = serve({"/spa": "shell", "/late": "late", "/gate": "gate", "/tall": "tall", "/tiny": "tiny"})
+srv, port = serve({"/spa": "shell", "/late": "late", "/gate": "gate", "/tall": "tall", "/tiny": "tiny", "/broken": "broken"})
 base = "http://127.0.0.1:%d" % port
 
 
@@ -131,6 +134,20 @@ def read(path, *flags, env_extra=None):
         return json.loads(p.stdout.decode("utf-8", "replace"))
     except Exception:
         return {}
+
+
+def shots_said(m):
+    """What the answer says about --screenshots that took no picture or stopped early: the capture's own reason
+    (signals.screenshots_failed, KNOWN-ISSUES 246) and, where nothing came, what the browser tier did - a flake of
+    CI's browser job once printed `screens None` and nothing else."""
+    sig, chain = m.get("signals") or {}, m.get("chain") or {}
+    bits = []
+    if sig.get("screenshots_failed"):
+        bits.append("screenshots_failed: %s" % sig["screenshots_failed"])
+    if not m.get("screenshots"):
+        bits.append("status %s, tried %s, skipped %s" % (
+            m.get("status"), chain.get("tried"), [s.get("why") for s in chain.get("skipped") or []]))
+    return "; " + " | ".join(bits) if bits else ""
 
 
 m1 = read("/spa")
@@ -181,27 +198,33 @@ sig4 = m4.get("signals") or {}
 check("--screenshots alone: two screens, glued into one 1280x1568 picture",
       len(tiles) == 1 and tiles[0]["width"] == 1280 and tiles[0]["height"] == 1568
       and tiles[0].get("screens") == [1, 2] and sig4.get("screens") == 2,
-      "%s; screens %s" % ([(t["width"], t["height"], t.get("screens")) for t in tiles], sig4.get("screens")))
+      "%s; screens %s%s" % ([(t["width"], t["height"], t.get("screens")) for t in tiles], sig4.get("screens"),
+                            shots_said(m4)))
 check("the page admits it has more screens", (sig4.get("screens_needed") or 0) > 2, str(sig4.get("screens_needed")))
 m4b = read("/tall", "--screenshots", env_extra={"READ_PAGE_SKIP": "glue"})
 t4b = m4b.get("screenshots") or []
 check("without Pillow or PyMuPDF the two screens come one by one, and the answer says what helps",
       len(t4b) == 2 and all(t["height"] == 784 for t in t4b)
       and any(i.get("what") == "screenshots" for i in m4b.get("improve") or []),
-      "%s; improve %s" % ([(t["width"], t["height"]) for t in t4b], m4b.get("improve")))
+      "%s; improve %s%s" % ([(t["width"], t["height"]) for t in t4b], m4b.get("improve"), shots_said(m4b)))
 
 m5 = read("/tall", "--screenshots", "3")
 tiles5 = m5.get("screenshots") or []
 check("--screenshots 3: screens 1-2 glued, screen 3 alone",
       [t.get("screens") for t in tiles5] == [[1, 2], [3]]
       and [t["height"] for t in tiles5] == [1568, 784] and all(t["width"] == 1280 for t in tiles5),
-      str([(t["height"], t.get("screens")) for t in tiles5]))
+      str([(t["height"], t.get("screens")) for t in tiles5]) + shots_said(m5))
 m5s = read("/spa", "--screenshots", "3")
 t5s = m5s.get("screenshots") or []
 check("a page shorter than the screens asked for gives the screens it has",
       bool(t5s) and (m5s.get("signals") or {}).get("screens", 0) <= 3
       and not (m5s.get("signals") or {}).get("screens_needed"),
-      "%s %s" % ([(t["height"], t.get("screens")) for t in t5s], m5s.get("signals", {}).get("screens")))
+      "%s %s%s" % ([(t["height"], t.get("screens")) for t in t5s], m5s.get("signals", {}).get("screens"), shots_said(m5s)))
+m5b = read("/broken", "--screenshots")
+why5b = (m5b.get("signals") or {}).get("screenshots_failed") or ""
+check("--screenshots of a page that cannot be measured takes no picture and says why (KNOWN-ISSUES 246)",
+      m5b.get("status") == "ok" and not m5b.get("screenshots") and "measuring the page" in why5b and "no height here" in why5b,
+      "%s; %s%s" % (m5b.get("status"), why5b, shots_said(m5b) if not why5b else ""))
 
 # the files must be readable by something that is not the writer: a magic check, and a decode
 # by MuPDF when it is installed (it is in the offline job and can be added to this one)
@@ -274,7 +297,8 @@ res = rpc("tools/call", {"name": "read_url",
 blocks = (res.get("result") or {}).get("content") or []
 kinds = [b.get("type") for b in blocks]
 caps = [b.get("text", "") for b in blocks if b.get("type") == "text"]
-check("MCP: screenshots arrive as an image block", "image" in kinds, str(kinds[:10]))
+check("MCP: screenshots arrive as an image block", "image" in kinds,
+      str(kinds[:10]) + "".join("; " + ln for c in caps[:1] for ln in c.splitlines() if ln.startswith("screenshots:")))
 check("MCP: the picture has its own caption (which screens, of how many)",
       any(c.startswith("screen 1 of ") for c in caps), [c[:40] for c in caps][-2:])
 proc.stdin.close()

@@ -8,6 +8,12 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **`--screenshots` that takes no picture says why** (KNOWN-ISSUES 246): `screens.capture` returned nothing when a
+  step of the page failed, and the answer had no screenshots and no word of it (CI's browser job once printed
+  `screens None` and nothing else). It returns the step and what it said now: `signals.screenshots_failed`, a
+  `screenshots:` line in the header (`none taken - screen 1, capturing: TimeoutError: ...`, or `stopped early`
+  beside the screens that came), the budget's `fail` in place of `ok` or `deadline`, and `tests/browser_live.py`
+  prints it where a screenshot check fails. A deadline that ends the loop is still no failure.
 - **`--setup`'s three Python processes start in UTF-8 mode** (KNOWN-ISSUES 245): the launcher, the worker it starts
   and the yt-dlp updater ran `python -E -B` - and `-E` drops `PYTHONUTF8` too - so on a Chinese Windows a traceback
   with a Chinese path would reach `setup-detail.log` in GBK, in a log that is UTF-8 everywhere else. They have

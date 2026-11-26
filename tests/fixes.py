@@ -1401,6 +1401,112 @@ def main():
         else:
             os.environ["READ_PAGE_CACHE"] = old_cache
 
+    # ------------------------------------------------ --screenshots that takes no picture says why (KNOWN-ISSUES 246)
+    # screens.capture returned [] when a step of the page failed - the answer had no screenshots and no word of it
+    # (CI's browser job once printed "screens None" with nothing to go on). A fake browser breaks one step at a time.
+    _, _, mods = inproc(["--caps"])
+
+    class ShotPage:
+        """A page as screens.capture drives it: it answers the scripts, and `breaks` names the step that raises."""
+        def __init__(self, breaks="", at=0, height=2000):
+            self.breaks, self.at, self.height, self.shots = breaks, at, height, 0
+
+        def hit(self, step):
+            if self.breaks == step:
+                raise RuntimeError("Page.%s: Target page, context or browser has been closed\nCall log: ..." % step)
+
+        def add_style_tag(self, content=""):
+            self.hit("add_style_tag")
+
+        def wait_for_timeout(self, ms):
+            pass
+
+        def evaluate(self, js, arg=None):
+            sc = mods.screens
+            if js == sc.SCROLLER_JS:
+                self.hit("evaluate")
+                return ["", self.height]
+            if js == sc.STATE_JS:
+                return [0, 1000.0, "loaded"]
+            if js == sc.SCROLL_JS:
+                return arg[1]
+            if js == "() => innerHeight":
+                return 784
+            return 0
+
+        def screenshot(self, type="png", quality=None):
+            self.shots += 1
+            if self.breaks == "screenshot" and self.shots > self.at:
+                raise RuntimeError("Page.screenshot: Timeout 30000ms exceeded.\nCall log: ...")
+            return b"\x89PNG fake screen %d" % self.shots
+
+    def shots_of(page, **kw):
+        """screens.capture on the fake page: (entries, needed, taken, why) - why None where the old code gave no fourth."""
+        wd = tempfile.mkdtemp(prefix="shots-", dir=tmp)
+        try:
+            got = mods.screens.capture(page, wd, kw.pop("want", 2), **kw)
+        except Exception as e:                                     # noqa: BLE001
+            return [], 0, 0, "raised %s" % e
+        return got if len(got) > 3 else got + (None,)
+
+    old_skip = os.environ.get("READ_PAGE_SKIP")
+    os.environ["READ_PAGE_SKIP"] = "glue"                          # one screen a picture: no Pillow needed
+    try:
+        e0, n0, t0, why0 = shots_of(ShotPage())
+        check("--screenshots: a page that takes its screens says nothing is wrong",
+              (len(e0), n0, t0, why0) == (2, 3, 2, ""), str((len(e0), n0, t0, why0)))
+        e1, _n1, t1, why1 = shots_of(ShotPage("add_style_tag"))
+        check("--screenshots: a page that refuses the setup gives no picture, and says which step and what it said",
+              not e1 and t1 == 0 and isinstance(why1, str) and "adding the style" in why1
+              and "RuntimeError" in why1 and "has been closed" in why1 and "Call log" not in why1, repr(why1))
+        e2, _n2, t2, why2 = shots_of(ShotPage("screenshot"))
+        check("--screenshots: a first screen that cannot be captured gives no picture, and says so",
+              not e2 and t2 == 0 and isinstance(why2, str) and "screen 1" in why2 and "capturing" in why2
+              and "Timeout 30000ms" in why2, repr(why2))
+        e3, n3, t3, why3 = shots_of(ShotPage("screenshot", at=1))
+        check("--screenshots: a later screen that fails keeps the first one, and says where it stopped",
+              len(e3) == 1 and t3 == 1 and n3 == 3 and isinstance(why3, str) and "screen 2" in why3, repr((len(e3), why3)))
+        e4, _n4, t4, why4 = shots_of(ShotPage(), seconds_left=lambda: 0.0)
+        check("--screenshots: the read's deadline that ends the loop is no failure",
+              len(e4) == 1 and t4 == 1 and why4 == "", repr((len(e4), why4)))
+
+        # the answer carries it: the signal in the manifest, the row in the header, the budget's word
+        wd5 = tempfile.mkdtemp(prefix="shots-", dir=tmp)
+
+        def applied(entries, needed, why):
+            """A manifest after apply_shots, and its answer's header (the old apply_shots took no reason)."""
+            man = {"files": {}, "signals": {}, "status": "ok"}
+            try:
+                mods.apply_shots(man, wd5, entries, needed, why)
+            except TypeError as e:
+                man["signals"]["apply_shots"] = str(e)
+            return man, "\n".join(mods.answer.header(man, "content.md", 1, 10))
+
+        got5 = mods.capture_shots(ShotPage("screenshot"), wd5, 2)
+        why5 = got5[2] if len(got5) > 2 else None
+        man5, head5 = applied(got5[0], got5[1], why5)
+        check("--screenshots: apply_shots puts the reason into signals.screenshots_failed",
+              isinstance(why5, str) and man5["signals"].get("screenshots_failed") == why5 and "screenshots" not in man5,
+              str(man5["signals"]))
+        check("--screenshots: the answer's header says no screenshot was taken, and why",
+              isinstance(why5, str) and "screenshots: none taken - %s" % why5 in head5, head5.replace("\n", " | ")[:300])
+        row5 = [r for r in mods.budget.steps() if r["step"] == "screens"][-1:]
+        check("--screenshots: the budget records the failed capture as a failure, not as ok or a deadline",
+              bool(row5) and row5[0]["end"] == "fail" and "capturing" in row5[0].get("note", ""), str(row5))
+        man6, head6 = applied([{"file": "shots/01.png", "width": 1280, "height": 784, "bytes": 10, "format": "png",
+                                "screens": [1]}], 3, "screen 2, capturing: RuntimeError: boom")
+        check("--screenshots: a page that stopped after some screens says so beside them",
+              man6["signals"].get("screens_needed") == 3 and "screenshots: stopped early - screen 2" in head6,
+              head6.replace("\n", " | ")[:300])
+        man7, head7 = applied([], 0, "")
+        check("--screenshots: nothing asked, nothing failed, no signal and no row",
+              "screenshots_failed" not in man7["signals"] and "screenshots:" not in head7, head7.replace("\n", " | ")[:200])
+    finally:
+        if old_skip is None:
+            os.environ.pop("READ_PAGE_SKIP", None)
+        else:
+            os.environ["READ_PAGE_SKIP"] = old_skip
+
     shutil.rmtree(tmp, ignore_errors=True)
     print("\n%d ok, %d failed" % (ok, failed))
     return 0 if failed == 0 else 1
