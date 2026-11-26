@@ -81,6 +81,10 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   paragraphs and pictures before its table (they were lost, or glued into one cell word to word), and a cell's
   comment is a note of its cell, after the table (comments were left out: one said why a sheet's figures are
   missing). Every deck read the same, byte for byte.
+- **CI: the layout model's checks hold on a slow runner** (KNOWN-ISSUES 241): row 237's two checks of a model that
+  waits failed once on `install.yml`'s macOS 15 x64 runner, whose stand-in load - imports, work done before its sleep -
+  took all of the 2 s the checks gave the model. The checks now give it twice that load on the machine and a second
+  more; a stand-in whose load works 2.25 s failed the old checks as CI did and passes the new.
 - **CI: the Ubuntu container's apt retries** (KNOWN-ISSUES 249): the Ubuntu 20.04 container of `install.yml` failed twice
   on 2026-11-23 on apt's "Connection failed" to the mirrors, before any of our code ran (its re-run passed).
   `tools/ci_container.sh` runs every `apt-get` with `-o Acquire::Retries=5`; `tests/environment.py` checks it.

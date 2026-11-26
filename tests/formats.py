@@ -617,30 +617,38 @@ try:
             # KNOWN-ISSUES 237: the model's time is the time it works. Four reads at once on a Celeron's budget gave
             # its process a fifth of a CPU: its load alone outlasted the fixed 10 s, and no page was laid out. A
             # model that waits - for the CPU; here its load or its pages sleep - gets the time it waits, within what
-            # the read has left; one at work the whole time (a busy loop) keeps its own seconds. 2 s of its own, not
-            # 1: its pace comes every half second, and a word or two must come before its own seconds are up
+            # the read has left; one at work the whole time (a busy loop) keeps its own seconds. Its own seconds
+            # here come from the stand-in's load on this machine, which is work - Python and onnxruntime imported -
+            # done before its sleep: 2 s fixed lost to a CI macOS x64 runner whose load took them all (asked 0 of 3,
+            # once in two runs, 2026-11-26); twice the load and a second more, 2 s at least (its pace comes every half
+            # second, and a word or two must come before those seconds are up)
             clock, keep_secs = dict(mod3.budget._state), mod3.PDF_TABLES_SECONDS
             six = os.path.join(tmp, "tables6.pdf")
             table_pdf(six, pages=6)
             d6 = pymupdf.open(six)
             try:
-                mod3.budget.start(30)
-                mod3.PDF_TABLES_SECONDS = 2.0
-                for name, var, val in (("its load", "RP_STUB_LOAD_SLEEP", "3"), ("its pages", "RP_STUB_SLEEP", "1")):
-                    os.environ[var] = val
+                w0 = mod3.TablesWorker()
+                ready = w0.get(time.time() + 60) or {}
+                w0.kill()
+                base = max(2.0, 2 * float(ready.get("busy") or 0) + 1.0)
+                mod3.budget.start(max(30.0, 4 * base + 10))
+                mod3.PDF_TABLES_SECONDS = base
+                for name, var, val in (("its load", "RP_STUB_LOAD_SLEEP", base + 1.5),
+                                       ("its pages", "RP_STUB_SLEEP", base / 2)):
+                    os.environ[var] = str(val)
                     mod3.tables_reset()
                     info = mod3.pdf_tables(many, d3, [p.get_text() for p in d3])
                     os.environ.pop(var, None)
                     mod3.tables_close(kill=True)
                     check("237: a model that waits past its seconds (%s) lays every page out, within the read's time"
-                          % name, info.get("asked") == 3 and not info.get("left") and info.get("secs", 99) < 15,
-                          str(info))
-                os.environ["RP_STUB_BUSY"] = "0.8"
+                          % name, info.get("asked") == 3 and not info.get("left") and info.get("secs", 99) < 3 * base + 10,
+                          "%s (its own %.1f s)" % (info, base))
+                os.environ["RP_STUB_BUSY"] = str(base / 2.5)          # six pages: 2.4 times its own seconds of work
                 mod3.tables_reset()
                 info = mod3.pdf_tables(six, d6, [p.get_text() for p in d6])
                 check("... but a model at work all the time keeps its own seconds: the pages it did not reach are named",
-                      info.get("asked", 9) < 6 and len(info.get("left") or []) >= 2 and info.get("secs", 99) < 5,
-                      str(info))
+                      info.get("asked", 9) < 6 and len(info.get("left") or []) >= 2 and info.get("secs", 99) < base + 3,
+                      "%s (its own %.1f s)" % (info, base))
             finally:
                 os.environ.pop("RP_STUB_BUSY", None)
                 mod3.PDF_TABLES_SECONDS = keep_secs
