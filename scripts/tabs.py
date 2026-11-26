@@ -35,7 +35,8 @@ import re
 from html import unescape
 from html.parser import HTMLParser
 
-STATE = {"shown": "shown", "hidden": "hidden, but extracted", "missing": "loads on click, not extracted"}
+STATE = {"shown": "shown", "hidden": "hidden, but extracted", "missing": "loads on click, not extracted",
+         "cut": "lost in the cut"}         # the last: a cut workbook's rows and sheets (readpage._xlsx_cut, docreaders)
 TOO_LONG = "%s, too long for here: page.md from line %s"
 PANEL_LIMIT = 4096          # bytes of a hidden panel's text; the largest of the 34 pages measured was 3.4 KB
 MAX_HTML = 3 * 1024 * 1024  # as readpage.HUGE_HTML: above it no extractor runs

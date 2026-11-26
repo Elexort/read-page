@@ -4322,15 +4322,20 @@ class _ZipOut(object):
         self.dest, self.w, self.names, self.held = dest, None, [], []
         self.partial, self.lost = "", None     # the member read up to the cut; what lost strings cost
         self.strings = array.array("q")      # the shared strings a workbook's sheets hold, by index
+        # a workbook's sheets as its list names them, and the rows its cut sheet lost (_sheet_plan, _cut_rows)
+        self.sheets, self.cut_rows = None, None
 
     def add(self, name, data, partial=False):
         """One member; `partial`: what arrived of the one the archive was cut in (a sheet of it is
-        taken up to its last whole row). False when nothing of it can be read."""
+        taken up to its last whole row, and the rows it lost are noted). False when nothing of it can
+        be read."""
         sheet = bool(_XL_SHEET.match(name))
         if partial and sheet:
+            rows = _cut_rows(data)
             data = _cut_sheet(data)
             if data is None:
                 return False
+            self.cut_rows = dict(rows, part=name) if rows else None
         if partial:
             self.partial = name
         self.names.append(name)
@@ -4404,6 +4409,63 @@ def _cut_sheet(data):
     if not rows:
         return None
     return data[:rows.end()] + (b"" if rows.group(1) else b"</%ssheetData>" % p) + b"</%sworksheet>" % p
+
+
+_XL_ROW = re.compile(rb"<(?:\w{1,32}:)?row\b([^<>]{0,%d})>|</(?:\w{1,32}:)?row\s*>" % docreaders.TAG_MAX)
+_XL_ROW_R = re.compile(rb"\br\s*=\s*[\"'](\d{1,7})[\"']")
+_XL_DIMENSION = re.compile(rb"<(?:\w{1,32}:)?dimension\b[^<>]{0,%d}?\bref\s*=\s*[\"']([^\"'<>]{1,40})[\"']"
+                           % docreaders.TAG_MAX)
+SHEET_ROWS = 1048576                   # an Excel sheet's rows: a range past it is no extent
+
+
+def _cut_rows(data):
+    """What a sheet the archive was cut in lost: {"after": the last whole row's number (0: none), "to": the
+    sheet's last row by its extent, `<dimension ref="A1:G78954"/>` at its top - Excel and openpyxl write it,
+    so the total is known though the rows are gone - or None}; None when no row was lost (the cut came after
+    its rows). A row with no number of its own is the one after the row before it."""
+    after, last_open = 0, 0
+    for m in _XL_ROW.finditer(data):
+        if m.group(1) is not None:
+            r = _XL_ROW_R.search(m.group(1))
+            last_open = int(r.group(1)) if r else last_open + 1
+            if m.group(0).endswith(b"/>"):
+                after = last_open                    # <row r="5"/>: a whole row with no cells
+        else:
+            after = last_open
+    dim = _XL_DIMENSION.search(data[:4096])
+    to = None
+    if dim:
+        r = re.findall(rb"(\d{1,7})", dim.group(1).split(b":")[-1])
+        to = int(r[-1]) if r and 0 < int(r[-1]) <= SHEET_ROWS else None
+    if to is not None and to <= after:
+        return None                                   # every row its extent names arrived
+    return {"after": after, "to": to}
+
+
+def _sheet_plan(wb, rels):
+    """A workbook's sheets in its list's order, [{"name", "part"}] (part: the worksheet the relationship
+    names, "" for a chart sheet), from workbook.xml and its relationships as they arrived; None without
+    either."""
+    if not wb or not rels:
+        return None
+    targets = {}
+    for m in re.finditer(rb"(?is)<(?:\w{1,32}:)?Relationship\b[^<>]{0,%d}?/?>" % TAG_MAX, rels):
+        tag = m.group(0).decode("utf-8", "replace")
+        rid, target = _attr(tag, "Id") or "", _attr(tag, "Target") or ""
+        if (_attr(tag, "TargetMode") or "").lower() == "external" or not target:
+            continue
+        part = posixpath.normpath(target.lstrip("/") if target.startswith("/") else
+                                  posixpath.join("xl", urllib.parse.unquote(target))).lstrip("/")
+        targets[rid] = part if _XL_SHEET.match(part) else ""
+    plan = []
+    for m in re.finditer(rb"(?is)<(?:\w{1,32}:)?sheet\b[^<>]{0,%d}?/?>" % TAG_MAX, wb):
+        tag = m.group(0).decode("utf-8", "replace")
+        name = _attr(tag, "name")                      # unescaped
+        rid = next((v for _k, v in re.findall(r'\b(\w{1,32}:id)\s*=\s*"([^"]*)"', tag)), "")
+        if not name or rid not in targets:
+            return None                                # a sheet the relationships do not name: no plan
+        plan.append({"name": name, "part": targets[rid]})
+    return plan or None
 
 
 def _strings_close(out, names):
@@ -4492,6 +4554,12 @@ def _package_close(out, kind, names):
         with open(held[name], "rb") as fh:
             return fh.read()
     main = _PACKAGE_MAIN[kind]
+    if kind == "xlsx":
+        # the sheets the workbook's list names, as it arrived: a sheet the cut took whole is named where it
+        # would stand (office_fast), before the list is made to hold together without it
+        rels_main = "xl/_rels/workbook.xml.rels"
+        plan = _sheet_plan(part(main) if main in held else b"", part(rels_main) if rels_main in held else b"")
+        out.sheets = [dict(e, here=e["part"] in names) for e in plan] if plan else None
     dropped, sheets = {}, sorted((n for n in names if re.match(r"xl/worksheets/sheet\d+\.xml$", n)),
                                  key=lambda n: int(re.sub(r"\D", "", posixpath.basename(n)) or 0))
     made = []                        # index parts written here, as the package lacked them
@@ -4544,7 +4612,7 @@ def _package_close(out, kind, names):
                                              % (_RELS, main)]))
         names = names | {"_rels/.rels"}
     if "[Content_Types].xml" in held:
-        out._write("[Content_Types].xml", part("[Content_Types].xml"))
+        out._write("[Content_Types].xml", _types_kept(part("[Content_Types].xml"), names))
     else:
         exts = sorted({n.rsplit(".", 1)[-1].lower() for n in names if "." in posixpath.basename(n)} & set(_DEFAULT_TYPES))
         over = []
@@ -4569,6 +4637,19 @@ def _rels_doc(rels):
 
 def _xml_attr(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace('"', "&quot;")
+
+
+def _types_kept(data, names):
+    """A package's [Content_Types].xml with every Override for a part the archive lacks taken out: openpyxl
+    reads the shared strings its types name, and a workbook cut in its first sheet - no sheet, so no strings
+    made for it - read nothing ("There is no item named 'xl/sharedStrings.xml'")."""
+    have = {n.lower() for n in names}                 # a part's name is not case-sensitive in a package
+
+    def keep(m):
+        part = urllib.parse.unquote(_attr(m.group(0).decode("utf-8", "replace"), "PartName") or "").lstrip("/")
+        return m.group(0) if not part or part.lower() in have else b""
+    return re.sub(rb"(?is)<Override\b[^<>]{0,%d}/>|<Override\b[^<>]{0,%d}>\s*</Override\s*>" % (TAG_MAX, TAG_MAX),
+                  keep, data)
 
 
 def _rels_kept(name, data, names):
@@ -4742,7 +4823,8 @@ def zip_salvage(path, dest, until=None):
             pos = end
     out.close()
     return {"how": how, "members": found, "whole": whole, "broken": broken, "at": at, "size": size,
-            "more": more, "all_members": toc, "partial": out.partial, "lost": out.lost}
+            "more": more, "all_members": toc, "partial": out.partial, "lost": out.lost,
+            "sheets": out.sheets, "cut_rows": out.cut_rows}
 
 
 def zip_mend(path, dest, until=None):
@@ -5011,12 +5093,45 @@ def docx_para(p, qn):
     return "".join(out)
 
 
-def office_fast(path, sub):
+LOST = tabs.STATE["cut"]               # the state of what a cut archive lost, in its markers
+LOST_MARK = re.compile(r"\[(?:rows|sheet) · %s · [^\]\n]*\]" % re.escape(LOST))
+
+
+def _xlsx_cut(sheets, sheet, out, broke):
+    """A workbook's sheets written by `sheet(ws)` in its list's order; one the archive was cut in says after its last
+    row which rows it lost, `[rows · lost in the cut · 54-78954 · Third]` (`54-?` with no extent), and one the cut
+    took whole stands where it would, `[sheet · lost in the cut · Fourth]` - its name is in workbook.xml, which
+    Excel writes at the top. A sheet is known by its part (openpyxl's read-only sheet keeps it), else by its title."""
+    cut = broke if (broke or {}).get("how") == "cut" else {}
+    plan, rows = cut.get("sheets") or [], cut.get("cut_rows")
+    by_part = {getattr(ws, "_worksheet_path", "") or "": ws for ws in sheets}
+    by_name = {ws.title: ws for ws in sheets}
+    done = set()
+
+    def one(ws):
+        sheet(ws)
+        done.add(id(ws))
+        if rows and (getattr(ws, "_worksheet_path", "") or "") == rows["part"]:
+            out.append(tabs.marker("rows", "cut", ws.title, "%d-%s" % (rows["after"] + 1, rows["to"] or "?")))
+    for entry in plan:
+        ws = by_part.get(entry["part"]) if entry["part"] else None
+        ws = ws if ws is not None else (by_name.get(entry["name"]) if entry["here"] else None)
+        if ws is not None and id(ws) not in done:
+            one(ws)
+        elif entry["part"] and not entry["here"]:
+            out.append(tabs.marker("sheet", "cut", entry["name"]))
+    for ws in sheets:
+        if id(ws) not in done:
+            one(ws)                        # a sheet the list does not name (it was lost, and made here)
+
+
+def office_fast(path, sub, broke=None):
     """The fast path: a library that reads the format directly, no markitdown startup.
 
     The libraries check the file extension, and our download is raw.zip - so feed them bytes.
     What stopped it is in _OFFICE: a member that does not unpack ("damaged"), or the library not
-    installed here ("missing", its name on PyPI).
+    installed here ("missing", its name on PyPI). `broke`: what was wrong with the archive (zip_salvage) -
+    a workbook cut short says where it lost its rows and its sheets (_xlsx_cut).
     """
     import io
     import zipfile
@@ -5084,12 +5199,14 @@ def office_fast(path, sub):
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
             out = []
-            for ws in wb.worksheets:
+
+            def sheet(ws):
                 out.append("## " + ws.title)
                 for row in ws.iter_rows(values_only=True):
                     cells = ["" if v is None else str(v) for v in row]
                     if any(cells):
                         out.append(" | ".join(cells))
+            _xlsx_cut(wb.worksheets, sheet, out, broke)
             return "\n".join(out)
         if sub == "pptx":
             from pptx import Presentation
@@ -5925,7 +6042,7 @@ def own_doc(path, kind, pictures=None):
     if rc == -1:
         budget.record("docreader", t0, budget.ended(CONVERTER_TIMEOUT, secs), own=CONVERTER_TIMEOUT, given=secs,
                       note=kind)
-        return "", "the %s reader did not finish in %.0f s and was stopped" % (kind.upper(), secs or 0)
+        return "", "the %s reader did not finish in %.0f s and was stopped" % (kind.partition("+")[0].upper(), secs or 0)
     try:
         if rc != 0:
             raise ValueError("exit code %s" % rc)
@@ -6724,7 +6841,7 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
     sub = zip_subtype(path) if kind == "zip" else ""
     secs = budget.cap(CONVERTER_TIMEOUT, floor=1.0)
     if sub in ("docx", "xlsx", "pptx"):
-        fast = office_fast(path, sub)
+        fast = office_fast(path, sub, state["broke"])
         if len(fast.strip()) <= 5 and not state["broke"] and _OFFICE.get("damaged"):
             # a member python-docx, python-pptx or openpyxl met does not unpack: the ones that do
             dest = os.path.join(workdir, "_mended-%s.zip" % hashlib.sha1(
@@ -6750,7 +6867,7 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 if not info["whole"]:
                     return "", ""
                 path = dest
-                fast = office_fast(path, sub)
+                fast = office_fast(path, sub, info)
         if len(fast.strip()) > 5:
             return fast, ""
     if kind == "rtf" or sub in ("odt", "ods", "odp"):
@@ -6762,7 +6879,11 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
         pics = os.path.join(workdir, RTF_PICTURES) if kind == "rtf" and not name else None
         if pics:
             shutil.rmtree(pics, ignore_errors=True)
-        md, why = own_doc(path, "rtf" if kind == "rtf" else sub, pics)
+        broke = state["broke"] or {}
+        # an archive cut in its content.xml, or before it: where the XML breaks is the cut, and a spreadsheet says
+        # what it lost (docreaders._cut_lost)
+        cut = "+cut" if broke.get("how") == "cut" and "content.xml" not in (broke.get("whole") or []) else ""
+        md, why = own_doc(path, ("rtf" if kind == "rtf" else sub) + cut, pics)
         again = _by_headers(path, workdir, state) if kind == "zip" and not md.strip() and \
             "could not be unpacked" in why else None
         if again:
@@ -10676,9 +10797,10 @@ def read(args):
     # an archive that is cut, damaged or no ZIP at all: what was read of it is the text
     broke = _ZIPS.get("read") if kind == "zip" and source == "http" else None
     complete = bool(broke and broke.get("all_members") and not broke.get("broken"))   # only its index is broken
-    if broke and (broke.get("lost") or {}).get("cells"):
-        # a cut workbook's cells whose text was lost read LOST_TEXT: the skill's words, not the document's
-        word_count = words_of((pictures.unmarked(text) if doc_engine else text).replace(LOST_TEXT, " "))
+    if broke and ((broke.get("lost") or {}).get("cells") or LOST in text):
+        # a cut workbook's cells whose text was lost read LOST_TEXT, and its rows and sheets the cut took are
+        # marked (LOST_MARK): the skill's words, not the document's
+        word_count = words_of(LOST_MARK.sub(" ", (pictures.unmarked(text) if doc_engine else text).replace(LOST_TEXT, " ")))
     if network_fail and source == "http":          # no reader or archive answered for it
         manifest["status"] = "error"
         error_why = "the host did not answer" + (": " + str(f.get("error"))[:160] if f.get("error") else "")

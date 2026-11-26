@@ -298,7 +298,8 @@ on disk, no OCR engine.
 
 A page shows one tab of a set and folds its other panels and sections away; the text says where each one is and
 what state it is in, with markers of one grammar - the type, the state, what more there is to say, the name last
-(the pictures' markers have it too):
+(the pictures' markers have it too, and a cut workbook's: `[rows · lost in the cut · 54-78954 · Third]`, `[sheet · lost
+in the cut · Fourth]`, [documents.md](documents.md)):
 
 ```
 [tab · shown · Free Plan Limits]

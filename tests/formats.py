@@ -1456,11 +1456,12 @@ try:
     # a workbook as Excel writes one - its text in xl/sharedStrings.xml, after its sheets - cut in transit or on
     # disk: the shared strings that did not arrive leave its cells' numbers (they read nothing: openpyxl stops at
     # the first string it does not have), and what arrived of the part it was cut in is read up to the cut
-    def excel_xlsx(sheets, sst_first=False):
+    def excel_xlsx(sheets, sst_first=False, dimension=False, last=()):
         """sheets: [(name, [(label, number)])], each label a shared string; the members in Excel's order (the
         shared strings after the sheets), or with the shared strings first, and an external link last (a
         government workbook had five; openpyxl stopped at one whose part the cut took). openpyxl writes no
-        shared strings."""
+        shared strings. `dimension`: each sheet's extent at its top, as Excel writes it; `last`: members put
+        after the shared strings (a government workbook had its fifth sheet there)."""
         main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
         rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
         ooxml = "application/vnd.openxmlformats-officedocument.spreadsheetml."
@@ -1474,7 +1475,8 @@ try:
                 xml.append('<row r="%d"><c r="A%d" t="s"><v>%d</v></c><c r="B%d"><v>%s</v></c></row>'
                            % (r, r, at[label], r, number))
             parts.append(("xl/worksheets/sheet%d.xml" % k, '<?xml version="1.0" encoding="UTF-8"?><worksheet '
-                          'xmlns="%s"><sheetData>%s</sheetData></worksheet>' % (main, "".join(xml))))
+                          'xmlns="%s">%s<sheetData>%s</sheetData></worksheet>' % (
+                              main, '<dimension ref="A1:B%d"/>' % len(rows) if dimension else "", "".join(xml))))
         sst = ('<?xml version="1.0" encoding="UTF-8"?><sst xmlns="%s" count="%d" uniqueCount="%d">%s</sst>'
                % (main, len(strings), len(strings), "".join("<si><t>%s</t></si>" % s for s in strings)))
         n = len(sheets)
@@ -1507,7 +1509,8 @@ try:
                  'xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="%s/'
                  'externalLinkPath" Target="file:///C:/totals.xlsx" TargetMode="External"/></Relationships>' % rel)]
         order = index + ([("xl/sharedStrings.xml", sst)] + parts if sst_first else
-                         parts + [("xl/sharedStrings.xml", sst)]) + link
+                         [p for p in parts if p[0] not in last] + [("xl/sharedStrings.xml", sst)]
+                         + [p for p in parts if p[0] in last]) + link
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for member, text in order:
@@ -1581,11 +1584,58 @@ try:
               "made past a bound (it asked for 220 GB, and the MemoryError read as 'damaged, before its first member')",
               r.rc == 0 and sig.get("partial") == "xl/sharedStrings.xml" and "before its first member" not in reason
               and r.seconds < 60, "rc %s, %.1f s, %s | %s" % (r.rc, r.seconds, json.dumps(sig)[:160], said(r)))
+        # what the cut took, said where it took it: the rows a cut sheet lost after its last row that arrived, the
+        # total from its extent (<dimension ref="A1:B400"/>, at its top); a sheet taken whole where it would stand,
+        # its name from workbook.xml (KNOWN-ISSUES 267)
+        four = [("First", rows("FIRST", 40, 1)), ("Second", rows("SECOND", 40, 2)), ("Third", rows("THIRD", 400, 3)),
+                ("Fourth", rows("FOURTH", 40, 4))]
+        p = os.path.join(tmpc, "rows-lost.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(into(excel_xlsx(four, dimension=True), "xl/worksheets/sheet3.xml", 0.5))
+        r = run_read(p, env=env)
+        lines = r.file("content.md").split("\n")
+        at = next((i for i, ln in enumerate(lines) if ln.startswith("[rows · ")), None)
+        upto = int(re.match(r"\[lost\] \| (\d+)$", lines[at - 1]).group(1)) // 7 + 1 if at and re.match(
+            r"\[lost\] \| \d+$", lines[at - 1]) else None
+        check("267: a sheet cut short says which rows it lost, after the last that arrived, the total from its "
+              "extent: [rows · lost in the cut · N-400 · Third]",
+              at is not None and upto and lines[at] == "[rows · lost in the cut · %d-400 · Third]" % (upto + 1)
+              and "## Third" in lines[:at] and r.manifest.get("status") == "ok", lines[at - 1:at + 2] if at else said(r))
+        check("267: a sheet the cut took whole stands where it would: [sheet · lost in the cut · Fourth], no heading",
+              at is not None and lines[at + 1:at + 2] == ["[sheet · lost in the cut · Fourth]"]
+              and "## Fourth" not in lines, lines[at:at + 3] if at else said(r))
+        many = [("First", rows("FIRST", 3, 1))] + [("Lost sheet number %d of the workbook" % k, rows("L%d" % k, 3, k))
+                                                    for k in range(2, 10)]
+        p = os.path.join(tmpc, "few-words.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(into(excel_xlsx(many), "xl/worksheets/sheet2.xml", 0.0))
+        r = run_read(p, env=env)
+        check("267: the markers are the skill's words, not the document's: eight lost sheets' markers do not make "
+              "three rows of numbers a document of 40 words", r.manifest.get("status") == "error"
+              and r.file("content.md").count("[sheet · lost in the cut · Lost sheet number") == 8, said(r))
+        p = os.path.join(tmpc, "rows-lost-no-extent.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(into(excel_xlsx(four), "xl/worksheets/sheet3.xml", 0.5))
+        text = run_read(p, env=env).file("content.md")
+        check("267: with no extent in the sheet, the rows lost are N-?",
+              re.search(r"^\[rows · lost in the cut · \d+-\? · Third\]$", text, re.M) is not None
+              and "[sheet · lost in the cut · Fourth]" in text, said(r))
+        p = os.path.join(tmpc, "sheet-lost-between.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(into(excel_xlsx(four, dimension=True, last=("xl/worksheets/sheet2.xml",)),
+                          "xl/worksheets/sheet2.xml", 0.0))
+        r = run_read(p, env=env)
+        heads = [ln for ln in r.file("content.md").split("\n") if ln.startswith(("## ", "[sheet · ", "[rows · "))]
+        check("267: a sheet written after the shared strings and lost stands between its neighbours (a government "
+              "workbook keeps its fifth sheet there)",
+              heads == ["## First", "[sheet · lost in the cut · Second]", "## Third", "## Fourth"], str(heads))
     except ImportError:
         check.skip("254: a cut XLSX's shared strings", "openpyxl is not installed here")
 
-    def excel_ods(sheets):
-        """An ODS in Excel's order: content.xml right after the styles, before the rest."""
+    def excel_ods(sheets, before=(), head=""):
+        """An ODS in Excel's order: content.xml right after the styles, before the rest; `before`: members
+        [(name, text)] written ahead of content.xml, as LibreOffice writes its settings.xml and meta.xml;
+        `head`: what content.xml holds before its body (LibreOffice's automatic styles)."""
         body = "".join('<table:table table:name="%s">%s</table:table>' % (name, "".join(
             '<table:table-row><table:table-cell office:value-type="string"><text:p>%s</text:p></table:table-cell>'
             '<table:table-cell office:value-type="float" office:value="%d"><text:p>%d</text:p></table:table-cell>'
@@ -1596,10 +1646,21 @@ try:
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr(zipfile.ZipInfo("mimetype"), "application/vnd.oasis.opendocument.spreadsheet")
             z.writestr("styles.xml", '<?xml version="1.0"?><office:document-styles %s/>' % ns)
-            z.writestr("content.xml", '<?xml version="1.0" encoding="UTF-8"?><office:document-content %s><office:body>'
-                       '<office:spreadsheet>%s</office:spreadsheet></office:body></office:document-content>' % (ns, body))
-            z.writestr("meta.xml", '<?xml version="1.0"?><office:document-meta %s/>' % ns)
+            for member, text in before:
+                z.writestr(member, text)
+            z.writestr("content.xml", '<?xml version="1.0" encoding="UTF-8"?><office:document-content %s>%s<office:body>'
+                       '<office:spreadsheet>%s</office:spreadsheet></office:body></office:document-content>'
+                       % (ns, head, body))
+            if "meta.xml" not in dict(before):
+                z.writestr("meta.xml", '<?xml version="1.0"?><office:document-meta %s/>' % ns)
         return buf.getvalue()
+
+    def rows_arrived(whole, cut, member):
+        """The rows of `member` that ended in what arrived of it (`cut`, the file's first bytes): its deflate
+        stream unpacked up to the cut."""
+        off = zipfile.ZipFile(io.BytesIO(whole)).getinfo(member).header_offset
+        n, e = struct.unpack("<HH", whole[off + 26:off + 30])
+        return zlib.decompressobj(-15).decompress(cut[off + 30 + n + e:]).count(b"</table:table-row>")
     sheet = excel_ods([("First", [("FIRST-ROW %d of the survey" % k, k) for k in range(600)]),
                        ("Second", [("SECOND-ROW %d of the survey" % k, k) for k in range(600)])])
     p = os.path.join(tmpc, "cut.ods")
@@ -1611,6 +1672,64 @@ try:
           "text was not whole)", r.manifest.get("status") == "ok" and "FIRST-ROW 0 of the survey" in text
           and "SECOND-ROW 599" not in text and sig.get("partial") == "content.xml"
           and "cut" in (r.manifest.get("advice") or ""), said(r))
+    # the rows an ODS cut in its content.xml lost: from the first row not whole on, the extent not in the file
+    # (content.xml names no sheet's size); Excel names no other sheet before its content.xml (KNOWN-ISSUES 267)
+    cut = into(sheet, "content.xml", 0.3)
+    want = "[rows · lost in the cut · %d-? · First]" % (rows_arrived(sheet, cut, "content.xml") + 1)
+    check("267: an ODS cut in its content.xml says from which row its sheet lost its rows: %s, and names no lost "
+          "sheet when nothing that arrived names them (Excel's order)" % want,
+          want in text.split("\n") and "[sheet · " not in text, [ln for ln in text.split("\n") if "lost in the" in ln][:3])
+    ns_cfg = ('xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:config="urn:oasis:names:tc:'
+              'opendocument:xmlns:config:1.0" xmlns:meta="urn:oasis:names:tc:opendocument:xmlns:meta:1.0"')
+
+    def lo_settings(names):
+        """settings.xml as LibreOffice writes it, its sheets named (by name, not in their order)."""
+        return [("settings.xml", '<?xml version="1.0"?><office:document-settings %s><office:settings>'
+                 '<config:config-item-set config:name="ooo:view-settings"><config:config-item-map-named '
+                 'config:name="Tables">%s</config:config-item-map-named></config:config-item-set>'
+                 '</office:settings></office:document-settings>' % (ns_cfg, "".join(
+                     '<config:config-item-map-entry config:name="%s"/>' % n for n in sorted(names))))]
+    three = [("First", [("FIRST-ROW %d of the survey" % k, k) for k in range(600)]),
+             ("Second", [("SECOND-ROW %d" % k, k) for k in range(10)]), ("Third", [("THIRD-ROW %d" % k, k) for k in range(10)])]
+    lo = excel_ods(three, before=lo_settings(["First", "Second", "Third"]))
+    p = os.path.join(tmpc, "cut-lo.ods")
+    with open(p, "wb") as fh:
+        fh.write(into(lo, "content.xml", 0.3))
+    text = run_read(p, env=env).file("content.md")
+    check("267: a LibreOffice ODS cut in its content.xml names the sheets the cut took, from its settings.xml",
+          "[sheet · lost in the cut · Second]" in text.split("\n") and "[sheet · lost in the cut · Third]" in text.split("\n")
+          and re.search(r"^\[rows · lost in the cut · \d+-\? · First\]$", text, re.M) is not None,
+          [ln for ln in text.split("\n") if "lost in the" in ln][:4])
+    counted = excel_ods(three, before=[("meta.xml", '<?xml version="1.0"?><office:document-meta %s><office:meta>'
+                                        '<meta:document-statistic meta:table-count="3"/></office:meta>'
+                                        '</office:document-meta>' % ns_cfg)])
+    p = os.path.join(tmpc, "cut-count.ods")
+    with open(p, "wb") as fh:
+        fh.write(into(counted, "content.xml", 0.3))
+    text = run_read(p, env=env).file("content.md")
+    check("267: one whose meta.xml alone arrived counts them: [sheet · lost in the cut · the sheet 2 of 3]",
+          "[sheet · lost in the cut · the sheet 2 of 3]" in text.split("\n")
+          and "[sheet · lost in the cut · the sheet 3 of 3]" in text.split("\n"), [ln for ln in text.split("\n")
+                                                                                   if "lost in the" in ln][:4])
+    early_cut = excel_ods([("Only", [("ONLY-ROW %d" % k, k) for k in range(5)])], before=lo_settings(["Only"]),
+                          head="<!-- %s -->" % " ".join("style%d-%d" % (k, (k * 7919) % 10007) for k in range(4000)))
+    p = os.path.join(tmpc, "cut-early.ods")
+    with open(p, "wb") as fh:
+        fh.write(into(early_cut, "content.xml", 0.5))
+    text = run_read(p, env=env).file("content.md")
+    check("267: a spreadsheet cut before its first sheet began (LibreOffice writes its styles first) names every "
+          "sheet as lost", "[sheet · lost in the cut · Only]" in text.split("\n") and "ONLY-ROW" not in text, text[:120])
+    p = os.path.join(tmpc, "cut-at-once.ods")
+    with open(p, "wb") as fh:
+        fh.write(into(early_cut, "content.xml", 0.002))
+    text = run_read(p, env=env).file("content.md")
+    check("267: ... and one cut before content.xml's first element ended too", "[sheet · lost in the cut · Only]"
+          in text.split("\n"), text[:120])
+    sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
+    import docreaders                                                                              # noqa: E402
+    import tabs                                                                                    # noqa: E402
+    check("267: the reader's state word is tabs.STATE's (it imports nothing of the skill's)",
+          docreaders.LOST == tabs.STATE["cut"], "%r %r" % (docreaders.LOST, tabs.STATE.get("cut")))
     try:
         import docx
         d = docx.Document()

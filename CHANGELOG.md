@@ -8,6 +8,17 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **What a cut workbook lost, said where it was lost** (KNOWN-ISSUES 267): a sheet the archive was cut in ends with
+  `[rows · lost in the cut · 54-78954 · Third]` after its last row that arrived - the total from its extent,
+  `<dimension ref="A1:G78954"/>`, which Excel and openpyxl write at its top (`54-?` without one) -, and a sheet the
+  cut took whole stands where it would, `[sheet · lost in the cut · Fourth]`, its name from workbook.xml. An ODS cut in
+  its content.xml ends its open sheet with `[rows · lost in the cut · 54-? · Third]` and names the sheets after it from
+  settings.xml (LibreOffice's, by name) or counts them from meta.xml; an Excel ODS writes neither before its content,
+  so its lost sheets go unnamed. The state word is `tabs.STATE["cut"]`; the markers are not the document's words for
+  the 40-word rule. A workbook cut in its first sheet now reads (its `[Content_Types].xml` named shared strings no
+  sheet had asked for, and openpyxl gave up). Measured on the 9 Excel workbooks cut at 21 points: every rows marker
+  right (78), lost sheets named where they stood on 36 of 47 cuts and on none of the 11 whose workbook.xml had not
+  arrived, no marker where nothing was lost.
 - **One marker grammar, the pictures included** (KNOWN-ISSUES 266): every marker is its type, its state, what more
   there is to say, its name last; a picture not downloaded is now `[img #3 · not downloaded: 404 · alt] https://...`
   (it was `[img #3 · alt · not downloaded: 404]`), one on disk as before. The answer's short repeats, the window's
