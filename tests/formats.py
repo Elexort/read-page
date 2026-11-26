@@ -189,11 +189,15 @@ def paired_pdf(path):
 # pymupdf4llm as the tests need it, first on the model's process' path (READ_PAGE_TEST_MODEL_PATH,
 # which pdftables.py alone reads: the process runs with -E): the tables above with the model's own
 # (cut) cells; a page that fails, a process that ends at a page, a page or a Markdown call that
-# takes long; a model that does not load
+# takes long; a model that does not load; one that waits - for the CPU, as a process does among
+# others on a weak machine, its load or its pages taking long while it does nothing (sleep) - and
+# one that works (a busy loop: its seconds are CPU seconds)
 STUB = '''
 import json, os, time
 if os.environ.get("RP_STUB_NOLOAD"):
     raise ImportError("RP-STUB: no model here")
+if os.environ.get("RP_STUB_LOAD_SLEEP"):
+    time.sleep(float(os.environ["RP_STUB_LOAD_SLEEP"]))
 _use_layout = True
 GRID = %s
 MODEL = %s
@@ -204,6 +208,10 @@ def to_json(doc, pages, **kw):
         os._exit(9)
     if os.environ.get("RP_STUB_SLEEP"):
         time.sleep(float(os.environ["RP_STUB_SLEEP"]))
+    if os.environ.get("RP_STUB_BUSY"):
+        t = time.time()
+        while time.time() - t < float(os.environ["RP_STUB_BUSY"]):
+            pass
     if os.environ.get("RP_STUB_FAIL") == str(p):
         raise ValueError("RP-STUB: a page the model cannot read")
     if not os.environ.get("RP_STUB_TABLE"):
@@ -604,8 +612,42 @@ try:
             check("a PDF's tables: a model that does not load is said in signals.tables.error, not met in silence",
                   "RP-STUB: no model here" in (mod3.tables_signal().get("error") or "") and not info.get("pages")
                   and mod3.tables_signal().get("left") == "1-3", str(mod3.tables_signal()))
+            os.environ.pop("RP_STUB_NOLOAD", None)
+            mod3.tables_close(kill=True)
+            # KNOWN-ISSUES 237: the model's time is the time it works. Four reads at once on a Celeron's budget gave
+            # its process a fifth of a CPU: its load alone outlasted the fixed 10 s, and no page was laid out. A
+            # model that waits - for the CPU; here its load or its pages sleep - gets the time it waits, within what
+            # the read has left; one at work the whole time (a busy loop) keeps its own seconds. 2 s of its own, not
+            # 1: its pace comes every half second, and a word or two must come before its own seconds are up
+            clock, keep_secs = dict(mod3.budget._state), mod3.PDF_TABLES_SECONDS
+            six = os.path.join(tmp, "tables6.pdf")
+            table_pdf(six, pages=6)
+            d6 = pymupdf.open(six)
+            try:
+                mod3.budget.start(30)
+                mod3.PDF_TABLES_SECONDS = 2.0
+                for name, var, val in (("its load", "RP_STUB_LOAD_SLEEP", "3"), ("its pages", "RP_STUB_SLEEP", "1")):
+                    os.environ[var] = val
+                    mod3.tables_reset()
+                    info = mod3.pdf_tables(many, d3, [p.get_text() for p in d3])
+                    os.environ.pop(var, None)
+                    mod3.tables_close(kill=True)
+                    check("237: a model that waits past its seconds (%s) lays every page out, within the read's time"
+                          % name, info.get("asked") == 3 and not info.get("left") and info.get("secs", 99) < 15,
+                          str(info))
+                os.environ["RP_STUB_BUSY"] = "0.8"
+                mod3.tables_reset()
+                info = mod3.pdf_tables(six, d6, [p.get_text() for p in d6])
+                check("... but a model at work all the time keeps its own seconds: the pages it did not reach are named",
+                      info.get("asked", 9) < 6 and len(info.get("left") or []) >= 2 and info.get("secs", 99) < 5,
+                      str(info))
+            finally:
+                os.environ.pop("RP_STUB_BUSY", None)
+                mod3.PDF_TABLES_SECONDS = keep_secs
+                mod3.budget._state.update(clock)
         finally:
-            for k in ("RP_STUB_NOLOAD", "RP_STUB_FAIL", "RP_STUB_CRASH", "READ_PAGE_TEST_MODEL_PATH"):
+            for k in ("RP_STUB_NOLOAD", "RP_STUB_FAIL", "RP_STUB_CRASH", "READ_PAGE_TEST_MODEL_PATH",
+                      "RP_STUB_LOAD_SLEEP", "RP_STUB_SLEEP", "RP_STUB_BUSY"):
                 os.environ.pop(k, None)
             mod3.tables_close(kill=True)
         zp = os.path.join(tmp, "three.zip")

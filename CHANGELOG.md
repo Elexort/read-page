@@ -8,6 +8,19 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A PDF's tables on a busy weak laptop: the layout model's 10 s are its own work's** (KNOWN-ISSUES 237): four reads
+  at once on an emulated Celeron gave the model's process a fifth of a CPU, its load alone took 11-14 s, and a fixed
+  10 s laid out none of a paper's four pages of tables. The process now says its pace every half second and with
+  every answer - its seconds at work over its CPU seconds, a CPU second counted once however many threads spent it -
+  and the step gets as many times 10 s as it is slowed (by a tenth or more), within the read's deadline less one and
+  a half tails; with a CPU to itself, and before its first word, 10 s as before. Old code against new, in pairs: four
+  reads at once on the Celeron's budget lay all four pages out (the step 18.8-23.2 s; the slowest of the four reads
+  29.0-31.9 -> 30.2-34.9 s, none near its 55 s); one read at a time there, an N100's four cores and this machine are as
+  they were, long PDFs too (GPT-3 11.2-11.6 -> 11.1-11.5 s, 200 pages of tables 11.3-11.4 -> 11.4 s). The plain "the time
+  the read has left" was measured and not taken: those 200 pages took 24.4-25.8 s here with it. When the time still
+  runs out, the answer says so, as before: "the tables on pages 6, 8-10 are still one cell a line (the time for
+  tables ran out ...)".
+
 - **The first line names the share of the page only for a suspected fragment** (KNOWN-ISSUES 255): it said
   "defuddle, 49% of the page" on every read, and an agent took that for "I got half the content" and kept calling
   `--alternate` - while a whole text seldom holds all of a page's words (menus, footers and links make the rest: on
