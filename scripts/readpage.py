@@ -33,6 +33,7 @@ if __name__ == "__main__":
     ownenv.use(__file__, sys.argv[1:])
 
 import argparse                                                     # noqa: E402
+import array                                                        # noqa: E402
 import base64                                                       # noqa: E402
 import contextlib                                                   # noqa: E402
 import hashlib                                                      # noqa: E402
@@ -4176,13 +4177,14 @@ def _zip64_sizes(extra, usize, csize):
     return usize, csize, False
 
 
-def _inflate(fh, csize, room):
+def _inflate(fh, csize, room, keep=False):
     """A deflated member's data from `fh` (at its start): (data, packed length, why, unpacked).
     csize None: its length is not in its header (a data descriptor follows the data), the stream's
     end tells it. why is "" for data that ends where the stream does, "cut", "breaks" or "over"
     (more than `room` bytes unpacked: read no further); `unpacked` is what was unpacked, kept or
-    not. The file is read 64 KB at first, then twice as much each time up to 1 MB: a small member
-    whose size follows its data was read a megabyte ahead (10 000 of them in 700 KB took 2.7 s)."""
+    not. `keep`: a member the file ends in gives what it unpacked up to there ("cut"). The file is
+    read 64 KB at first, then twice as much each time up to 1 MB: a small member whose size follows
+    its data was read a megabyte ahead (10 000 of them in 700 KB took 2.7 s)."""
     d = zlib.decompressobj(-zlib.MAX_WBITS)
     out, n, used, step = [], 0, 0, 1 << 16
     left = csize
@@ -4192,7 +4194,8 @@ def _inflate(fh, csize, room):
             step = min(step * 2, 1 << 20)
             chunk = fh.read(want) if want else b""
             if not chunk:
-                return b"", used, "cut" if left is None or left else "breaks", n
+                cut = left is None or left
+                return b"".join(out) if keep and cut else b"", used, "cut" if cut else "breaks", n
             used += len(chunk)
             if left is not None:
                 left -= len(chunk)
@@ -4239,20 +4242,36 @@ class _ZipOut(object):
     does not (_package_close): each relationship to a part it lacks is taken out, and so are the
     sheets and slides of the main part whose relationship went; what is missing of its index - its
     content types, its root relationships, a workbook's list of sheets - is written from the parts
-    there (openpyxl writes them last: a workbook it made, cut anywhere in its sheets, had none)."""
+    there (openpyxl writes them last: a workbook it made, cut anywhere in its sheets, had none). A
+    workbook's shared strings are made to hold what its sheets ask for (_strings_close), and the
+    member the archive was cut in, `partial`, is taken as far as it arrived (_PART_IN_PART)."""
 
     def __init__(self, dest):
         self.dest, self.w, self.names, self.held = dest, None, [], []
+        self.partial, self.lost = "", None     # the member read up to the cut; what lost strings cost
+        self.strings = array.array("q")      # the shared strings a workbook's sheets hold, by index
 
-    def add(self, name, data):
+    def add(self, name, data, partial=False):
+        """One member; `partial`: what arrived of the one the archive was cut in (a sheet of it is
+        taken up to its last whole row). False when nothing of it can be read."""
+        sheet = bool(_XL_SHEET.match(name))
+        if partial and sheet:
+            data = _cut_sheet(data)
+            if data is None:
+                return False
+        if partial:
+            self.partial = name
         self.names.append(name)
-        if name.endswith(".rels") or name in _PACKAGE_INDEX:
+        if sheet:
+            self.strings.extend(int(m.group(1)) for m in _SHARED_CELL.finditer(data))
+        if name.endswith(".rels") or name in _PACKAGE_INDEX or name == _XL_STRINGS:
             spill = "%s.%d.part" % (self.dest, len(self.held))
             with open(spill, "wb") as fh:
                 fh.write(data)
             self.held.append((name, spill))
-            return
+            return True
         self._write(name, data)
+        return True
 
     def _write(self, name, data):
         import zipfile
@@ -4283,6 +4302,82 @@ class _ZipOut(object):
 
 # what a package's index is made of: held back until every member is known (_ZipOut)
 _PACKAGE_INDEX = ("[Content_Types].xml", "xl/workbook.xml", "ppt/presentation.xml")
+# the members a reader can take as far as they arrived, the archive cut in them (zip_salvage): an
+# OpenDocument file's content.xml (our readers read XML that breaks up to where it breaks), a
+# workbook's shared strings and its sheets (made whole again: _cut_sheet, _strings_close)
+_PART_IN_PART = re.compile(r"(?:content\.xml|xl/sharedStrings\.xml|xl/worksheets/sheet\d{1,6}\.xml)$")
+_XL_STRINGS = "xl/sharedStrings.xml"
+_XL_SHEET = re.compile(r"xl/worksheets/sheet\d{1,6}\.xml$")
+_XL_MAIN = b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+# a cell whose value is a shared string, and its index: <c r="A1" s="3" t="s"><v>12</v>
+_SHARED_CELL = re.compile(rb"<(?:\w{1,32}:)?c\b(?=[^<>]{0,%d}?\bt=[\"']s[\"'])[^<>]{0,%d}>\s*<(?:\w{1,32}:)?v>\s*(\d{1,10})\s*<"
+                          % (docreaders.TAG_MAX, docreaders.TAG_MAX))
+LOST_TEXT = "[lost]"                   # a cell whose shared string was lost with the archive's cut
+LOST_MAX = 1 << 20                     # stand-ins made at most (23 MB of XML): a real table past it is rare
+
+
+def _cut_sheet(data):
+    """A worksheet the archive was cut in: its rows up to the last whole one, its sheetData and its
+    root closed again (openpyxl reads no XML that breaks); None when the cut came before its rows."""
+    root = re.search(rb"<(\w{1,32}:)?worksheet\b[^<>]{0,%d}>" % TAG_MAX, data)
+    if not root:
+        return None
+    p = root.group(1) or b""
+    last = None
+    for last in re.finditer(rb"</%srow\s*>" % re.escape(p), data):
+        pass
+    if last is not None:
+        return data[:last.end()] + b"</%ssheetData></%sworksheet>" % (p, p)
+    rows = re.search(rb"<%ssheetData\b[^<>]{0,%d}?(/?)>" % (re.escape(p), TAG_MAX), data)
+    if not rows:
+        return None
+    return data[:rows.end()] + (b"" if rows.group(1) else b"</%ssheetData>" % p) + b"</%sworksheet>" % p
+
+
+def _strings_close(out, names):
+    """A workbook's shared strings made to hold what its sheets ask for: the part as it is when whole;
+    cut short, its entries up to the last whole one; lost, none - and a LOST_TEXT for every index
+    past them that a sheet holds. openpyxl stopped at the first index it did not have, and a cut
+    workbook read nothing: of 9 Excel workbooks cut at 21 points each, 47 % of the cuts lost the
+    part whole (it comes after the sheets) and 8 % cut it (2026-11-26). out.lost says what it
+    cost; the names, with the part's when it is made here."""
+    held = dict(out.held)
+    data = None
+    if _XL_STRINGS in held:
+        with open(held[_XL_STRINGS], "rb") as fh:
+            data = fh.read()
+    top = max(out.strings) + 1 if out.strings else 0
+    if data is not None and out.partial != _XL_STRINGS:
+        out._write(_XL_STRINGS, data)                         # whole: as it came
+        return names
+    if data is None and not top:
+        return names                                          # none, and no sheet asks for one
+    lost = b"<si><t>%s</t></si>" % LOST_TEXT.encode("ascii")
+    head, p, kept = b"", b"", 0
+    if data is not None:
+        root = re.search(rb"<(\w{1,32}:)?sst\b[^<>]{0,%d}?(/?)>" % TAG_MAX, data)
+        p = (root.group(1) or b"") if root else b""
+        last = None
+        for last in re.finditer(rb"</%ssi\s*>" % re.escape(p), data):
+            kept += 1
+        head = data[:last.end()] if last is not None else data[:root.end()] if root and not root.group(2) else b""
+        if p:
+            lost = lost.replace(b"<", b"<" + p).replace(b"<" + p + b"/", b"</" + p)
+    if not head:
+        head, p = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="%s">' % _XL_MAIN, b""
+        lost = b"<si><t>%s</t></si>" % LOST_TEXT.encode("ascii")
+    need = max(0, top - kept)
+    cells = sum(1 for k in out.strings if k >= kept)
+    if need > LOST_MAX:
+        # a sheet names a string far past the table: one index of ten digits asked for 220 GB of stand-ins, and the
+        # MemoryError read as "damaged, before its first member". None is made: the strings that arrived stay, and
+        # openpyxl stops at a cell past them, as it did before stand-ins were made at all
+        out.lost = {"cells": cells, "strings": 0, "kept": kept, "too_far": need}
+        need = 0
+    else:
+        out.lost = {"cells": cells, "strings": need, "kept": kept}
+    out._write(_XL_STRINGS, head + lost * need + b"</%ssst>" % p)
+    return names | {_XL_STRINGS}
 _PACKAGE_MAIN = {"docx": "word/document.xml", "xlsx": "xl/workbook.xml", "pptx": "ppt/presentation.xml"}
 _OOXML = "application/vnd.openxmlformats-officedocument."
 _RELS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
@@ -4313,6 +4408,12 @@ _DEFAULT_TYPES = {"rels": "application/vnd.openxmlformats-package.relationships+
 
 def _package_close(out, kind, names):
     """An office package's held parts written, its index made to hold together (_ZipOut)."""
+    if kind == "xlsx":
+        names = _strings_close(out, names)
+        # an external link whose own relationships are lost counts as lost: openpyxl takes the first of
+        # them, and a whole workbook whose links' relationships came after the cut read nothing
+        names = names - {n for n in names if re.match(r"xl/externalLinks/externalLink\d+\.xml$", n) and
+                         "xl/externalLinks/_rels/%s.rels" % posixpath.basename(n) not in names}
     held = dict(out.held)
 
     def part(name):
@@ -4351,13 +4452,16 @@ def _package_close(out, kind, names):
             data, gone = _rels_kept(name, part(name), names)
             dropped[name] = gone
             out._write(name, data)
-    # the main part names its sheets and slides by relationship: one whose relationship went goes too
+    # the main part names its sheets and slides by relationship: one whose relationship went goes too,
+    # and so does a workbook's external link or pivot cache (openpyxl stopped at one: "'NoneType' object
+    # has no attribute 'Target'", and a government workbook of 5 external links read nothing)
     rels_of_main = posixpath.join(posixpath.dirname(main), "_rels", posixpath.basename(main) + ".rels")
     if main in held:
         data = part(main)
         gone = dropped.get(rels_of_main) or set()
         if gone:
-            data = re.sub(rb"(?is)<(?:\w{1,32}:)?(?:sheet|sldId|sldMasterId|notesMasterId|handoutMasterId)\b[^<>]{0,%d}?"
+            data = re.sub(rb"(?is)<(?:\w{1,32}:)?(?:sheet|sldId|sldMasterId|notesMasterId|handoutMasterId|"
+                          rb"externalReference|pivotCache)\b[^<>]{0,%d}?"
                           rb"\b\w{1,32}:id\s*=\s*\"([^\"<>]*)\"[^<>]{0,%d}?/>" % (TAG_MAX, TAG_MAX),
                           lambda m: b"" if m.group(1).decode("utf-8", "replace") in gone else m.group(0), data)
         out._write(main, data)
@@ -4420,11 +4524,14 @@ def _rels_kept(name, data, names):
 def zip_salvage(path, dest, until=None):
     """The members of an archive zipfile cannot open, read in order from their own headers: the
     whole ones - stored or deflated, their CRC right, within ZIP_WHOLE_PART and ZIP_WHOLE_TOTAL -
-    are written to a new archive at `dest` (not written when none is whole). Returns {"how": "cut"
-    | "damaged", "members": how many were found, "whole": their names, "broken": [(name, why)],
-    "at": the byte where the reading stopped, "size": the file's, "more": a reason the rest was not
-    looked at, or "", "all_members": True when the reading reached the table of contents, so no
-    member is missing after the last one read}. Linear: each member is read once, its data at most
+    are written to a new archive at `dest` (not written when none is whole), and the one the file
+    was cut in as far as it arrived, where a reader can take one in part (_PART_IN_PART). Returns
+    {"how": "cut" | "damaged", "members": how many were found, "whole": their names, "broken":
+    [(name, why)], "at": the byte where the reading stopped, "size": the file's, "more": a reason
+    the rest was not looked at, or "", "all_members": True when the reading reached the table of
+    contents, so no member is missing after the last one read, "partial": the member read in part
+    or "", "lost": what a workbook's lost shared strings cost (_strings_close) or None}. Linear:
+    each member is read once, its data at most
     up to the caps, and what is unpacked to judge them up to ZIP_WHOLE_SPENT in all; `until` (a
     time.time()) ends the reading at the member it passes."""
     size = os.path.getsize(path)
@@ -4486,6 +4593,7 @@ def zip_salvage(path, dest, until=None):
             limit = min(ZIP_WHOLE_PART, ZIP_WHOLE_TOTAL - total)
             room = min(limit, ZIP_WHOLE_SPENT - spent)
             why, data = "", b""
+            in_part = not folder and bool(_PART_IN_PART.match(name))   # a reader takes it as far as it goes
             if flags & 1:
                 why = "encrypted"
             elif method not in (0, 8):
@@ -4495,6 +4603,9 @@ def zip_salvage(path, dest, until=None):
             elif method == 0:
                 if end > size:
                     why = "cut"                    # its data runs past the end of the file
+                    if in_part:
+                        data = fh.read(min(size - start, room))
+                        spent += len(data)
                 elif csize > limit:
                     why = "over the size limit"
                 elif csize > room:
@@ -4504,7 +4615,7 @@ def zip_salvage(path, dest, until=None):
                     spent += len(data)
                     why = "cut" if len(data) < csize else ""
             else:
-                data, packed, why, unpacked = _inflate(fh, None if descriptor else csize, room)
+                data, packed, why, unpacked = _inflate(fh, None if descriptor else csize, room, keep=in_part)
                 spent += unpacked
                 if why == "over" and room < limit:
                     why = "spent"
@@ -4530,7 +4641,15 @@ def zip_salvage(path, dest, until=None):
                 more = spent_said
                 break
             if why == "cut":
-                broken.append((name, "cut"))
+                # the member the archive was cut in: one a reader can take in part is taken as far as it
+                # arrived - an Excel workbook's sheets come before its shared strings, and an ODS has its
+                # every sheet in its content.xml, which Excel writes first and LibreOffice last
+                if in_part and data and name not in seen and out.add(name, data, partial=True):
+                    seen.add(name)
+                    total += len(data)
+                    broken.append((name, "cut, read up to the cut"))
+                else:
+                    broken.append((name, "cut"))
                 break
             if end is None:
                 # its end is known only where its data ends, and its data was not read to the end
@@ -4551,7 +4670,7 @@ def zip_salvage(path, dest, until=None):
             pos = end
     out.close()
     return {"how": how, "members": found, "whole": whole, "broken": broken, "at": at, "size": size,
-            "more": more, "all_members": toc}
+            "more": more, "all_members": toc, "partial": out.partial, "lost": out.lost}
 
 
 def zip_mend(path, dest, until=None):
@@ -4603,7 +4722,8 @@ def zip_mend(path, dest, until=None):
     if not damaged and os.path.exists(dest):
         os.unlink(dest)                                       # every member unpacks: nothing to mend
     return {"how": "damaged", "members": len(infos), "whole": whole if damaged else [],
-            "broken": damaged, "at": 0, "size": os.path.getsize(path), "more": more, "all_members": not more}
+            "broken": damaged, "at": 0, "size": os.path.getsize(path), "more": more, "all_members": not more,
+            "partial": "", "lost": out.lost if damaged else None}
 
 
 def zip_whole(path, workdir):
@@ -4668,16 +4788,21 @@ def zip_advice(info, local, words=None, transit="", step=False):
     `words`: the document's own words the readers gave (0: the whole members gave no text).
     `transit`: the transfer's cut in words (cut_said) when the archive was cut on its way here, not
     on the server - `step` when it was still arriving as its time ran out."""
+    part, lost = info.get("partial") or "", (info.get("lost") or {}).get("cells") or 0
+    # what of the member it was cut in was read, and the cells whose text was in a part that is lost
+    upto = ", %s as far as it arrived" % part if part else ""
+    strings = ("; the text of %d of its cells was in a part that is lost (the workbook's shared strings): each "
+               "reads %s" % (lost, LOST_TEXT)) if lost else ""
     if transit and info["how"] == "cut":
         n = len(info["whole"])
         read = "whole, but no text could be read from them" if n and words == 0 else "whole and read here"
         held = ("the archive's members all arrived %s, its table of contents did not" % read
                 if info.get("all_members") and not info["broken"] and n else
-                "%d of the archive's members %s %s, what came after %s did not arrive" % (
-                    n, "is" if n == 1 else "are", read, "it" if n == 1 else "them") if n else
-                "no member of the archive arrived whole")
-        return "%s: %s; %s" % (transit, held, "--download has no time limit, and the file arrives whole" if step
-                               else "--refresh tries again, and --download waits as long as the server takes")
+                "%d of the archive's members %s %s%s, what came after %s did not arrive" % (
+                    n, "is" if n == 1 else "are", read, upto, "it" if n == 1 and not part else "them") if n else
+                "no member of the archive arrived whole%s" % upto)
+        return "%s: %s%s; %s" % (transit, held, strings, "--download has no time limit, and the file arrives whole"
+                                 if step else "--refresh tries again, and --download waits as long as the server takes")
     if info["how"] == "not a ZIP":
         what = info["what"]
         if what.startswith("a password-protected"):
@@ -4702,8 +4827,8 @@ def zip_advice(info, local, words=None, transit="", step=False):
             return "the archive is cut in its table of contents, after its members: %s" % every
         return "the archive's table of contents is damaged, not its members: %s" % every
     if info["how"] == "cut":
-        held = ("%d of its members %s %s, what came after %s is missing" % (n, are, read, them)
-                if n else "no member of it is whole")
+        held = ("%d of its members %s %s%s, what came after %s is missing" % (n, are, read, upto, "them" if part else them)
+                if n else "no member of it is whole%s" % upto)
         what = "cut after %s" % human_bytes(info["size"])
     else:
         held = ("%d member%s not unpack (%s)%s" % (
@@ -4713,7 +4838,7 @@ def zip_advice(info, local, words=None, transit="", step=False):
         what = "damaged"
     rest = ("a whole copy of the file is needed for the rest" if local else
             "--refresh fetches it again, and the same bytes come back while the server's copy is %s" % info["how"])
-    return "the archive is %s: %s; %s" % (what, held, rest)
+    return "the archive is %s: %s%s; %s" % (what, held, strings, rest)
 
 
 OFFICE_MAIN = {
@@ -9818,10 +9943,11 @@ def read(args):
             manifest["chain"]["tried"].append("tables:pymupdf4llm")
         if broke:
             manifest["signals"]["broken_archive"] = dict(
-                {k: broke[k] for k in ("how", "what", "all_members") if broke.get(k)},
-                **({} if broke["how"] == "not a ZIP" else {
+                {k: broke[k] for k in ("how", "what", "all_members", "partial") if broke.get(k)},
+                **({} if broke["how"] == "not a ZIP" else dict({
                     "members": broke["members"], "whole": len(broke["whole"]),
-                    "not_whole": ["%s: %s" % b for b in broke["broken"][:20]]}))
+                    "not_whole": ["%s: %s" % b for b in broke["broken"][:20]]},
+                    **({"lost_strings": broke["lost"]["cells"]} if (broke.get("lost") or {}).get("cells") else {}))))
         if kind in ("zip", "rtf"):
             # an archive's pictures, or the ones our RTF reader wrote out; the names of those left out
             left = {}
@@ -10376,6 +10502,9 @@ def read(args):
     # an archive that is cut, damaged or no ZIP at all: what was read of it is the text
     broke = _ZIPS.get("read") if kind == "zip" and source == "http" else None
     complete = bool(broke and broke.get("all_members") and not broke.get("broken"))   # only its index is broken
+    if broke and (broke.get("lost") or {}).get("cells"):
+        # a cut workbook's cells whose text was lost read LOST_TEXT: the skill's words, not the document's
+        word_count = words_of((pictures.unmarked(text) if doc_engine else text).replace(LOST_TEXT, " "))
     if network_fail and source == "http":          # no reader or archive answered for it
         manifest["status"] = "error"
         error_why = "the host did not answer" + (": " + str(f.get("error"))[:160] if f.get("error") else "")
