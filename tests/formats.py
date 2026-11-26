@@ -1696,10 +1696,36 @@ try:
     with open(p, "wb") as fh:
         fh.write(into(lo, "content.xml", 0.3))
     text = run_read(p, env=env).file("content.md")
-    check("267: a LibreOffice ODS cut in its content.xml names the sheets the cut took, from its settings.xml",
-          "[sheet · lost in the cut · Second]" in text.split("\n") and "[sheet · lost in the cut · Third]" in text.split("\n")
+    check("267: a LibreOffice ODS cut in its content.xml names the sheets the cut took, from its settings.xml - "
+          "and, being several, says their order is not known",
+          "[sheet · lost in the cut · order unknown · Second]" in text.split("\n")
+          and "[sheet · lost in the cut · order unknown · Third]" in text.split("\n")
           and re.search(r"^\[rows · lost in the cut · \d+-\? · First\]$", text, re.M) is not None,
           [ln for ln in text.split("\n") if "lost in the" in ln][:4])
+    # settings.xml lists the sheets by name, not in the workbook's order (LibreOffice writes it so): the markers of the
+    # sheets it names stand after the last sheet that arrived and claim no order among themselves (KNOWN-ISSUES 267)
+    mixed = three + [("Zebra", [("ZEBRA-ROW %d" % k, k) for k in range(10)]), ("Apple", [("APPLE-ROW %d" % k, k)
+                                                                                         for k in range(10)])]
+    lo_mixed = excel_ods(mixed, before=lo_settings(["First", "Second", "Third", "Zebra", "Apple"]))
+    p = os.path.join(tmpc, "cut-lo-mixed.ods")
+    with open(p, "wb") as fh:
+        fh.write(into(lo_mixed, "content.xml", 0.3))
+    rows_ = run_read(p, env=env).file("content.md").split("\n")
+    marks = [ln for ln in rows_ if ln.startswith("[sheet · lost in the cut")]
+    open_at = next((i for i, ln in enumerate(rows_) if ln.startswith("[rows · lost in the cut · ")), -1)
+    check("267: the sheets settings.xml names come in its order (by name: Apple, Second, Third, Zebra - not the "
+          "workbook's, which ends Zebra, Apple), each says the order is unknown, and they stand after the last sheet "
+          "that arrived",
+          marks == ["[sheet · lost in the cut · order unknown · %s]" % n for n in ("Apple", "Second", "Third", "Zebra")]
+          and open_at >= 0 and all(rows_.index(m) > open_at for m in marks), marks)
+    two = excel_ods(three[:2], before=lo_settings(["First", "Second"]))
+    p = os.path.join(tmpc, "cut-lo-two.ods")
+    with open(p, "wb") as fh:
+        fh.write(into(two, "content.xml", 0.3))
+    rows_ = run_read(p, env=env).file("content.md").split("\n")
+    check("267: one sheet lost, named from settings.xml: its place is known (after the last that arrived), so no word "
+          "of order", [ln for ln in rows_ if ln.startswith("[sheet · lost in the cut")] == ["[sheet · lost in the cut · Second]"],
+          [ln for ln in rows_ if "lost in the" in ln][:3])
     counted = excel_ods(three, before=[("meta.xml", '<?xml version="1.0"?><office:document-meta %s><office:meta>'
                                         '<meta:document-statistic meta:table-count="3"/></office:meta>'
                                         '</office:document-meta>' % ns_cfg)])

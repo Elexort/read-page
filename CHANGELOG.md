@@ -38,7 +38,9 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   `<dimension ref="A1:G78954"/>`, which Excel and openpyxl write at its top (`54-?` without one) -, and a sheet the
   cut took whole stands where it would, `[sheet · lost in the cut · Fourth]`, its name from workbook.xml. An ODS cut in
   its content.xml ends its open sheet with `[rows · lost in the cut · 54-? · Third]` and names the sheets after it from
-  settings.xml (LibreOffice's, by name) or counts them from meta.xml; an Excel ODS writes neither before its content,
+  settings.xml (LibreOffice's, by name - alphabetical, not the workbook's order: when more than one sheet is lost each
+  marker says `order unknown`, and they stand after the last sheet that arrived) or counts them from meta.xml; an Excel
+  ODS writes neither before its content,
   so its lost sheets go unnamed. The state word is `tabs.STATE["cut"]`; the markers are not the document's words for
   the 40-word rule. A workbook cut in its first sheet now reads (its `[Content_Types].xml` named shared strings no
   sheet had asked for, and openpyxl gave up). Measured on the 9 Excel workbooks cut at 21 points: every rows marker
