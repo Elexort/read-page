@@ -87,7 +87,7 @@ TOOLS = [
         "description": (
             "Read the actual content of a URL or online document (web page, PDF, DOCX, PPTX, XLSX, "
             "EPUB, audio, video, image). Returns a header (status, engine, size, where the files are, "
-            "what to do), then the text: whole when it fits in ~10 KB, otherwise an outline with line "
+            "what to do), then the text: whole when it fits in ~7 900 characters, otherwise an outline with line "
             "numbers, the first block and the line to continue from (read with that dir and from=N). "
             "Pictures stand in the text as markers [img #3 · 600x400 4K · alt] img/03-alt.png; with "
             "inline_images=true the content pictures also come back as image blocks right after their "
@@ -141,7 +141,7 @@ TOOLS = [
             "Read a file left on disk by read_url: content.md, page.md (the full page text, a "
             "superset of content.md), manifest.json (the machine-readable result) or a media file "
             "(img/..., raw.jpg, ...); with no file, the text read last. Text comes in "
-            "blocks of ~10 KB starting at line `from`, each naming the next line; an image is "
+            "blocks of ~7 900 characters starting at line `from`, each naming the next line; an image is "
             "returned as an image block; audio and video only get their metadata."),
         "inputSchema": {
             "type": "object",

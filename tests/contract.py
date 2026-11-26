@@ -2,9 +2,10 @@
 
     python -X utf8 tests/contract.py
 
-One call answers with a header and the text, inside 9 980 bytes and 495 lines counted on what
-is written (UTF-8, LF), stderr included. A text that fits comes whole; a longer one comes with an
-outline and the exact line to go on from, and the blocks put together are the saved file.
+One call answers with a header and the text, inside 7 900 characters (UTF-16 units, as Cline counts
+them), 9 980 bytes and 495 lines counted on what is written (UTF-8, LF), stderr included. A text that
+fits comes whole; a longer one comes with an outline and the exact line to go on from, and the blocks
+put together are the saved file.
 """
 import json
 import os
@@ -20,6 +21,11 @@ from harness import PUBLIC, Checks, run_read, serve     # noqa: E402
 
 check = Checks()
 BUDGET, LINES = 9980, 495
+CHARS = 7900      # Cline's SDK runtime cuts every tool result at 8 000 characters (KNOWN-ISSUES 263)
+
+
+def u16(s):
+    return len(s.encode("utf-16-le", "surrogatepass")) // 2
 
 
 def page(title, body):
@@ -108,6 +114,8 @@ def fits(name, r):
     n = r.out.count(b"\n")
     check(name + ": within 9 980 bytes and 495 lines", len(r.out) <= BUDGET and n <= LINES,
           "%d bytes, %d lines" % (len(r.out), n))
+    check(name + ": within 7 900 characters", u16(r.out.decode("utf-8", "replace")) <= CHARS,
+          "%d characters" % u16(r.out.decode("utf-8", "replace")))
     check(name + ": LF only, stderr empty, exit 0", b"\r" not in r.out and r.err == b"" and r.rc == 0,
           "rc=%d stderr=%r" % (r.rc, r.err[:80]))
 
@@ -181,7 +189,8 @@ try:
         got, n, hops, over = body(first.text), next_line(first.text), 0, []
         while n and hops < 60:
             more = run_read(srv.url(path), "--from", str(n), reuse=first)
-            if len(more.out) > BUDGET or more.out.count(b"\n") > LINES or more.err or more.rc:
+            if (len(more.out) > BUDGET or more.out.count(b"\n") > LINES or more.err or more.rc
+                    or u16(more.out.decode("utf-8", "replace")) > CHARS):
                 over.append((n, len(more.out), more.rc))
             check_start = body(more.text)[:1] == saved[n - 1:n]
             if not check_start:
@@ -395,7 +404,8 @@ try:
     sc = res["structuredContent"]
     n = sc["mcp"]["next_from"]
     check("MCP read_url: within the budget, names the next line", len(said.encode("utf-8")) <= BUDGET
-          and isinstance(n, int) and ('from=%d' % n) in said, "%d bytes, next %s" % (len(said.encode("utf-8")), n))
+          and u16(said) <= CHARS and isinstance(n, int) and ('from=%d' % n) in said,
+          "%d bytes, %d characters, next %s" % (len(said.encode("utf-8")), u16(said), n))
     res2 = mcp_server.tool_read({"dir": sc["dir"], "from": n})
     check("MCP read: the block at that line", res2["structuredContent"].get("from") == n
           and ("lines %d-" % n) in res2["content"][0]["text"], str(res2["structuredContent"].get("from")))

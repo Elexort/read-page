@@ -98,7 +98,7 @@ context; three groups, the first one reached cuts:
 
 | Limit | Value | Who enforces it |
 |---|---|---|
-| the text | 9 980 bytes and 495 lines, as on the CLI | Codex, Roo Code, Cline (`answer.py`) |
+| the text | 7 900 characters, 9 980 bytes and 495 lines, as on the CLI | Cline (8 000 characters a tool result, MCP too), Codex, Roo Code (`answer.py`) |
 | one picture | PNG or JPEG; a long side over 1 568 px is scaled down, proportions kept; at most 3.75 MB, a heavier PNG becomes one JPEG at q95 | xAI takes only PNG and JPEG; Claude on Bedrock 5 MB of base64; 8 000 px, and ~2 000 px when a request has more than 20 pictures |
 | the whole answer | 25 000 tokens: the text plus `ceil(w/28)*ceil(h/28)` and ~150 for the path line a picture costs | Claude Code (measured: going over keeps the pictures but tells the model "OUTPUT TRUNCATED") |
 | | 256 pictures | Qwen 3.6-plus, for the whole request |

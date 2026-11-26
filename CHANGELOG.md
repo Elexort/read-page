@@ -8,6 +8,15 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The answer's block counts characters too** (KNOWN-ISSUES 263): Cline's SDK runtime cuts every tool result, MCP
+  too, at 8 000 characters (UTF-16 units), keeping about 3 985 at each end - in its code since 2026-06-19, and missed
+  by the survey the block was set on, so an English block of 9 850 characters lost about 2 000 from its middle there.
+  An answer is now at most 7 900 characters as well as 9 980 bytes and 495 lines (`answer.BUDGET_CHARS`, counted as
+  Cline counts them). English text meets the characters first - a block about 7 700 characters, Node's fs reference 54
+  answers where it took 43 -, Cyrillic and CJK text the bytes, unchanged. The docstring of `answer.py`, `answer.md`,
+  `mcp.md` and README say what the block rests on now; `tests/contract.py` checks every answer's characters, CLI and
+  MCP.
+
 - **Tabs, collapsed sections and selects are shown honestly** (KNOWN-ISSUES 256-258, 262): a tab set's labels went with
   the buttons and lists that hold them, and a panel the page hides came into the text with no word of which tab it
   was, or not at all - on Groq's rate limits the default tab's table stood under the site's note that the limits below

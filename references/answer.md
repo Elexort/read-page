@@ -32,9 +32,14 @@ the next level down is listed thinned evenly, the coarser rows kept, and a last 
 are between them; a text without headings gets a row per block, thinned the same way. Either way
 the outline reaches the end of the text.
 
-Every answer fits the smallest output an agent harness passes on (9 980 bytes, 495 lines): Codex
-passes 10 000 bytes of output to a non-OpenAI model, Roo Code 10 240, Cline 500 lines, and past
-that each one cuts differently, so nothing is cut between the script and the agent. `--from N`
+Every answer fits the smallest output an agent harness passes on (7 900 characters, 9 980 bytes, 495
+lines), as the harnesses' code had it on 2026-11-26: Cline's SDK runtime (its CLI, and the VS Code
+windows on that bundle) cuts every tool result, MCP too, at 8 000 characters - UTF-16 units - keeping
+about 3 985 at each end; Codex passes 10 000 bytes of output to a model outside its OpenAI catalogue,
+Roo Code 10 240; Cline's VS Code extension shows 500 lines. Past that each one cuts differently, so
+nothing is cut between the script and the agent. English text meets the characters first: a block is
+about 7 700 characters where it was 9 850 (Node's fs reference, 381 KB, takes 54 answers instead of
+43); Cyrillic and CJK text meet the bytes, as before. `--from N`
 prints the block that starts at line N - the next one, or a heading from the outline - of the same
 file, from the saved copy, with no network; without `--file` it goes on in the file read last
 (`--file` switches it). If the copy is gone the page is read again and a `note:` line says the
