@@ -9016,7 +9016,9 @@ def _window_round(workdir, manifest, url, view, start, nums, files, seconds, pha
                       view, len(todo), sum(1 for e in todo if (got.get(e["url"]) or {}).get("data")
                                           or (got.get(e["url"]) or {}).get("link")
                                           or (got.get(e["url"]) or {}).get("unchanged")), late))
-    old_marks = {e["n"]: pictures.marker(e) for e in todo}
+    # a marker as this code writes it, and as the code before 2026-11-26 wrote a picture not on disk (the
+    # state after the alt): a page folder that older code read is rewritten too
+    old_marks = {e["n"]: (pictures.marker(e), pictures.marker(e, legacy=True)) for e in todo}
     spent = sum(int(e.get("bytes") or 0) for e in entries)
     fresh, gone = {}, set()
     for e in todo:
@@ -9040,8 +9042,9 @@ def _window_round(workdir, manifest, url, view, start, nums, files, seconds, pha
         with open(p, encoding="utf-8", errors="replace") as fh:
             body = fh.read()
         new_body = body
-        for num, old in old_marks.items():
-            new_body = new_body.replace(old, "" if num in gone else pictures.marker(fresh[num]))
+        for num, forms in old_marks.items():
+            for old in forms:
+                new_body = new_body.replace(old, "" if num in gone else pictures.marker(fresh[num]))
         if new_body != body:
             write_view(p, new_body)
     sig = manifest.setdefault("signals", {})

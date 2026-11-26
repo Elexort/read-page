@@ -412,13 +412,23 @@ def main():
           str(os.listdir(deny_dir))[:60])
     deny_md = open(os.path.join(deny_dir, "content.md"), encoding="utf-8").read()
     check("--deny-images: the marker says not downloaded and keeps the address, no path",
-          "not downloaded: --deny-images" in deny_md and "/pencil.png" in deny_md and "img/01-" not in deny_md,
+          "· not downloaded: --deny-images · " in deny_md and "/pencil.png" in deny_md and "img/01-" not in deny_md,
           [ln for ln in deny_md.splitlines() if "pencil" in ln][:1])
     check("--deny-images: signal is set", bool((mden.get("signals") or {}).get("images_denied")), "")
     check("--deny-images: no picture in images[] has a file",
           not any(e.get("file") for e in (mden.get("images") or [])), str(mden.get("images"))[:80])
     check("--deny-images: text is still there", (mden.get("content") or {}).get("chars", 0) > 100,
           str((mden.get("content") or {}).get("chars")))
+    # a folder the code before 2026-11-26 wrote has the state after the alt (KNOWN-ISSUES 266): a later read
+    # without --deny-images still finds its markers and gives them their files
+    old_form = deny_md.replace("· not downloaded: --deny-images · карандаш]", "· карандаш · not downloaded: --deny-images]")
+    with open(os.path.join(deny_dir, "content.md"), "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(old_form)
+    run([mock + "/images.html", "--dir", deny_dir])
+    again_md = open(os.path.join(deny_dir, "content.md"), encoding="utf-8").read()
+    check("a marker of the older form is rewritten when its picture comes",
+          old_form != deny_md and "img/01-karandash.png" in again_md and "not downloaded" not in again_md,
+          [ln for ln in again_md.splitlines() if "pencil" in ln or "karandash" in ln][:1])
 
     # ------------------------------------------------ single file endpoint
     media_dir = os.path.join(tmp, "медиа")

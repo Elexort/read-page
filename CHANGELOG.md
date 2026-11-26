@@ -8,6 +8,13 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **One marker grammar, the pictures included** (KNOWN-ISSUES 266): every marker is its type, its state, what more
+  there is to say, its name last; a picture not downloaded is now `[img #3 · not downloaded: 404 · alt] https://...`
+  (it was `[img #3 · alt · not downloaded: 404]`), one on disk as before. The answer's short repeats, the window's
+  pictures (whose rewrite also finds the older form in a page folder older code wrote) and `--from "[img #3]"` follow.
+  SKILL.md has one rule for every marker in place of the picture's line and the tab's words in "not this skill":
+  `[type · state · name]`, the picture's example, a tab's states (`shown`, `hidden, but extracted`, `loads on click,
+  not extracted`); the room came from its own lines, 5 625 characters and 926 words at the end.
 - **`--from "text"`: go on from a quote** (KNOWN-ISSUES 265): the answer starts at the first line holding a piece of
   text, whitespace folded and then without case; when several do, the first at or after where the last answer of that
   file started (`_from` in the saved manifest). A quote cut in the middle of a line matches, one of several lines by its

@@ -131,6 +131,10 @@ try:
     check("a picture that failed says so in its marker, with its address",
           gone and "not downloaded" in gone[0][2] and "404" in gone[0][2] and gone[0][1].endswith("/img/missing.png"),
           gone[0][2] if gone else "no marker")
+    # one grammar for every marker: the type, its state, what more there is, the name last (KNOWN-ISSUES 266)
+    check("... its state before its alt, as every marker has it: [img #N · not downloaded: 404 · alt]",
+          gone and re.match(r"\[img #\d+ · not downloaded: [^\]·]*404[^\]·]* · A missing chart\] \S+/img/missing\.png$",
+                            gone[0][2]) is not None, gone[0][2] if gone else "no marker")
     check("the nav logo and the footer icon are not downloaded for the text",
           gets("/img/logo.png") == 0 and gets("/img/social.png") == 0,
           "logo %d, social %d" % (gets("/img/logo.png"), gets("/img/social.png")))
@@ -242,7 +246,8 @@ try:
     marked = __import__("pictures").mark(esc, "https://example.com/", {
         u: {"n": i + 1, "url": u, "alt": a, "why": "not printed yet"} for i, (u, a) in enumerate(found)})
     check("a picture whose alt has escaped brackets is still a picture, its alt clean",
-          len(found) == 2 and "[img #1 · A rack (File: AP)" in marked and "![" not in marked, marked[:120])
+          len(found) == 2 and "[img #1 · not downloaded: not printed yet · A rack (File: AP)]" in marked
+          and "![" not in marked, marked[:120])
 
     # ------------------------------------------------ the printed window's pictures
     import time as _time

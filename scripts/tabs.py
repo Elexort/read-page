@@ -11,7 +11,8 @@ not at all (Go's examples, Node's history tables); four people's biographies on 
 no name above any; and Groq's rate limits showed the default tab's table under the site's own note that
 the limits below are the Developer plan's, with no word of which tab it was.
 
-Every marker has one grammar - its type, its state, what more there is to say, its name last:
+Every marker has one grammar - its type, its state, what more there is to say, its name last (a picture's
+too, pictures.marker: `[img #3 · not downloaded: 404 · alt] https://...`):
 
     [tab · shown · Free Plan Limits]
     [tab · hidden, but extracted · Developer Plan Limits]       its text follows

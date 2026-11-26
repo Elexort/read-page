@@ -258,8 +258,11 @@ of a paragraph comes back after it), a reader, a site's API; a DOCX, PPTX, EPUB,
 where the document has it, and pictures a document does not place are listed after the text, in document
 order. In one answer a repeat prints as `[img #3]` (a tiny picture with a short alt as the alt,
 `✓`); `content.md` keeps every marker full. A picture that was not downloaded says why and keeps
-its address: `[img #5 · chart · not downloaded: 404] https://…`. Tracking pixels and spacers are
-shown nowhere; a lazy picture is its real address, not its placeholder.
+its address: `[img #5 · not downloaded: 404 · chart] https://…` - its state before its alt, as every
+marker has it (the type, the state, what more there is to say, the name last; see Tabs, sections and
+selects). Until 2026-11-26 the state came after the alt; a page folder written so is rewritten when its
+pictures come. Tracking pixels and spacers are shown nowhere; a lazy picture is its real address, not its
+placeholder. `--from "[img #5]"` goes to a picture's line, whatever its marker says.
 
 What is downloaded follows what is printed: every picture of `content.md` and `page.md` is
 numbered and listed in the manifest from the first call (with its line), and an answer downloads
@@ -294,7 +297,8 @@ on disk, no OCR engine.
 ## Tabs, sections and selects
 
 A page shows one tab of a set and folds its other panels and sections away; the text says where each one is and
-what state it is in, with markers of one grammar - the type, the state, what more there is to say, the name last:
+what state it is in, with markers of one grammar - the type, the state, what more there is to say, the name last
+(the pictures' markers have it too):
 
 ```
 [tab · shown · Free Plan Limits]
