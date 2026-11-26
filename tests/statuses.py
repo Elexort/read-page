@@ -286,6 +286,20 @@ def ld(node, body="", head=""):
                 % (head, json.dumps(node), body or LONG_EN))
 
 
+# a signed-in page whose content its scripts fetch: the HTML says what it is and "Loading organization limits..."
+# where the content goes (console.groq.com/settings/limits read `ok` with that alone; KNOWN-ISSUES 259)
+LOADING_NAV = "<nav>" + "".join("<a href='/s%d'>Settings section %d</a> " % (i, i) for i in range(12)) + "</nav>"
+r_.update({
+    "/loading-stub": (200, H, page("Limits", LOADING_NAV + "<main><h2>Organization Limits</h2><p>Base rate limits for "
+                                             "your organization. These can be customized per project. If you need "
+                                             "higher rate limits, you can purchase a subscription.</p><div><span>"
+                                             "Loading organization limits...</span></div></main><script>window.x=1"
+                                             "</script>")),
+    # an article whose comments are what loads: the article is the page
+    "/loading-comments": (200, H, page("Story", "<article><h1>Story</h1><p>" + LONG_EN + "</p></article><section>"
+                                                "<h2>Comments</h2><p>Loading comments...</p></section>")),
+})
+
 # a paywall written in JavaScript: the article is in the HTML, the schema says it is not free
 ART = {"@context": "https://schema.org", "@type": "NewsArticle", "headline": "Story"}
 r_.update({
@@ -452,6 +466,42 @@ try:
     check("a page about a word is not a 404: a dictionary entry for `404` is 150 words of prose",
           not mod_w.soft_404_marker("404 - Wiktionary", "404", "404 is a number. " * 50, 150))
 
+    # ------------------------------------------------ a page whose content is still loading (KNOWN-ISSUES 259)
+    r = run_read(s.public.url("/loading-stub"), env=NO_BROWSER)
+    check("a page that shows only a loading message where its content goes is no plain ok: empty, its reason "
+          "quotes the message",
+          status(r) == "empty" and "Loading organization limits..." in reason(r),
+          "%s | %s | %s" % (status(r), reason(r)[:90], (r.manifest.get("advice") or "")[:60]))
+    check("... and the advice says the content did not come, and that a sign-in is often why",
+          "did not arrive" in (r.manifest.get("advice") or "") and "sign" in (r.manifest.get("advice") or ""),
+          (r.manifest.get("advice") or "")[:160])
+    r = run_read(s.public.url("/loading-comments"), env=NO_BROWSER)
+    check("an article whose comments are loading is ok: the article is the page",
+          status(r) == "ok" and "loading" not in (r.manifest.get("advice") or "").lower(), status(r))
+
+    # ------------------------------------------------ a deep address that lands on the site's home page (KNOWN-ISSUES 260)
+    home = ("<!doctype html><html><head><meta charset='utf-8'><title>Home</title></head><body><main><h1>Welcome</h1>"
+            "<p>HOME-PAGE " + LONG_EN[:600] + "</p></main></body></html>").encode("utf-8")
+    from harness import serve                                # noqa: E402
+    rs = serve({"/": (200, H, home), "/pricing": (308, {"Location": "/"}, b""),
+                "/index.html": (301, {"Location": "/"}, b""), "/en/": (301, {"Location": "/"}, b""),
+                "/docs/a": (301, {"Location": "/docs/b"}, b""), "/docs/b": (200, H, home)})
+    try:
+        r = run_read(rs.url("/pricing"), env=NO_BROWSER)
+        adv = r.manifest.get("advice") or ""
+        check("a deep address redirected to the site's home page: the advice says so, and that the page may be gone",
+              status(r) == "ok" and "home page" in adv and "may be gone" in adv
+              and (r.manifest.get("signals") or {}).get("redirect_root"), adv[:160])
+        quiet = []
+        for path in ("/index.html", "/en/", "/docs/a"):
+            r = run_read(rs.url(path), env=NO_BROWSER)
+            if "home page" in (r.manifest.get("advice") or "") or (r.manifest.get("signals") or {}).get("redirect_root"):
+                quiet.append(path)
+        check("... not for an address that is the home page by another name (/index.html, /en/), nor a page that moved",
+              not quiet, str(quiet))
+    finally:
+        rs.close()
+
     # ------------------------------------------------ a paywall written in JavaScript
     for path, want in (("/pw-ld", ""), ("/pw-string", ""), ("/pw-part", ".paywall"), ("/pw-graph", ""), ("/pw-micro", ""),
                        ("/pw-teaser", "")):
@@ -465,6 +515,18 @@ try:
     check("a paywalled page that is also a fragment of its page: the advice says both",
           "paywalled" in (r.manifest.get("advice") or "") and "of the page's words" in (r.manifest.get("advice") or ""),
           (r.manifest.get("advice") or "")[:120])
+    # a paywall's teaser is short beside the site's menus: the answer showed page.md and its next: line led on through
+    # the menus, and a model could not tell whether the article is hidden or not in the page (KNOWN-ISSUES 261)
+    first = r.text.split("\n")[0]
+    check("a paywalled fragment: the first line says the rest of the article is not in the page",
+          "· paywalled: the rest of the article is not in the page ·" in first and "maybe a fragment" not in first,
+          first[:140])
+    check("... the answer shows the article's text, not page.md, and no next: line leads on through the menus",
+          "── content.md:" in r.text and "--file page.md" not in r.text and "── page.md:" not in r.text,
+          [ln[:80] for ln in r.text.split("\n") if ln.startswith("──")])
+    check("... the advice says the rest is not in the page, and what page.md holds instead",
+          "the rest of the article is not in the page" in (r.manifest.get("advice") or "")
+          and "menus and links" in (r.manifest.get("advice") or ""), (r.manifest.get("advice") or "")[:200])
     r = run_read(s.public.url("/pw-ld"), env=NO_BROWSER)
     check("a paywalled page keeps its text: content.md has the article, not a stub",
           "servers lie about what they send" in r.file("content.md"), r.file("content.md")[:60])

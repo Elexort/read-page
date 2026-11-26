@@ -244,6 +244,14 @@
             "selects": {"type": "integer"}
           }
         },
+        "loading": {
+          "type": "string",
+          "description": "the loading message the page shows where its content goes (\"Loading organization limits...\"), the text little else: the status is empty"
+        },
+        "redirect_root": {
+          "type": "string",
+          "description": "a deep address the redirects took to the site's home page, this address: the page asked for may be gone"
+        },
         "network": {
           "type": "string"
         },

@@ -22,6 +22,19 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   before and after, the 89 with nothing to mark came back the same, file for file. `signals.tabs` counts them.
   SKILL.md's line on clicking says a tab loaded on click is named, not extracted; with the share's lines it stays
   shorter than before (5 625 characters and 930 words, from 5 640 and 932).
+- **A page that shows only a loading message is no plain `ok`** (KNOWN-ISSUES 259): console.groq.com/settings/limits
+  (signed in) read `ok` with its intro and "Loading organization limits...". A line of its own that says the content
+  is still coming, beside under 150 words, sends the page to the browser and, if it is still there, makes the status
+  `empty` with the message in `reason:` and an advice that the content did not arrive (often a sign-in);
+  `signals.loading`. Of 294 pages' texts 5 had such a line, the other four beside 480-870 words or a script's shell.
+- **A deep address that lands on the site's home page says so** (KNOWN-ISSUES 260): groq.com/pricing is a 308 to
+  groq.com/, and the answer said it only by its `url:` line. The advice now says the page asked for may be gone or
+  moved, and `signals.redirect_root` names the address; the home page by another name (`/index.html`, `/en/`) is no
+  such case, and none of 292 addresses of the bench, the corpus and the campaign was.
+- **A paywalled fragment says the rest of the article is not in the page** (KNOWN-ISSUES 261): its answer showed
+  `page.md`, whose `next:` line led a model on through the site's menus, unable to tell a hidden article from an
+  absent one. Its first line says `paywalled: the rest of the article is not in the page`, the answer shows
+  `content.md`, and the advice says `page.md` holds the site's menus and links, not more of the article.
 - **A PDF's tables on a busy weak laptop: the layout model's 10 s are its own work's** (KNOWN-ISSUES 237): four reads
   at once on an emulated Celeron gave the model's process a fifth of a CPU, its load alone took 11-14 s, and a fixed
   10 s laid out none of a paper's four pages of tables. The process now says its pace every half second and with

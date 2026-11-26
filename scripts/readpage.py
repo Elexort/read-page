@@ -3662,6 +3662,38 @@ STATIC_SHELL = re.compile(r"(?is)<(div|main)\b[^>]*\bid=[\"'](root|app|__next|__
 # and the same on one (a GitHub issue). No wider rule held: of 26 more script-heavy pages under
 # 2 000 words the browser added half as much again on four and lost text on two.
 THIN_APP_WORDS = 200
+# A line of its own that says the content is still coming, and little else in the text: the page's scripts fetch
+# what it shows. console.groq.com/settings/limits (signed in) read `ok` with its intro and "Loading organization
+# limits...". Measured 2026-11-26: 294 pages' text (the bench, the corpus, the campaign, the tab set) had 5 such
+# lines - arXiv's abstracts and weather.gov beside 480-870 words, Pinterest's "Loading today's picks..." beside 79
+# (a script's shell, which the browser fills) and Groq's beside 61-100
+LOADING_LINE = re.compile(r"(?i)^\W{0,3}(loading|please wait|fetching|retrieving|загрузка|подождите|cargando|"
+                          r"chargement|wird geladen|caricamento|carregando|読み込み中|加载中|載入中|로딩)\b[^\n]{0,60}?"
+                          r"(\.{2,}|…)\W{0,3}$")
+LOADING_WORDS = 150
+
+
+def loading_stub(text):
+    """The loading message the text holds where its content goes, when little else is there; else ""."""
+    if not text or len(text) > 20000:
+        return ""
+    lines = [ln.strip() for ln in text.split("\n")]
+    hits = [ln for ln in lines if LOADING_LINE.match(ln)]
+    if not hits:
+        return ""
+    rest = sum(len(ln.split()) for ln in lines if not LOADING_LINE.match(ln))
+    return hits[0].strip("#*_ ")[:120] if rest <= LOADING_WORDS else ""
+
+
+def lands_on_root(asked, final):
+    """A deep address that a redirect took to the home page of a site: the page asked for may be gone (groq.com/pricing
+    went to groq.com/). The home page by another name (/index.html, /home, /en/) is no such case. On 292 addresses of
+    the bench, the corpus and the campaign none did (30 redirected: moved pages, sign-ins, a locale)."""
+    a, b = urllib.parse.urlsplit(asked or ""), urllib.parse.urlsplit(final or "")
+    if not b.netloc or (b.path or "/") != "/" or b.query:
+        return False
+    path = (a.path or "/").rstrip("/")
+    return bool(path) and not re.match(r"(?i)^/((index|default|home|start|main)(\.\w+)?|[a-z]{2}([-_][a-z]{2})?)$", path)
 THIN_APP_STATE = 40000
 _STATE_GLOBAL = re.compile(r"__NEXT_DATA__|__NUXT__|__INITIAL_STATE__|__APOLLO_STATE__|__PRELOADED_STATE__"
                            r"|window\.__[A-Za-z_]+\s*=\s*[\[{]")
@@ -10258,8 +10290,9 @@ def read(args):
     has_scripts = bool(html and re.search(r"(?i)<script\b", html))
     thin_app = bool(html and is_page and has_scripts and len(text) >= 400 and word_count < THIN_APP_WORDS
                     and shipped_state(html) >= THIN_APP_STATE)
+    loading_http = bool(html and is_page and loading_stub(text))   # its scripts fetch the content: the browser's turn
     weak_http = bool(html and not network_fail and not f.get("partial") and (
-        static_shell or len(text) < 400 or thin_app
+        static_shell or len(text) < 400 or thin_app or loading_http
         or ((visible or 0) > 3000 and len(text) < (visible or 0) * 0.05)))
     # a 404, 410 or 5xx is the server's answer, and a browser gets the same one (a 404 took 4.4 s
     # of browser for its error page); the archive and the readers are the rescue there - unless
@@ -10663,6 +10696,10 @@ def read(args):
         # API *is* the answer (a DOI resolver returns 143 characters of citation metadata), and so
         # are a document's few words of its own (a DOCX that is one formula: `E = mc^2`)
         manifest["status"] = "empty"
+    elif is_page and source in ("http", "browser") and loading_stub(text):
+        # what the page shows is its loading message: the content its scripts fetch never came
+        manifest["status"] = "empty"
+        manifest["signals"]["loading"] = loading_stub(text)
     else:
         manifest["status"] = "ok"
 
@@ -10676,7 +10713,9 @@ def read(args):
         "not_found": ("HTTP %s" % f["status"]) if f["status"] in (404, 410)
                      else "the text says the page is not there",
         "empty": ("binary body" if manifest["signals"].get("binary") else
-                  broke["reason"] if broke else ("no text found (%d words)" % word_count)),
+                  broke["reason"] if broke else
+                  "the page shows a loading message where its content goes: \"%s\"" % manifest["signals"]["loading"]
+                  if manifest["signals"].get("loading") else ("no text found (%d words)" % word_count)),
         "media_only": "the URL is a file, not a page",
         "too_large": ((manifest["signals"].get("limit") or "over the limit")),
         "ok": "%d words, engine %s" % (word_count, engine or "?"),
@@ -10748,6 +10787,13 @@ def read(args):
         elif manifest["signals"].get("ocr_error"):
             manifest["advice"] = ("this PDF is a scan and OCR does not start here (%s): look at the rendered "
                                   "pages in files.pages" % manifest["signals"]["ocr_error"])
+        elif manifest["signals"].get("loading"):
+            # the HTML is the page's frame; what it shows comes from its scripts, and did not
+            manifest["advice"] = (
+                "the content the page's scripts fetch did not arrive%s: a page behind a sign-in often does this, and "
+                "this skill cannot sign in - see \"When nothing works\" in SKILL.md" % (
+                    ", in the browser either" if browser_ran else "" if not browser_here
+                    else " (--alternate renders the page in the browser)"))
         elif browser_ran or not browser_here:
             # the browser has rendered it (or none is here): --alternate would only do it again
             manifest["advice"] = (("the page has no text as rendered: --screenshots shows what it draws"
@@ -10775,18 +10821,30 @@ def read(args):
     elif cut:
         manifest["advice"] = ("%s, so the text may stop early: --refresh tries again, --download "
                               "waits as long as the server takes" % cut_said(f, size))
+    elif manifest["signals"].get("paywall") and fragment:
+        # the teaser of a paywalled article beside the site's menus: every paragraph page.md has is in the text
+        # (the block rule put back what the extractor dropped), so the rest is not in the page at all
+        manifest["advice"] = ("the page says it is paywalled (schema.org isAccessibleForFree: false), and only the "
+                              "part open to everyone is in it: the text is %d%% of the page's words and the rest of "
+                              "the article is not in the page - page.md holds the site's menus and links, not more "
+                              "of it; this skill cannot subscribe" % int(round((cover or 0) * 100)))
     elif manifest["signals"].get("paywall"):
         manifest["advice"] = ("the page says it is paywalled (schema.org isAccessibleForFree: false): the text is what "
                               "the server sent and may be only the part open to everyone, or the whole article a "
                               "script hides; this skill cannot subscribe")
-        if fragment:
-            manifest["advice"] += "; " + fragment_advice(cover)
     elif fragment:
         manifest["advice"] = fragment_advice(cover)
     elif state == "weak":
         manifest["advice"] = "the page mentions signing in; the text may be partial"
     elif manifest["status"] == "ok" and tables_said and tables_advice(_PDF):
         manifest["advice"] = tables_advice(_PDF)            # the read's own lists, not the ranges
+    final_url = str((manifest.get("url") or {}).get("final") or "")
+    if manifest["status"] == "ok" and is_page and lands_on_root(url, final_url):
+        # the answer said it only by its url: line, and a model took the home page for the page it asked for
+        manifest["signals"]["redirect_root"] = final_url
+        manifest["advice"] = ("the address redirected to the site's home page (%s): the page asked for may be gone "
+                              "or moved, and the text is the home page's" % final_url[:160]
+                              + ("; " + manifest["advice"] if manifest["advice"] else ""))
     if video_advice:
         # why the video gave no subtitles comes first: what follows is only what its page says
         manifest["advice"] = video_advice + ("; " + manifest["advice"] if manifest["advice"] else "")
@@ -10951,8 +11009,9 @@ def answer_view(manifest, workdir, asked="", continuing=False):
     last = (manifest or {}).get("_view")
     if continuing and last in VIEWS and os.path.isfile(os.path.join(workdir, last)):
         return last
-    if (manifest.get("signals") or {}).get("fragment") and os.path.isfile(os.path.join(workdir, "page.md")):
-        return "page.md"
+    sig = manifest.get("signals") or {}
+    if sig.get("fragment") and not sig.get("paywall") and os.path.isfile(os.path.join(workdir, "page.md")):
+        return "page.md"                   # a paywall's fragment is its teaser: page.md has no more of it
     return "content.md"
 
 
