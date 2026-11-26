@@ -1,7 +1,7 @@
 # The answer, its files and its rules
 
 What `SKILL.md` says in a line, in full: the answer, the files it points at, every status, every
-flag, the privacy and network rules, the limits, cookies, pictures and video.
+flag, the privacy and network rules, the limits, cookies, pictures, tabs and video.
 
 ## The answer
 
@@ -251,6 +251,43 @@ line. A scanned PDF's pages are read each with the pack of the script tesseract 
 ([documents.md](documents.md#ocr-on-when-tesseract-is-there)). The `ocr:`
 line names the picture, the engine and the pass - or why there is no text: no such picture, not
 on disk, no OCR engine.
+
+## Tabs, sections and selects
+
+A page shows one tab of a set and folds its other panels and sections away; the text says where each one is and
+what state it is in, with markers of one grammar - the type, the state, what more there is to say, the name last:
+
+```
+[tab · shown · Free Plan Limits]
+[tab · hidden, but extracted · Developer Plan Limits]        its text follows, as the page has it
+[tab · loads on click, not extracted · Batch Limits]         not in the page: only a click would fetch it
+[tab · hidden, but extracted · 6.0 KB, too long for here: page.md from line 410 · Go]
+[section · hidden, but extracted · Specifications]           a closed <details>, a collapsed accordion
+[select · chosen: EU · also US, APAC · Region]
+```
+
+A hidden panel's text is in `content.md` under its marker - a FAQ's answers are folded by default, a plan's table is
+what was asked - unless it is over 4 KB: then it stays in `page.md`, and the marker names its line there (the largest
+hidden panel of the 34 pages measured was 3.4 KB, a quickstart's other way to sign in). `page.md` has every panel under
+its marker, the browser's copy too. A tab that loads on click is named, not extracted: this skill clicks nothing.
+`signals.tabs` counts them all.
+
+What is marked is the main content's: nothing inside a nav, a header or footer, an aside, a form or a dialog, by tag
+or by role. A tab set is `role=tablist` with its `role=tab`s and their panels (`aria-controls`, `aria-labelledby`, or
+the tabpanels in order); a set of links is navigation and stays as it is. The shown tab is the one `aria-selected`,
+else `data-state=active`, else the one panel not hidden, else the first. A section is a closed `<details>` with a
+summary, or a button with `aria-expanded` whose `aria-controls` region the page holds as text - not a menu of links or
+a form folded away (a responsive menu, a feedback popover). A table whose header cell holds two to eight buttons and
+nothing else has tabs of its own (Groq's plans: the shown tab is named above the table, the others below it). A select
+names its chosen option and five others. A panel keeps its place and its attributes, but those that hide it; the
+engines are weighed without the markers and without the text they did not see before, so no engine is chosen by them.
+
+Not marked yet: tabs made of radio inputs and CSS alone (MkDocs Material, sphinx-inline-tabs), groups of buttons
+elsewhere (on the 34 pages most were feedback buttons, toolbars and players), and the short panels of a tab box an
+extractor drops whole (Docusaurus's examples: their code and prose come back by the block rule, with their markers;
+a five-word panel does not). Measured 2026-11-26 on 34 public pages with tabs, accordions or `<details>` in their main
+content, and on 109 saved pages of the bench and the corpus read offline before and after: the 89 with nothing to
+mark came back the same, file for file.
 
 ## Video
 

@@ -141,6 +141,97 @@ else:
 check("without <base href> the base is the page's address",
       engines.page_base("<p>x</p>", "https://example.org/a/b") == "https://example.org/a/b", "")
 
+# ------------------------------------------------ tabs, collapsed sections and selects (KNOWN-ISSUES 256-258)
+# a tab set's labels were dropped with the buttons that hold them, and a hidden panel came with no word of it or
+# not at all: each is a marker now, its state and its name, a hidden panel's text under its own
+import answer                                                # noqa: E402
+try:
+    import tabs                                              # noqa: E402
+except ImportError:                                          # the code before the markers: every check below fails
+    tabs = None
+WORDS = ("plan allows a number of requests a minute and tokens a day, counted for the whole organization "
+         "and reset at midnight in the time zone the account was made in. ")
+TABS = ("<!doctype html><html><head><meta charset='utf-8'><title>Rate limits</title></head><body><header><nav>"
+        "<a href='/'>Home</a><div role='tablist'><button role='tab' aria-selected='true'>MENU-TAB-A</button>"
+        "<button role='tab'>MENU-TAB-B</button></div></nav></header><main><article><h1>Rate limits</h1>"
+        "<p>TABS-INTRO Rate limits act as control measures on how often a user can reach the service in a given "
+        "time; they are counted per organization, not per user, and whichever is reached first applies.</p>"
+        "<div class='tabs-container'><div role='tablist' aria-label='Plans'>"
+        "<button role='tab' id='t-free' aria-selected='true' aria-controls='p-free'>Free Plan Limits</button>"
+        "<button role='tab' id='t-dev' aria-selected='false' aria-controls='p-dev'>Developer Plan Limits</button>"
+        "<button role='tab' id='t-batch' aria-selected='false' aria-controls='p-batch'>Batch Limits</button></div>"
+        "<div role='tabpanel' id='p-free' aria-labelledby='t-free'><p>FREE-PANEL The free " + WORDS + "</p></div>"
+        "<div role='tabpanel' id='p-dev' aria-labelledby='t-dev' hidden><p>DEV-PANEL The developer " + WORDS
+        + "</p></div><div role='tabpanel' id='p-batch' aria-labelledby='t-batch' hidden></div></div>"
+        "<h2>Models</h2><table><thead><tr data-role='legend'><th colspan='3'><nav><ul><li><button type='button' "
+        "class='rounded active'>Free Plan Limits</button></li><li><button type='button' class='rounded'>"
+        "Developer Plan Limits</button></li></ul></nav></th></tr><tr><th>Model</th><th>RPM</th><th>TPD</th></tr>"
+        "</thead><tbody>" + "".join("<tr><td>TABLE-ROW-%d model</td><td>%d</td><td>500K</td></tr>" % (i, 30 + i)
+                                    for i in range(6)) + "</tbody></table>"
+        "<details><summary>Specifications</summary><p>SPEC-PARA The device weighs two kilograms, runs for ten "
+        "hours on one charge and takes a charger of any brand that gives sixty five watts.</p></details>"
+        "<h3><button aria-expanded='false' aria-controls='faq1'>How do I pay?</button></h3>"
+        "<div id='faq1' class='accordion-collapse collapse'><p>FAQ-PARA You pay by card or by bank transfer each "
+        "month, and the invoice comes by mail on the first working day after the month ends.</p></div>"
+        "<p><label for='region'>Region</label> <select id='region'><option>US</option><option selected>EU</option>"
+        "<option>APAC</option></select></p>"
+        "<h2>Code</h2><div role='tablist'><button role='tab' aria-selected='true' aria-controls='c-py'>Python</button>"
+        "<button role='tab' aria-selected='false' aria-controls='c-go'>Go</button></div>"
+        "<div role='tabpanel' id='c-py'><pre><code>PY-CODE print('hello')</code></pre></div>"
+        "<div role='tabpanel' id='c-go' hidden><pre><code>GO-CODE " + "fmt.Println(\"hello, world\")\n" * 220
+        + "</code></pre></div><p>TABS-END The limits above are what the service enforces today; they may change "
+        "with notice, and the console shows the ones of your own account at any time.</p></article></main>"
+        "<footer><p>&copy; 2026 Example Inc.</p></footer></body></html>")
+if tabs is None:
+    check("tabs.py marks tabs, sections and selects", False, "no tabs module")
+else:
+    marked, tinfo = tabs.mark(TABS)
+    page_marked, pinfo = tabs.mark(TABS, page=True)
+    md = tabs.unescape_markers(engines.html2text_full(marked))
+    pmd = tabs.unescape_markers(engines.html2text_full(page_marked))
+
+    def at(text, s):
+        return text.find(s)
+    check("an ARIA tab set: the shown tab's marker, its text, the hidden tab's marker, its text, in that order",
+          0 <= at(md, "[tab · shown · Free Plan Limits]") < at(md, "FREE-PANEL") < at(
+              md, "[tab · hidden, but extracted · Developer Plan Limits]") < at(md, "DEV-PANEL"),
+          [ln for ln in md.split("\n") if "[tab" in ln][:4])
+    check("... a tab whose panel the page does not hold is named: loads on click, not extracted",
+          "[tab · loads on click, not extracted · Batch Limits]" in md, "")
+    check("... the tabs of a menu are no tab set of the text", "[tab · shown · MENU-TAB-A]" not in md, "")
+    rows = md.find("TABLE-ROW-0")
+    check("a table's own tab buttons (Groq's plans): the shown tab named above the table, the other below it",
+          0 <= md.rfind("[tab · shown · Free Plan Limits]", 0, rows) < rows
+          < md.find("[tab · loads on click, not extracted · Developer Plan Limits]", rows),
+          [ln for ln in md.split("\n") if "Plan Limits]" in ln])
+    check("a closed <details>: a section marker, its text after it",
+          0 <= at(md, "[section · hidden, but extracted · Specifications]") < at(md, "SPEC-PARA"), "")
+    check("a collapsed accordion: a section marker in its heading, its region's text after it",
+          0 <= at(md, "### [section · hidden, but extracted · How do I pay?]") < at(md, "FAQ-PARA"),
+          [ln for ln in md.split("\n") if "pay?" in ln][:2])
+    check("a select: the chosen option, the others, the name", "[select · chosen: EU · also US, APAC · Region]" in md,
+          [ln for ln in md.split("\n") if "select" in ln][:2])
+    long_m = re.search(r"\[tab · hidden, but extracted · ([\d.]+ KB), too long for here: page\.md from line "
+                       r"RPTABLINE[0-9a-f]{10} · Go\]", md)
+    check("a hidden panel past %d bytes stays out of the text, its marker says its size and that page.md has it"
+          % tabs.PANEL_LIMIT, long_m is not None and "GO-CODE" not in md and "PY-CODE" in md,
+          [ln for ln in md.split("\n") if "· Go]" in ln][:1])
+    check("... page.md's copy holds it whole under its marker",
+          0 <= at(pmd, "[tab · hidden, but extracted · Go]") < at(pmd, "GO-CODE") and "too long" not in pmd, "")
+    view = answer.split_long_lines(pmd)
+    placed = tabs.place_lines(md, view, pinfo["page_long"])
+    n = re.search(r"too long for here: page\.md from line (\d+) · Go\]", placed)
+    check("... and the text's marker names the line of page.md where it starts",
+          n is not None and "[tab · hidden, but extracted · Go]" in view.split("\n")[int(n.group(1)) - 1],
+          n.group(0) if n else [ln for ln in placed.split("\n") if "· Go]" in ln][:1])
+    check("the counts for the manifest", tinfo["counts"] == {"tabs": 3, "extracted": 1, "not_extracted": 2, "long": 1,
+                                                             "sections": 2, "selects": 1}, str(tinfo["counts"]))
+    plain = ("<html><body><main><h1>Plain</h1><p>No tabs here.</p><button aria-expanded='false' aria-controls='m'>"
+             "Menu</button><nav id='m'><a href='/a'>A</a> <a href='/b'>B</a></nav><details><summary></summary>"
+             "<a href='/c'>C</a></details></main></body></html>")
+    check("a page with none of them is left as it is: a menu folded under a button, an icon's popover",
+          tabs.mark(plain)[0] == plain, tabs.mark(plain)[1]["counts"])
+
 # ------------------------------------------------ inside a read
 EN = ("Reading pages reliably is harder than it looks, because servers lie about what they send and "
       "scripts change what a reader sees after the first paint. ")
@@ -187,8 +278,36 @@ LINKY = ("<!doctype html><html><head><meta charset='utf-8'><title>Linky</title><
 s = serve({"/guide": (200, {"Content-Type": "text/html; charset=utf-8"}, HTML),
            "/spec": (200, {"Content-Type": "text/html; charset=utf-8"}, SPEC),
            "/svg": (200, {"Content-Type": "text/html; charset=utf-8"}, SVGPAGE),
-           "/linky": (200, {"Content-Type": "text/html; charset=utf-8"}, LINKY)})
+           "/linky": (200, {"Content-Type": "text/html; charset=utf-8"}, LINKY),
+           "/tabs": (200, {"Content-Type": "text/html; charset=utf-8"}, TABS.encode("utf-8"))})
 try:
+    # a read of a page with tabs: whatever extractor wins, the markers stand where the page has them
+    r = run_read(s.url("/tabs"), env={"READ_PAGE_SKIP": "browser"})
+    body, page = r.file("content.md"), r.file("page.md")
+    eng = str((r.manifest.get("content") or {}).get("engine") or "")
+    check("a read: the tab set's markers in content.md, the shown tab's text after its marker, the hidden "
+          "tab's text after its own (KNOWN-ISSUES 256)",
+          0 <= body.find("[tab · shown · Free Plan Limits]") < body.find("FREE-PANEL")
+          < body.find("[tab · hidden, but extracted · Developer Plan Limits]") < body.find("DEV-PANEL"),
+          "%s: %s" % (eng, [ln[:60] for ln in body.split("\n") if "[tab" in ln or "PANEL" in ln][:6]))
+    check("a read: a tab the page does not hold is named, not extracted (KNOWN-ISSUES 257)",
+          "[tab · loads on click, not extracted · Batch Limits]" in body
+          and body.find("[tab · loads on click, not extracted · Developer Plan Limits]") > body.find("TABLE-ROW-5"),
+          "%s: %s" % (eng, [ln[:70] for ln in body.split("\n") if "click" in ln][:3]))
+    check("a read: a closed section and a collapsed accordion are marked, their text after them; a select names "
+          "its choice (KNOWN-ISSUES 258)",
+          0 <= body.find("[section · hidden, but extracted · Specifications]") < body.find("SPEC-PARA")
+          and 0 <= body.find("[section · hidden, but extracted · How do I pay?]") < body.find("FAQ-PARA")
+          and "[select · chosen: EU · also US, APAC · Region]" in body,
+          "%s: %s" % (eng, [ln[:70] for ln in body.split("\n") if "[section" in ln or "[select" in ln][:3]))
+    m_long = re.search(r"too long for here: page\.md from line (\d+) · Go\]", body)
+    check("a read: a hidden panel too long for the text names the line of page.md where it is, and is not "
+          "put back by the block rule",
+          m_long is not None and "GO-CODE" not in body
+          and "[tab · hidden, but extracted · Go]" in page.split("\n")[int(m_long.group(1)) - 1],
+          "%s: %s" % (eng, [ln[:90] for ln in body.split("\n") if "· Go]" in ln][:1]))
+    check("a read: the manifest counts them", ((r.manifest.get("signals") or {}).get("tabs") or {}).get("tabs") == 3,
+          str((r.manifest.get("signals") or {}).get("tabs")))
     r = run_read(s.url("/spec"), env={"READ_PAGE_SKIP": "browser"})
     body = r.file("content.md")
     eng = str((r.manifest.get("content") or {}).get("engine") or "")

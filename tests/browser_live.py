@@ -85,6 +85,16 @@ TINY = """<!doctype html><html><head><title>Tiny</title></head><body><nav><a hre
 <a href="/c">Docs</a> <a href="/d">Sign in</a></nav><div id="mount-point"></div>
 <script>setTimeout(function(){ document.getElementById("mount-point").innerHTML =
   "<h1>Tiny mounted</h1><p>TINY-MOUNTED %s</p>"; }, 250);</script></body></html>""" % WORDS
+# a tab set a script mounts: the browser's text, and page.md from what the browser shows - which folded
+# the hidden panel away (KNOWN-ISSUES 256)
+TABS_SHELL = """<!doctype html><html><head><title>Plans</title></head><body><div id="app"></div>
+<script>setTimeout(function(){ document.getElementById("app").innerHTML =
+  "<main><h1>Plans</h1><p>%s</p><div role='tablist'><button role='tab' aria-selected='true' aria-controls='p1'>" +
+  "Free Plan Limits</button><button role='tab' aria-selected='false' aria-controls='p2'>Developer Plan Limits" +
+  "</button><button role='tab' aria-selected='false' aria-controls='p3'>Batch Limits</button></div>" +
+  "<div role='tabpanel' id='p1'><p>FREE-PANEL %s</p></div><div role='tabpanel' id='p2' hidden><p>DEV-PANEL %s" +
+  "</p></div><div role='tabpanel' id='p3' hidden></div></main>"; }, 250);</script></body></html>""" % (
+    WORDS, WORDS[:200], WORDS[:200])
 
 
 def serve(routes):
@@ -104,7 +114,8 @@ def serve(routes):
                     self.wfile.write(b)
                     return
             else:
-                body = {"shell": SHELL, "late": LATE, "tall": TALL, "tiny": TINY, "broken": BROKEN}.get(kind, SHELL)
+                body = {"shell": SHELL, "late": LATE, "tall": TALL, "tiny": TINY, "broken": BROKEN,
+                        "tabs": TABS_SHELL}.get(kind, SHELL)
             b = body.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -122,7 +133,8 @@ def serve(routes):
 
 
 cache = os.path.join(tempfile.mkdtemp(prefix="browser-live-"), "cache")
-srv, port = serve({"/spa": "shell", "/late": "late", "/gate": "gate", "/tall": "tall", "/tiny": "tiny", "/broken": "broken"})
+srv, port = serve({"/spa": "shell", "/late": "late", "/gate": "gate", "/tall": "tall", "/tiny": "tiny", "/broken": "broken",
+                   "/tabs": "tabs"})
 base = "http://127.0.0.1:%d" % port
 
 
@@ -183,6 +195,25 @@ kids = [st[k] for k in ("readability", "trafilatura") if k in st]
 check("its slower extractors wait for the browser's page (the HTTP text is decided the same)",
       kids and all(k["at"] >= opened - 0.2 for k in kids),
       "page open at %.2f s, extractors at %s" % (opened, [k["at"] for k in kids]))
+
+mtab = read("/tabs")
+tab_text = tab_page = ""
+try:
+    with open(os.path.join(mtab.get("dir") or "", "content.md"), encoding="utf-8") as fh:
+        tab_text = fh.read()
+    with open(os.path.join(mtab.get("dir") or "", "page.md"), encoding="utf-8") as fh:
+        tab_page = fh.read()
+except OSError:
+    pass
+check("a tab set the browser drew: the shown tab, the hidden tab's text under its marker, the tab with no panel",
+      0 <= tab_text.find("[tab · shown · Free Plan Limits]") < tab_text.find("FREE-PANEL")
+      < tab_text.find("[tab · hidden, but extracted · Developer Plan Limits]") < tab_text.find("DEV-PANEL")
+      and "[tab · loads on click, not extracted · Batch Limits]" in tab_text
+      and any(str(t).startswith("browser") for t in (mtab.get("chain") or {}).get("tried") or []),
+      "%s %s" % (mtab.get("status"), [ln[:60] for ln in tab_text.split("\n") if "[tab" in ln]))
+check("... page.md, made from what the browser shows, keeps the hidden panel under its marker",
+      0 <= tab_page.find("[tab · hidden, but extracted · Developer Plan Limits]") < tab_page.find("DEV-PANEL"),
+      [ln[:60] for ln in tab_page.split("\n") if "[tab" in ln or "PANEL" in ln])
 
 m2 = read("/late")
 waited = (m2.get("signals") or {}).get("browser_waited")

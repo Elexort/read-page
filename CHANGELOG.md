@@ -8,6 +8,20 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **Tabs, collapsed sections and selects are shown honestly** (KNOWN-ISSUES 256-258, 262): a tab set's labels went with
+  the buttons and lists that hold them, and a panel the page hides came into the text with no word of which tab it
+  was, or not at all - on Groq's rate limits the default tab's table stood under the site's note that the limits below
+  are the Developer plan's, and a model answered from the wrong plan. `scripts/tabs.py` puts a marker where the page has
+  each one, in one grammar - the type, the state, what more there is, the name last: `[tab · shown · Free Plan
+  Limits]`, `[tab · hidden, but extracted · Developer Plan Limits]` with its text after it, `[tab · loads on click, not
+  extracted · Batch Limits]` for a panel the page does not hold, `[section · hidden, but extracted · Specifications]`
+  for a closed `<details>` or a collapsed accordion, `[select · chosen: EU · also US, APAC · Region]`. A hidden panel
+  over 4 KB stays in `page.md`, and its marker says so and names its line there. Only the main content is marked; a
+  panel keeps its place and its attributes but those that hide it; the browser's `page.md` keeps the hidden panels
+  too; the engines are weighed without the markers. On 109 saved pages of the bench and the corpus read offline
+  before and after, the 89 with nothing to mark came back the same, file for file. `signals.tabs` counts them.
+  SKILL.md's line on clicking says a tab loaded on click is named, not extracted; with the share's lines it stays
+  shorter than before (5 625 characters and 930 words, from 5 640 and 932).
 - **A PDF's tables on a busy weak laptop: the layout model's 10 s are its own work's** (KNOWN-ISSUES 237): four reads
   at once on an emulated Celeron gave the model's process a fifth of a CPU, its load alone took 11-14 s, and a fixed
   10 s laid out none of a paper's four pages of tables. The process now says its pace every half second and with

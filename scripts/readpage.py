@@ -117,6 +117,7 @@ import screens                                                      # noqa: E402
 import settle                                                       # noqa: E402
 import siteapi                                                      # noqa: E402
 import subtitles                                                    # noqa: E402
+import tabs                                                         # noqa: E402
 from engines import (crude_text, html2text_full, readability_text,  # noqa: E402,F401
                      trafilatura_text, visible_len, visible_text)
 
@@ -3061,6 +3062,7 @@ def inline_svg_text(md):
 
 
 _DD = {"worker": None, "spawn": None}     # this read's defuddle worker (ddworker.py)
+_TABS = {"last": None}                    # what the last extract() marked (tabs.py): its counts, its long panels
 
 
 def defuddle_worker(wait=True):
@@ -3392,16 +3394,34 @@ def extract(html, url, c, workdir, inner=None, want_all=False, page_html="", aft
     """
     html = pictures.real_srcs(html)       # a lazy picture's real address, for every extractor
     if not want_all and is_huge(html):
+        _TABS["last"] = None
         return huge_page(html, url, inner)
+    # tabs, collapsed sections and selects: a marker each, a hidden panel's text under its own (tabs.py);
+    # page.md's copy keeps a panel too long for the text whole
+    t_tabs = now()
+    marked, tabs_info = tabs.mark(html)
+    page_src = marked
+    if tabs_info["long"]:
+        page_src, page_info = tabs.mark(html, page=True)
+        tabs_info["page_long"] = page_info["page_long"]
+    if page_html:
+        page_html, page_info = tabs.mark(page_html, page=True)
+        tabs_info["page_long"] = page_info["page_long"]
+    original, html = html, marked
+    _TABS["last"] = tabs_info
+    if any(tabs_info["counts"].values()):
+        budget.record("tabs", t_tabs, note="%d KB of HTML" % (len(html) // 1024))
     t_dd = now()
     job = defuddle_start(html, workdir, url)
     t_py = now()
-    vis = visible_len(html)
+    # the engines are weighed without the markers: a marker's few words chose defuddle alone over the
+    # fuller texts on a page whose defuddle text was near half the page (Notion's pricing, 17 sections)
+    vis = visible_len(original)
     base = engines.page_base(html, url)   # page.md's links are whole addresses, as content.md's
     main_md, main_links = main_block(html, base)
     page = html2text_full(page_html, base=base) if page_html else ""
     if len(page.strip()) < 200:
-        page = inner if (inner and len(inner) > 500) else html2text_full(html, vis, base=base)
+        page = inner if (inner and len(inner) > 500) else html2text_full(page_src, vis, base=base)
     budget.record("page.md", t_py, note="%d KB of HTML, beside defuddle" % (len(html) // 1024))
     dd_cap = budget.cap(EXTRACT_FUSE, floor=0.5)
     dd, dd_why = job.result(dd_cap)
@@ -3422,7 +3442,10 @@ def extract(html, url, c, workdir, inner=None, want_all=False, page_html="", aft
     cands = {}
     if dd.strip():
         cands["defuddle"] = dd
-    cover_dd = (len(dd) / vis) if vis else 0.0
+    # ... nor the hidden panels it now reads: unhidden, arXiv's labs tools took defuddle past half the page,
+    # and its text without the paper's title and metadata won alone over the fuller one
+    extra = tabs_info.get("extra") or 0
+    cover_dd = (max(0, len(tabs.unmarked(dd)) - extra) / vis) if vis else 0.0
     if (want_all or not dd.strip() or cover_dd < 0.5) and budget.left() > 1:
         if after is not None:
             # on a weak laptop two extractor processes beside Chrome's start fight it for the CPU;
@@ -3433,7 +3456,7 @@ def extract(html, url, c, workdir, inner=None, want_all=False, page_html="", aft
         if rd.strip():
             cands["readability"] = rd
             if not dd.strip():
-                cover_dd = (len(rd) / vis) if vis else 0.0
+                cover_dd = (max(0, len(tabs.unmarked(rd)) - extra) / vis) if vis else 0.0
         tr = (got.get("trafilatura") or ("", ""))[0]
         if tr.strip():
             cands["trafilatura"] = tr
@@ -3446,18 +3469,22 @@ def extract(html, url, c, workdir, inner=None, want_all=False, page_html="", aft
         if crude.strip():
             cands["crude"] = crude
     if main_md and main_links >= 30:
-        best_clean = max((len(v.split()) for k, v in cands.items()
+        best_clean = max((len(tabs.unmarked(v).split()) for k, v in cands.items()
                           if k in ("defuddle", "readability", "trafilatura", "lynx", "w3m")), default=0)
-        if best_clean and len(main_md.split()) >= best_clean * 1.5:
+        if best_clean and len(tabs.unmarked(main_md).split()) >= best_clean * 1.5:
             cands["main"] = main_md
             trace("extract.main", words=len(main_md.split()), links=main_links, best=best_clean)
     if page.strip():
         cands["full"] = page
+    if any(tabs_info["counts"].values()):
+        # a converter escapes a marker's brackets (defuddle's Turndown: "\[tab · shown · X\]"): they are ours
+        cands = dict((k, tabs.unescape_markers(v)) for k, v in cands.items())
+        page = cands.get("full", tabs.unescape_markers(page))
     pool = [n for n in EXTRACTORS if n in cands]
     if pool and cover_dd >= 0.5 and "defuddle" in cands and "main" not in cands:
         primary_name, why = "defuddle", "defuddle covered half the visible text or more"
     elif pool:
-        primary_name = max(pool, key=lambda n: text_score(cands[n]))   # best-structured clean text
+        primary_name = max(pool, key=lambda n: text_score(tabs.unmarked(cands[n])))   # best-structured clean text
         why = "the best score (words + 2 a heading) of the clean texts"
     elif "crude" in cands:
         primary_name, why = "crude", "no extractor found text; tags stripped"
@@ -3482,13 +3509,26 @@ BROWSER_TIMEOUT_MS = 20000
 SHOT_WIDTH = 1280              # pages are laid out for this width; nothing is scaled after
 SHOT_HEIGHT = 1568             # the long edge a vision host keeps without resizing
 # the DOM as page.md sees it: what the page shows, without what it hides (menus folded away,
-# templates, the cookie dialog's other tabs); Chrome 105+ has checkVisibility
+# templates, the cookie dialog's other tabs); Chrome 105+ has checkVisibility. What the main content
+# folds away - a tab's panel, a closed <details>, a collapsed section's region - stays: tabs.py marks it
+# "hidden, but extracted", in page.md as in the text
 VISIBLE_DOM = """() => {
-  const src = document.documentElement, copy = src.cloneNode(true);
+  const src = document.documentElement;
   if (typeof src.checkVisibility !== 'function') return '';
+  const out = 'nav, header, footer, aside, form, dialog, template, [role=navigation], [role=banner], ' +
+              '[role=contentinfo], [role=complementary], [role=dialog], [role=alertdialog], [aria-modal=true]';
+  const keep = [];
+  const mark = el => { if (el && !el.closest(out)) keep.push(el); };
+  src.querySelectorAll('[role=tabpanel], details').forEach(mark);
+  src.querySelectorAll('[aria-expanded][aria-controls]').forEach(b => {
+    for (const id of (b.getAttribute('aria-controls') || '').split(/\\s+/)) if (id) mark(document.getElementById(id)); });
+  const kept = new Set(keep);
+  const inKept = el => { for (let p = el; p; p = p.parentElement) if (kept.has(p)) return true; return false; };
+  const copy = src.cloneNode(true);
   const a = src.querySelectorAll('body *'), b = copy.querySelectorAll('body *');
   if (a.length !== b.length) return '';
   for (let i = a.length - 1; i >= 0; i--) {
+    if (kept.size && inKept(a[i])) continue;
     if (a[i].checkVisibility({checkVisibilityCSS: true, visibilityProperty: true})) continue;
     if (getComputedStyle(a[i]).display === 'contents') continue;     // no box of its own, children shown
     if (b[i].parentNode) b[i].parentNode.removeChild(b[i]);
@@ -9955,6 +9995,7 @@ def read(args):
         return finish(workdir, manifest, t0, args, None)
 
     raw_name, text, page_text, engine, visible, html = "raw.bin", "", "", "", None, ""
+    tabs_info = None                       # the markers of the extraction whose text this is (tabs.py)
     route_skipped = False                  # a #/ route's landing page, left for the browser
     browser_inside = ""                    # where the browser reached inside, when its text was dropped
     visible_words = None
@@ -10161,6 +10202,7 @@ def read(args):
                 text, engine, cands, page_text = extract(
                     html, f["final"] or url, c, workdir, want_all=args.alternate,
                     after=_BROWSER_UP if early_render is not None else None)
+                tabs_info = _TABS["last"]
                 trace("extract", engine=engine, chars=len(text),
                       cands=",".join("%s:%d" % (k, len(v)) for k, v in (cands or {}).items()),
                       visible=visible)
@@ -10277,6 +10319,7 @@ def read(args):
             visible2, words2 = len(vis2), len(vis2.split())
             t2, eng2, cands2, page2 = extract(r["html"], r.get("final") or url, c, workdir, inner=r.get("inner"),
                                               page_html=r.get("visible") or "", want_all=args.alternate)
+            tabs2 = _TABS["last"]
             b_words = words_of(t2)
             b_wall = wall_signal({}, r["html"], title_of(r["html"]), first_heading(r["html"]), t2, b_words)
             if args.alternate:
@@ -10303,6 +10346,7 @@ def read(args):
                                    if hash_route else "the HTTP text was weak" if text_reason else "screenshots only"))
             if take:
                 text, engine, page_text, html, visible = t2, eng2, page2, r["html"], visible2
+                tabs_info = tabs2
                 visible_words = words2
                 source, source_code = "browser", r.get("status")
                 if source_code is None and f["status"]:
@@ -10331,6 +10375,7 @@ def read(args):
         # the browser did not read the route (none would start, or it failed): the landing page
         # is still better than nothing, and the answer says it is the server's page
         text, engine, cands, page_text = extract(html, f["final"] or url, c, workdir)
+        tabs_info = _TABS["last"]
         manifest["chain"]["tried"].append("extract:" + (engine or "none"))
         manifest["candidates"] = [{"engine": k, "chars": len(v)} for k, v in cands.items()]
 
@@ -10435,10 +10480,13 @@ def read(args):
     pic_base = image_base(html, f["final"] or url) if html else (f["final"] or url)
     text = inline_svg_text(text)
     restored = {}
+    tabs_info = tabs_info if source in ("http", "browser") else None
     if (html and text and page_text and source in ("http", "browser", "archive")
             and str(engine or "").split("(")[0].split(":")[0] in EXTRACTORS):
         t_bl = now()
-        text, restored = blockrule.restore(text, page_text, base=pic_base)
+        # a hidden panel too long for the text stays in page.md: its marker in the text says where
+        text, restored = blockrule.restore(text, page_text, base=pic_base,
+                                           out=[x["text"] for x in (tabs_info or {}).get("long") or []])
         budget.record("blocks", t_bl, note="+%d blocks" % (restored.get("restored") or 0))
         if restored.get("restored") or restored.get("pictures"):
             manifest["chain"]["tried"].append("blocks:+%d" % (restored.get("restored") or 0))
@@ -10453,8 +10501,9 @@ def read(args):
 
     # ---------------------------------------------------------------- artefacts
     manifest["page"] = page_meta(html, url)
-    # words, not characters: a page with 10 000 short comments used to look like a fragment
-    text_words = len((text or "").split())
+    # words, not characters: a page with 10 000 short comments used to look like a fragment; a marker of a tab
+    # or a section (tabs.py) is no word of the page's
+    text_words = len(tabs.unmarked(text or "").split())
     cover = round(min(1.0, text_words / visible_words), 3) if visible_words else None
     # "fragment" means more content exists that we did not take. A low cover alone is not enough:
     # nav-heavy pages (github trending, k8s docs) keep 10-30 % of the visible text legitimately.
@@ -10500,7 +10549,6 @@ def read(args):
         raw_path = take_body(f, raw_path)
 
     content_path = os.path.join(workdir, "content.md")
-    write_view(content_path, text or "")
     page_path = os.path.join(workdir, "page.md")
     # page.md is the whole page; the text stands in only when it is no page (a script shell the
     # browser filled, a site API's own page): fewer than half the text's words. Characters were
@@ -10508,6 +10556,11 @@ def read(args):
     # (SQLite, namu.wiki, opennet...) lose their menus and links to a copy of the text.
     whole = bool(page_text) and (len(page_text) >= len(text or "")          # no counting on a 16 MB spec
                                  or len(blockrule.words(page_text)) * 2 >= len(blockrule.words(text or "")))
+    if tabs_info and tabs_info.get("long"):
+        # a hidden panel too long for the text: its marker names the line of page.md where it is
+        page_view = answer.split_long_lines(short_data_uris(page_text if whole else (text or "")))
+        text = tabs.place_lines(text, page_view, tabs_info.get("page_long") or {})
+    write_view(content_path, text or "")
     write_view(page_path, page_text if whole else (text or ""))
 
     quality = {"defuddle": "high", "trafilatura": "high", "readability": "medium",
@@ -10527,6 +10580,9 @@ def read(args):
     if restored.get("outside"):
         manifest["content"]["outside"] = restored["outside"]
     manifest["signals"].update({"fragment": fragment, "js_shell": js_shell})
+    marked = dict((k, v) for k, v in ((tabs_info or {}).get("counts") or {}).items() if v)
+    if marked:
+        manifest["signals"]["tabs"] = marked        # tab sets, panels extracted, not extracted, too long; sections, selects
     if len(clean) >= 2:
         manifest["signals"]["extractors_agree"] = agree
     manifest["files"] = {"content": content_path, "page": page_path, "raw": raw_path}
