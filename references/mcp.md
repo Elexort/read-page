@@ -39,7 +39,7 @@ meant. `read_url(..., ocr=N)` answers with the text drawn in picture N, as `--oc
 the first block and the next line. Only the pointer differs, since there is no command to repeat:
 
 ```
-read-page · ok · defuddle, 87% of the page · content.md 24.7 KB, 389 lines · 1.9 s
+read-page · ok · defuddle · content.md 24.7 KB, 389 lines · 1.9 s
 files: C:\Users\me\AppData\Local\Temp\read-page\pages\9c1f… (content.md, page.md, manifest.json)
 outline (line, heading):
       1 ## Installation

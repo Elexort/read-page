@@ -15,7 +15,7 @@ came) because a step of the page failed - the step and what it said (`signals.sc
 what this machine lacks, never that.
 
 ```
-read-page · ok · defuddle, 87% of the page · content.md 24.7 KB, 389 lines · 1.9 s
+read-page · ok · defuddle · content.md 24.7 KB, 389 lines · 1.9 s
 files: /tmp/read-page/pages/9c1f… (content.md, page.md, manifest.json)
 outline (line, heading):
       1 ## Installation
@@ -69,10 +69,16 @@ so a file tool that stops at 2 000 still sees every word.
 
 `+ 3 blocks of page.md` after the engine: the extractor dropped those paragraphs, code blocks or
 tables and they were put back where they stood; `outside the text: 6.2 KB … - page.md` is what only
-`page.md` has (menus, link lists, fragments). `fragment` in the first line is not a status: the
-text is real but shorter than the page, so the answer shows `page.md`. `partial` there means the
-transfer was cut (a timeout, a broken connection): the text may stop early, and the advice says how
-to get the rest. `signals.paywall` (and an advice saying so) is a page that says it is paywalled - schema.org's
+`page.md` has (menus, link lists, fragments). `maybe a fragment: the text is 12% of the page's words`
+after the engine is not a status: `content.cover`, the text's words over the words the page shows
+(menus, footers and links counted), is under 0.35 with a text over 200 characters, so the text may
+be part of what the page holds and the answer shows `page.md`, the whole page (`signals.fragment`).
+A whole text holds more but seldom all of the page's words: on the acceptance bench 7 of 40 whole
+texts were under 70 % (a news article 49 %, gov.uk's tax rates 50 %, a GitHub issue 44 %) and its 3
+fragments under 30 %, and "49% of the page" on a whole text was read as "half the content" - so the
+share is named only where it decides something, and `content.cover` keeps it for every read.
+`partial` there means the transfer was cut (a timeout, a broken connection): the text may stop
+early, and the advice says how to get the rest. `signals.paywall` (and an advice saying so) is a page that says it is paywalled - schema.org's
 `isAccessibleForFree: false` in its JSON-LD or microdata, with the `cssSelector` of the hidden part when it names one -
 while the status stays `ok`: the text is what the server sent, the whole article a script hides or only the part open
 to everyone, and the page cannot tell which; a container named `paywall` is no such word (free pages carry them).
@@ -94,7 +100,7 @@ for a short name, two for a longer one, and only when one flag is that near.
 `robots.txt` and `X-Robots-Tag: noai` are not consulted: one user-requested read behaves like a
 browser. A crawl of a whole site is not this skill's job.
 
-A PDF's tables come as Markdown tables where the layout model is installed (`--setup`): `signals.tables` has the pages laid out (`pages`, as ranges: "2, 8-9, 28-600"), their number of tables, the model's seconds, and `left` - the pages that look like a table and were not laid out: the read's 10 s for tables ran out (`more`: after it pages were judged by their text alone, so a page of rulings only may be missing), a page was too heavy for that time (`heavy`: over 8 000 vector paths, or 2 000 words in one block), or the model stopped (`error` says why: it does not load, or its process ended); `files` does the same for each PDF inside a ZIP, which share the read's 10 s. Then `advice` names the pages and why, and `--download`, which gives the model the time, with an estimate of its seconds. With `--alternate` (`markdown`) `left` names the pages that are PyMuPDF's text and not Markdown, and why - also when no page came as Markdown. Without the model `improve` says how many pages look like a table. More in [documents.md](documents.md).
+A PDF's tables come as Markdown tables where the layout model is installed (`--setup`): `signals.tables` has the pages laid out (`pages`, as ranges: "2, 8-9, 28-600"), their number of tables, the model's seconds, and `left` - the pages that look like a table and were not laid out: the read's time for tables ran out - 10 s of the model's own work, as many times longer as other work on the machine slows its process, within the read's deadline (`more`: after it pages were judged by their text alone, so a page of rulings only may be missing), a page was too heavy for that time (`heavy`: over 8 000 vector paths, or 2 000 words in one block), or the model stopped (`error` says why: it does not load, or its process ended); `files` does the same for each PDF inside a ZIP, which share the read's time for tables. Then `advice` names the pages and why, and `--download`, which gives the model the time, with an estimate of its seconds. With `--alternate` (`markdown`) `left` names the pages that are PyMuPDF's text and not Markdown, and why - also when no page came as Markdown. Without the model `improve` says how many pages look like a table. More in [documents.md](documents.md).
 
 ## Flags
 
@@ -175,7 +181,7 @@ is read as usual.
  "signals": {"fragment": true, "status_reason": "612 words, engine defuddle"},
  "files": {"content": ".../content.md", "page": ".../page.md", "raw": ".../raw.html"},
  "privacy": {"mode": "sensitive", "refused": ["external"]},
- "advice": "content.md holds 31% of the visible text, so the answer shows page.md"}
+ "advice": "content.md holds 31% of the page's words, so the answer shows page.md, the whole page (the extracted text may have missed part of it)"}
 ```
 
 The full schema is [manifest-schema.json](manifest-schema.json).

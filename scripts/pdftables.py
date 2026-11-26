@@ -32,8 +32,12 @@ A request: {"path": PDF, "pages": [i, ...]} for those pages' tables (pages from 
 JSON object a line: {"ready": seconds} once pymupdf4llm is loaded, or {"fatal": why} and the end
 (pymupdf4llm 1.28 does not import without onnxruntime); then one a page - {"page": i, "text": ...,
 "n": tables, "s": seconds} ("text" is null when no table was put in) or {"page": i, "error": why}.
-Pages of a Markdown request are answered together, when its one call ends. EOF on stdin, or the
-end of the process PID, ends the process. -E keeps a caller's PYTHONPATH out (a folder of another
+Pages of a Markdown request are answered together, when its one call ends. Every answer, and a
+{"tick": 1} every TICK seconds from the start, says the process's pace: "busy", its seconds since
+it started less those it waited for a request, and "work", its CPU seconds, at most one for each
+of those seconds however many threads ran - the read gives the model as much more time as it
+waits for the CPU (KNOWN-ISSUES 237). EOF on stdin, or the end of
+the process PID, ends the process. -E keeps a caller's PYTHONPATH out (a folder of another
 Python's PyMuPDF cost every PDF its tables); READ_PAGE_TEST_MODEL_PATH, read here only, is the
 test suites' way in.
 """
@@ -56,6 +60,7 @@ BOX_CUTS = True        # a table whose box runs through a word of the page is le
 CUT_LINES = True       # a line the column lines cut at a mere space, in a cell of two lines, is text
 SPLIT_ROWS = True      # two rows of the page in one row of the grid are two rows (split_rows)
 NUMBER = re.compile(r"^[-+−–±$€£(]?\d[\d.,]*%?\)?[*†‡§]*$")
+TICK = 0.5             # seconds between the words of the process's pace while nothing else is said
 
 
 def cpus():
@@ -484,7 +489,7 @@ def watch_parent(pid):
 
 
 def main():
-    t0 = time.time()
+    t0, cpu0 = time.time(), time.process_time()
     args = sys.argv[1:]
     if "--parent" in args:
         try:
@@ -501,10 +506,38 @@ def main():
     answers = os.fdopen(os.dup(1), "w", encoding="utf-8")
     os.dup2(2, 1)
     sys.stdout = sys.stderr
+    lock = threading.Lock()
+    waited = [(0.0, None)]          # the seconds spent waiting for a request, and since when it waits now
+    said = {"busy": 0.0, "cpu": 0.0, "work": 0.0}      # at the last word said
+
+    def pace():
+        # how much of a CPU the process gets, from its own clock: the read lengthens the model's time
+        # by it (a load or a page that waits for the CPU is no work done). A CPU second counts once
+        # however many threads spent it: on 20 cores onnxruntime's import alone spent 1.5 CPU seconds
+        # in 0.12 s (Linux), which hid the wait of a load behind it
+        idle, since = waited[0]
+        t = time.time()
+        busy = t - t0 - idle - (t - since if since else 0.0)
+        cpu = time.process_time() - cpu0
+        said["work"] += max(0.0, min(cpu - said["cpu"], busy - said["busy"]))
+        said["busy"], said["cpu"] = busy, cpu
+        return {"busy": round(busy, 3), "work": round(said["work"], 3)}
 
     def say(obj):
-        answers.write(json.dumps(obj, ensure_ascii=False) + "\n")
-        answers.flush()
+        with lock:
+            answers.write(json.dumps(dict(obj, **pace()), ensure_ascii=False) + "\n")
+            answers.flush()
+
+    def ticks():
+        # the pace while the model loads or is at a page, when nothing else is said: four reads at
+        # once on a Celeron's budget held its load alone 11-14 s
+        while True:
+            time.sleep(TICK)
+            try:
+                say({"tick": 1})
+            except Exception:                                  # noqa: BLE001 - the answers' end: it is ending
+                return
+    threading.Thread(target=ticks, daemon=True).start()
 
     def why(e):
         return ("%s: %s" % (type(e).__name__, e))[:200]
@@ -519,7 +552,13 @@ def main():
     layout = bool(getattr(pymupdf4llm, "_use_layout", True))
     say({"ready": round(time.time() - t0, 2), "layout": layout})
     doc, path, heads = None, None, set()
-    for line in sys.stdin:
+    while True:
+        waited[0] = (waited[0][0], time.time())
+        line = sys.stdin.readline()
+        idle, since = waited[0]
+        waited[0] = (idle + time.time() - since, None)
+        if not line:
+            break
         try:
             req = json.loads(line)
             pages = [int(p) for p in req.get("pages") or []]
