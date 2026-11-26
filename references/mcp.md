@@ -23,7 +23,7 @@ error, so a prompt-injected model cannot turn the tool into a general file reade
 
 ```
 read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?,
-         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, to?, probe?)
+         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, to?, probe?, probe_units?)
 read(dir, file?, from=1, to?)
 ```
 
@@ -86,6 +86,15 @@ before it, a head and a tail sentinel, ASCII - so what a client shows of a tool'
 can be read off what reaches the model (Cline's SDK runtime keeps about 3 985 characters at each end of
 8 000). `read_url(url="probe:N")` is a page of the same lines answered the normal way, and with `from` and
 `to` it shows what a range sends. It is for testing the skill, not for reading; SKILL.md does not name it.
+
+`read_url(url="probe", probe_units=N)` is the probe that tells the units apart (`readpage.py --probe-units N`): the
+same N characters in lines of 100, but each line's label says its number and how many characters, UTF-16 units and
+bytes stand before it (`line 12 | 1100 chars 1190 utf16 1830 bytes before`), and its filler is ASCII, Cyrillic (2
+bytes), CJK (3 bytes) or a character past U+FFFF (2 units, 4 bytes) by the line's number (1, 2, 3, 4, then again), so
+the three counts drift apart line by line. Take the last line the client shows and where it cut that line: the label
+plus what the shown part adds are the three counts at the cut, and the one that comes to the client's limit is the one
+it counts: Cline's SDK counts UTF-16 units and keeps about 3 985 of them at each end, so the label of the last line
+before its gap says about 3 985 utf16, whatever it says of characters and bytes. The ASCII probe cannot tell them apart.
 
 ## The header
 

@@ -648,6 +648,59 @@ try:
     top, got, tail = sent("".join(b.get("text", "") for b in pr["content"] if b["type"] == "text"))
     check("MCP read_url(url=\"probe:N\", from, to): the answer --to gives, in read()'s words",
           got == answer.probe(20000).split("\n")[100:160] and 'from=161, to=200)' in tail, tail[:120])
+
+    # the probe that tells the units apart (KNOWN-ISSUES 268): ASCII alone makes characters, UTF-16 units and bytes
+    # one count, so it cannot show which of them a harness counts - and for a Russian or a Chinese answer that is
+    # the question. Each line says how many of the three stand before it; its filler is ASCII, Cyrillic (2 bytes),
+    # CJK (3 bytes) or a character past U+FFFF (2 units, 4 bytes), by the line's number.
+    p = subprocess.run([sys.executable, "-X", "utf8", SCRIPT, "--probe-units", "8000"], capture_output=True, timeout=120,
+                       env=e)
+    out = p.stdout.decode("utf-8", "replace")
+    rows = out.split("\n")[:-1]
+    check("--probe-units 8000: 8 000 characters in lines of 100, LF, UTF-8, nothing else, exit 0",
+          p.returncode == 0 and len(out) == 8000 and b"\r" not in p.stdout and p.stderr == b"" and len(rows) == 80
+          and all(len(r) == 99 for r in rows) and "�" not in out and not out.startswith("read-page"),
+          "rc %s, %d characters, %d bytes, %d lines, stderr %r" % (p.returncode, len(out), len(p.stdout), len(rows),
+                                                               p.stderr[:80]))
+    check("... the filler is ASCII, Cyrillic, CJK and a character past U+FFFF, so the three counts differ",
+          len(out) < u16(out) < len(p.stdout) and any(0x400 <= ord(c) < 0x500 for c in out)
+          and any(0x4e00 <= ord(c) < 0xa000 for c in out) and any(ord(c) > 0xFFFF for c in out),
+          "%d characters, %d units, %d bytes" % (len(out), u16(out), len(p.stdout)))
+    want_rows, seen = [], [0, 0, 0]
+    for k, r in enumerate(rows, 1):
+        m = re.match(r"(?:UNITS HEAD \| |UNITS TAIL \| )?line (\d+) \| (\d+) chars (\d+) utf16 (\d+) bytes before", r)
+        want_rows.append(bool(m) and tuple(int(x) for x in m.groups()) == (k, seen[0], seen[1], seen[2]))
+        seen = [seen[0] + len(r) + 1, seen[1] + u16(r) + 1, seen[2] + len(r.encode("utf-8")) + 1]
+    check("... each line says its number and how many characters, UTF-16 units and bytes stand before it, and it is right",
+          want_rows and all(want_rows), "%d of %d lines right; %s" % (sum(want_rows), len(rows), (rows[:1] or [""])[0][:60]))
+    check("... a head and a tail sentinel; the tail says the whole length",
+          rows and rows[0].startswith("UNITS HEAD | line 1 | 0 chars 0 utf16 0 bytes before | 8000 chars in 80 lines ")
+          and rows[-1].startswith("UNITS TAIL | line 80 | 7900 chars ") and " bytes before | 8000 chars " in rows[-1],
+          (rows[:1] + rows[-1:])[0][:90] if rows else out[:80])
+    fillers = [(re.match(r"(?:UNITS \w+ \| )?line \d+ \| \d+ chars \d+ utf16 \d+ bytes before (?:\| .*? )?(\S+)$", r) or [0, ""])[1]
+               for r in rows[:4]]
+    check("... the filler of lines 1 to 4 is ASCII, Cyrillic, CJK and a character past U+FFFF, one kind to a line",
+          len(fillers) == 4 and fillers[0].isascii() and all(0x400 <= ord(c) < 0x500 for c in fillers[1])
+          and all(0x4e00 <= ord(c) < 0xa000 for c in fillers[2]) and all(ord(c) > 0xFFFF for c in fillers[3])
+          and all(fillers), [f[:3] for f in fillers])
+    for n, why in ((0, "nothing"), (7, "a line shorter than its label"), (150, "one line"), (199, "one line, the longest")):
+        q = subprocess.run([sys.executable, "-X", "utf8", SCRIPT, "--probe-units", str(n)], capture_output=True,
+                           timeout=120, env=e).stdout.decode("utf-8", "replace")
+        check("--probe-units %d: exactly %d characters, %s" % (n, n, why),
+              len(q) == n and q.count("\n") == (1 if n else 0), "%d characters %r" % (len(q), q[:30]))
+    big = answer.probe_units(10 ** 7)
+    last_row = big.rsplit("\n", 2)[-2]
+    check("--probe-units at its largest (10 000 000): exactly that many characters, the tail sentinel whole",
+          len(big) == 10 ** 7 and last_row.startswith("UNITS TAIL | line 100000 | ") and " bytes before | 10000000 chars " in last_row,
+          last_row[:110])
+    bad = subprocess.run([sys.executable, "-X", "utf8", SCRIPT, "--probe-units", "lots"], capture_output=True, timeout=120,
+                         env=e)
+    check("--probe-units with no number: exit 2, the reason on stderr", bad.returncode == 2 and b"--probe-units" in bad.stderr,
+          "rc %s %r" % (bad.returncode, bad.stderr[:80]))
+    ru = mcp_server.tool_read_url({"url": "probe", "probe_units": 8000})
+    check("MCP read_url(probe_units=N): the same N characters, nothing else",
+          [b.get("text") for b in ru["content"]] == [answer.probe_units(8000)] and not ru.get("isError")
+          and out == answer.probe_units(8000), str(ru.get("structuredContent"))[:90])
     shutil.rmtree(e["READ_PAGE_CACHE"], ignore_errors=True)
 finally:
     srv.close()

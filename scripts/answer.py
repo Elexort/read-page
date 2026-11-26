@@ -63,6 +63,38 @@ def probe(n):
     return "".join(out)
 
 
+PROBE_FILLER = ("-", "ж", "字", "\U0001f600")   # ASCII; Cyrillic, 2 bytes; CJK, 3 bytes; past U+FFFF, 2 units and 4 bytes
+
+
+def probe_units(n):
+    """`readpage.py --probe-units N`: the probe that tells the units apart. `probe` is ASCII, so its characters,
+    UTF-16 units and bytes are one count and it cannot show which of them a harness counts - and for a Russian or a
+    Chinese answer that is the question (Cline counts UTF-16 units, Codex bytes). N characters again, in lines of
+    PROBE_LINE; each line's label says its number and how many characters, UTF-16 units and bytes stand before it,
+    and its filler is of one kind by the line's number - 1 ASCII, 2 Cyrillic, 3 CJK, 4 past U+FFFF, then again -,
+    so the three counts drift apart line by line. The last line a harness shows and where it cut that line give the
+    three counts at the cut: the one that comes to the harness's limit is the one it counts."""
+    n = max(0, min(int(n), PROBE_MAX))
+    if n < 2 * PROBE_LINE:
+        return ("UNITS HEAD AND TAIL | %d chars in one line " % n + "".join(PROBE_FILLER) * n)[:max(0, n - 1)] \
+            + ("\n" if n else "")
+    last = (n - PROBE_LINE) // PROBE_LINE + 1
+    out, chars, units, size = [], 0, 0, 0
+    for k in range(1, last + 1):
+        width = PROBE_LINE if k < last else n - chars
+        where = "line %d | %d chars %d utf16 %d bytes before" % (k, chars, units, size)
+        if k == 1:
+            where = "UNITS HEAD | %s | %d chars in %d lines" % (where, n, last)
+        elif k == last:
+            where = "UNITS TAIL | %s | %d chars" % (where, n)
+        line = (where + " " + PROBE_FILLER[(k - 1) % 4] * width)[:width - 1] + "\n"
+        out.append(line)
+        chars += len(line)
+        units += u16(line)
+        size += len(line.encode("utf-8"))
+    return "".join(out)
+
+
 def _too_long(line):
     return len(line) > LINE_CHARS or len(line.encode("utf-8")) > LINE_BYTES
 

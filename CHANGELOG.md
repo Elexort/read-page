@@ -28,7 +28,11 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   a harness shows of a command's output and where it cut can be read off what reaches the model; `probe:N` read as an
   address is a page of the same lines, answered as any page is, so `--from N --to M` shows what a range sends. Over MCP,
   `read_url(url="probe", probe=N)` gives the lines alone, `read_url(url="probe:N", from, to)` the page. README's
-  development notes and `mcp.md` name it; SKILL.md does not.
+  development notes and `mcp.md` name it; SKILL.md does not. A second probe, `--probe-units N` (MCP
+  `probe_units=N`), tells characters, UTF-16 units and bytes apart, which the ASCII one cannot: each line's label says
+  how many of the three stand before it, and its filler is ASCII, Cyrillic (2 bytes), CJK (3 bytes) or a character past
+  U+FFFF (2 units, 4 bytes) by the line's number, so the counts drift apart line by line; the last line a harness
+  shows, and where that line is cut, say which count it cut at.
 - **What a cut workbook lost, said where it was lost** (KNOWN-ISSUES 267): a sheet the archive was cut in ends with
   `[rows · lost in the cut · 54-78954 · Third]` after its last row that arrived - the total from its extent,
   `<dimension ref="A1:G78954"/>`, which Excel and openpyxl write at its top (`54-?` without one) -, and a sheet the

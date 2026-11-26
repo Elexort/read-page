@@ -9647,19 +9647,26 @@ def main(argv=None):
                     help="for testing a harness, not for reading: print N characters of numbered lines and nothing "
                          "else, no network (what it shows of a command's output); probe:N read as an address is a "
                          "page of them, for --from and --to")
+    ap.add_argument("--probe-units", dest="probe_units", default="", metavar="N",
+                    help="for testing a harness, not for reading: like --probe, N characters, but each line says how "
+                         "many characters, UTF-16 units and bytes stand before it and its filler is ASCII, Cyrillic, CJK "
+                         "and a character past U+FFFF, so the last line a tool shows says which of the three it counts")
     known = [s for a in ap._actions for s in a.option_strings if s.startswith("--")]
     argv = [(typo_fixed(t.partition("=")[0], known) + t.partition("=")[1] + t.partition("=")[2])
             if t.startswith("--") else t for t in (sys.argv[1:] if argv is None else argv)]
     args, extra = ap.parse_known_args(argv)
-    if str(args.probe).strip():
-        # numbered lines and nothing else, outside the answer's block (answer.probe): what a harness shows
-        try:
-            n = int(str(args.probe).strip())
-        except ValueError:
-            return usage_error("--probe takes a number of characters, such as --probe 8000")
-        sys.stdout.write(answer.probe(n))
-        sys.stdout.flush()
-        return 0
+    for flag, make in (("probe", answer.probe), ("probe_units", answer.probe_units)):
+        if str(getattr(args, flag)).strip():
+            # numbered lines and nothing else, outside the answer's block (answer.probe, answer.probe_units): what a
+            # harness shows - the second tells characters, UTF-16 units and bytes apart
+            name = "--" + flag.replace("_", "-")
+            try:
+                n = int(str(getattr(args, flag)).strip())
+            except ValueError:
+                return usage_error("%s takes a number of characters, such as %s 8000" % (name, name))
+            sys.stdout.write(make(n))
+            sys.stdout.flush()
+            return 0
     args.ignored = ignored_flags(extra, args, known)
     # a value we cannot use is left out the same way: the read goes on with the default
     view = (args.file or "").strip().lower()

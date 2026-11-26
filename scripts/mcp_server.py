@@ -143,6 +143,11 @@ TOOLS = [
                           "description": "for testing a client, not for reading: answer with N characters of numbered "
                                          "lines and nothing else, no network (the url is not read). url=\"probe:N\" is "
                                          "a page of them, answered the normal way (with from and to)"},
+                "probe_units": {"type": "integer", "minimum": 0,
+                                "description": "for testing a client, not for reading: like probe, but each line says how "
+                                               "many characters, UTF-16 units and bytes stand before it, and its filler "
+                                               "is ASCII, Cyrillic, CJK and a character past U+FFFF, so the last line a "
+                                               "client shows says which of the three it counts"},
             },
             "required": ["url"],
             "additionalProperties": False,
@@ -654,13 +659,15 @@ def tool_read_url(args):
     known = TOOLS[0]["inputSchema"]["properties"]
     args = {readpage.typo_fixed(k, list(known)): v for k, v in args.items()}
     ignored = ["%s (no such parameter)" % k for k in args if k not in known]
-    if args.get("probe") not in (None, False, ""):
-        # numbered lines and nothing else, as `readpage.py --probe N` prints them: what the client shows of a result
-        try:
-            n = int(args.get("probe"))
-        except (TypeError, ValueError):
-            return err("probe takes a number of characters, such as probe=8000")
-        return result([text(answer.probe(n))], {"probe": max(0, min(n, answer.PROBE_MAX))})
+    for key, make in (("probe", answer.probe), ("probe_units", answer.probe_units)):
+        if args.get(key) not in (None, False, ""):
+            # numbered lines and nothing else, as `readpage.py --probe N` and `--probe-units N` print them: what the
+            # client shows of a result - the second tells characters, UTF-16 units and bytes apart
+            try:
+                n = int(args.get(key))
+            except (TypeError, ValueError):
+                return err("%s takes a number of characters, such as %s=8000" % (key, key))
+            return result([text(make(n))], {key: max(0, min(n, answer.PROBE_MAX))})
     url = (args.get("url") or "").strip()
     if not url:
         return err("url is required")
