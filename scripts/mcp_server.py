@@ -124,8 +124,14 @@ TOOLS = [
                              "description": "no size and no time limit, every picture of the page; only free disk space stops it"},
                 "file": {"type": "string", "enum": ["content.md", "page.md"],
                          "description": "which text to answer with: content.md (the text, default) or page.md (the whole page)"},
-                "from": {"type": "integer", "minimum": 1,
-                         "description": "start the text at this line of the saved copy (no network); the answer names the next line"},
+                "from": {"type": ["integer", "string"], "minimum": 1,
+                         "description": "start the text at this line of the saved copy (no network), or at the line "
+                                        "that holds this piece of text (a quote, a heading, a marker such as "
+                                        "\"[tab · Plans]\" or \"[img #3]\"); the answer names the next line"},
+                "to": {"type": "integer", "minimum": 1,
+                       "description": "with from: the lines up to this one, more than one block if need be, for a "
+                                      "client that shows that much; the answer says they were sent and how to go on "
+                                      "if they were cut"},
                 "ocr": {"type": "integer", "minimum": 1,
                         "description": "answer with the text drawn in picture N (the number on its marker) instead "
                                        "of the page's text: for a model that cannot see pictures"},
@@ -150,8 +156,11 @@ TOOLS = [
                 "file": {"type": "string",
                          "description": "content.md, page.md, manifest.json, or img/...; without it, "
                                         "the text read last"},
-                "from": {"type": "integer", "minimum": 1, "default": 1,
-                         "description": "the line to start at (the answer names the next one)"},
+                "from": {"type": ["integer", "string"], "minimum": 1, "default": 1,
+                         "description": "the line to start at (the answer names the next one), or a piece of "
+                                        "text: the first line holding it"},
+                "to": {"type": "integer", "minimum": 1,
+                       "description": "the last line: the lines from `from` up to it, more than one block if need be"},
                 "ocr": {"type": "boolean", "default": False,
                         "description": "for a picture (img/...): its text instead of the image, for a model "
                                        "that cannot see pictures"},
@@ -510,6 +519,46 @@ def mcp_next(n, total, view):
     return '── next: line %d of %d → read(dir, file="%s", from=%d) ──' % (n, total, view, n)
 
 
+def mcp_call(frm, view, to=None):
+    # a `to` answer's ways on: the next range, or a quote of the last line seen before a cut
+    return 'read(dir, file="%s", from=%s%s)' % (view, frm, ", to=%d" % to if to else "")
+
+
+def line_args(args, ignored):
+    """`from` and `to` as the CLI takes them: (start, to, quote). `from` is a line number or words of a
+    line - the quote, which the text resolves (readpage.start_of); a value it cannot use is left out and
+    named."""
+    raw, quote = args.get("from"), ""
+    try:
+        start = int(raw or 1)
+    except (TypeError, ValueError):
+        start = 1
+        if isinstance(raw, str) and raw.strip():
+            quote = raw
+        else:
+            ignored.append("from %s (a line number, or words of a line)" % raw)
+    if start < 1:
+        ignored.append("from %d (a line number, 1 or more)" % start)
+        start = 1
+    to = None
+    if args.get("to") not in (None, "", 0, False):
+        try:
+            to = int(args.get("to"))
+        except (TypeError, ValueError):
+            ignored.append("to %s (a line number)" % args.get("to"))
+        if to is not None and to < start:
+            ignored.append("to %d (before from %d)" % (to, start))
+            to = None
+    return start, to, quote
+
+
+def quote_start(workdir, manifest, view, quote, to):
+    """A quote's line in the text (None: no line holds it), and `to` left out when it comes before that line
+    (the CLI, given the same, names it on its `ignored:` line)."""
+    start = readpage.start_of(workdir, manifest, view, quote)
+    return start, (None if start is not None and to is not None and to < start else to)
+
+
 def line_count(body):
     return len(body.split("\n")) - (1 if body.endswith("\n") else 0) if body else 0
 
@@ -536,14 +585,7 @@ def tool_read_url(args):
     if view and view not in readpage.VIEWS:
         ignored.append("file %s (content.md or page.md)" % args.get("file"))
         view = ""
-    try:
-        start = int(args.get("from") or 1)
-    except (TypeError, ValueError):
-        ignored.append("from %s (a line number)" % args.get("from"))
-        start = 1
-    if start < 1:
-        ignored.append("from %d (a line number, 1 or more)" % start)
-        start = 1
+    start, to, quote = line_args(args, ignored)
     argv = [url, "--json"]
     for flag in ("allow_external", "force_external", "alternate", "refresh", "clear_cookies", "download"):
         if args.get(flag):
@@ -561,8 +603,12 @@ def tool_read_url(args):
     deny = args.get("deny_images") is True and not inline
     if deny:
         argv.append("--deny-images")
-    if start > 1:
+    if quote:
+        argv.append("--from=" + quote)          # the saved copy, from the line holding the quote
+    elif start > 1:
         argv += ["--from", str(start)]          # a continuation reads the saved copy: no network
+    if to:
+        argv += ["--to", str(to)]               # the window's pictures are the range's
     if view:
         argv += ["--file", view]                # page.md printed: its pictures come
     ocr_n = 0
@@ -603,12 +649,19 @@ def tool_read_url(args):
     continuing = args.get("from") is not None
     saved = readpage.load_manifest(workdir) if workdir else {}
     view = readpage.answer_view(saved or manifest, workdir, view, continuing)
+    lost = False                                # a quote no line holds: the answer is the outline
+    if quote and workdir:
+        found, to = quote_start(workdir, saved or {}, view, quote, to)
+        lost, start = found is None, found or 1
     if workdir:
-        readpage.remember_view(workdir, view)
+        readpage.remember_view(workdir, view, None if lost else start)
     body = ""
     if workdir and os.path.isfile(os.path.join(workdir, view)):
         body = open(os.path.join(workdir, view), encoding="utf-8", errors="replace").read()
-    said, nxt = answer.render(manifest, body, view, start, mcp_next)
+    if lost:
+        said, nxt = answer.not_found(manifest, body, view, quote), None
+    else:
+        said, nxt = answer.render(manifest, body, view, start, mcp_next, to=to, call=mcp_call)
 
     # how often each picture stands in the whole text: 3+ times is a decoration
     uses = {}
@@ -670,7 +723,7 @@ def tool_read_url(args):
                 blocks.append(text("[read-page] no screenshots: %s" % why))
 
     structured = {k: v for k, v in manifest.items() if not k.startswith("_")}
-    structured["mcp"] = {"file": view, "from": start, "next_from": nxt,
+    structured["mcp"] = {"file": view, "from": start, "to": to, "next_from": nxt,
                          "total_lines": line_count(body),
                          "images_attached": state["attached"], "images_total": len(images),
                          "images_skipped": state.get("skipped", 0),
@@ -715,16 +768,9 @@ def tool_read(args):
                    "line of a read_url answer, or a folder written with --dir)" % d)
     # no file named: the text read last; a text named here becomes the one read last
     rel = (args.get("file") or "").strip() or readpage.answer_view(readpage.load_manifest(d), d, "", True)
-    if rel in readpage.VIEWS:
-        readpage.remember_view(d, rel)
-    try:
-        start = int(args.get("from") or 1)
-    except (TypeError, ValueError):
-        ignored.append("from %s (a line number)" % args.get("from"))
-        start = 1
-    if start < 1:
-        ignored.append("from %d (a line number, 1 or more)" % start)
-        start = 1
+    start, to, quote = line_args(args, ignored)
+    if rel in readpage.VIEWS and not quote:
+        readpage.remember_view(d, rel, start)
     path = inside(d, rel)
     if not path or not os.path.isfile(path):
         return err("no such file: %s (in %s)" % (rel, d))
@@ -799,11 +845,26 @@ def tool_read(args):
             body = pretty
         except Exception:
             pass
-    manifest = dict(readpage.load_manifest(d) or {"status": "ok"}, dir=shown_d, cache="hit")
+    saved = readpage.load_manifest(d) or {}
+    lost = False                                # a quote no line holds: the answer is the outline
+    if quote:
+        last = saved.get("_from") or {}
+        found = answer.find(body.split("\n"), quote, last.get("line") if last.get("view") == rel else 1)
+        lost, start = found is None, found or 1
+        if not lost and to is not None and to < start:
+            ignored.append("to %d (before line %d, where the quote is)" % (to, start))
+            to = None
+        if rel in readpage.VIEWS:
+            readpage.remember_view(d, rel, None if lost else start)
+    manifest = dict(saved or {"status": "ok"}, dir=shown_d, cache="hit")
     if ignored:
         manifest["ignored"] = ignored
-    said, nxt = answer.render(manifest, body, rel, start, mcp_next)
-    return result([text(said)], {"dir": shown_d, "file": rel, "kind": "text", "from": start,
+    if lost:
+        return result([text(answer.not_found(manifest, body, rel, quote))],
+                      {"dir": shown_d, "file": rel, "kind": "text", "from": None, "to": to, "next_from": None,
+                       "total_lines": line_count(body), "not_found": quote})
+    said, nxt = answer.render(manifest, body, rel, start, mcp_next, to=to, call=mcp_call)
+    return result([text(said)], {"dir": shown_d, "file": rel, "kind": "text", "from": start, "to": to,
                                  "next_from": nxt, "total_lines": line_count(body)})
 
 

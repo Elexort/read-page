@@ -28,6 +28,7 @@ LINE_CHARS = 1998      # the Read tools of OpenCode, Kilo Code, Cline, Crush, Ge
                        # a line at 2 000 characters; "\r\n" fits too
 LINE_BYTES = 6000      # keeps every line inside one block even with the outline above it
 POINTER_BYTES = 200    # the separator above the text and the pointer below it (characters too)
+RANGE_BYTES = 150000   # a --to answer at most: the most a harness shows (Claude Code with its limit raised)
 OUTSIDE_SHOWN = 1024   # less than this outside the text (a footer line) is not worth a header row
 
 _SENTENCE_END = re.compile(r"[.!?…](?=\s)|[。！？]")     # CJK full stops need no space after
@@ -297,11 +298,104 @@ def header(manifest, view, total_lines, text_bytes):
     return rows
 
 
-def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_lines=BUDGET_LINES, chars=BUDGET_CHARS):
+def _sent(head, rows, lines, view, start, to, total, call):
+    """--from N --to M: lines N to M, past one block, for a harness that shows more (Codex with an
+    OpenAI model passes about 40 000 bytes). The skill cannot see what the harness shows, so the
+    answer says the lines were sent, not shown, and carries the way back at its top and its bottom -
+    most harnesses keep both ends of what they cut: the next range, and a quote of the last line seen
+    before a cut (`--from "text"`). RANGE_BYTES at most, past what any harness shows."""
+    way = "cut by your tool? go on from the last line before the cut: %s" % call('"<its words>"', view)
+    room = RANGE_BYTES - _bytes(head + rows) - 2 * POINTER_BYTES - 2 * len(way.encode("utf-8"))
+    end, used = start, 0
+    while end <= to:
+        size = len(lines[end - 1].encode("utf-8")) + 1
+        if used + size > room and end > start:
+            break
+        used += size
+        end += 1
+    capped = " (%d KB at most a call)" % (RANGE_BYTES // 1000) if end <= to else ""
+    top = "── %s: lines %d-%d of %d sent%s; %s ──" % (view, start, end - 1, total, capped, way)
+    if end <= total:
+        nxt = min(total, end + (end - start) - 1)
+        tail = "── next: line %d of %d → %s; %s ──" % (end, total, call(end, view, nxt), way)
+    else:
+        tail = "── the end of %s; %s ──" % (view, way)
+    out = "\n".join(head + rows + [top] + pictures.compact(lines[start - 1:end - 1]) + [tail]) + "\n"
+    return out, (end if end <= total else None)
+
+
+def _call(frm, view, to=None):
+    """How a caller that names none goes on: the command line's flags."""
+    return "the same command with --from %s%s --file %s" % (frm, " --to %d" % to if to else "", view)
+
+
+# an element's marker, `[tab · hidden, but extracted · 6.0 KB, ... · Go]`: its type, then its state, what more
+# there is to say, its name last (tabs.py, and a cut workbook's rows and sheets)
+ELEMENT = re.compile(r"\[(tab|section|select|rows|sheet) · ([^\]\n]*)\]")
+
+
+def _plain(s):
+    """A line as a quote is matched against it: a marker is its type and name alone (a picture its number),
+    whitespace folded - so `[tab · Developer Plan Limits]` finds the marker whatever its state says."""
+    if "[" in s:
+        s = pictures.MARK.sub(lambda m: "[img #%s]" % m.group(1), s)
+        s = ELEMENT.sub(lambda m: "[%s · %s]" % (m.group(1), m.group(2).split(" · ")[-1].strip()), s)
+    return " ".join(s.split())
+
+
+def find(lines, quote, after=1):
+    """The line a quote starts at (`--from "text"`), from 1, or None: the first line holding it - whitespace
+    folded, then without case -, the first at or after `after` (where the last answer of the page started)
+    when there are several. A quote cut in the middle of a line matches; one of several lines is looked for
+    by its first, when it is not found whole."""
+    wants = [_plain(quote)]
+    rows = [r for r in str(quote).split("\n") if r.strip()]
+    if len(rows) > 1:
+        wants.append(_plain(rows[0]))
+    plain = folded = None
+    for want in wants:
+        if not want:
+            continue
+        if plain is None:
+            plain = [_plain(x) for x in lines]
+            folded = [x.casefold() for x in plain]
+        exact = [i for i, x in enumerate(plain, 1) if want in x]
+        loose = [i for i, x in enumerate(folded, 1) if want.casefold() in x]
+        # where the reading is first: an agent goes on from its own place, a retyped quote may differ in case
+        for hits in ([i for i in exact if i >= (after or 1)], [i for i in loose if i >= (after or 1)], exact, loose):
+            if hits:
+                return hits[0]
+    return None
+
+
+def not_found(manifest, text, view, quote):
+    """`--from "text"` that no line holds: the answer says so and shows the outline, whose line numbers
+    `--from N` takes."""
+    lines = (text or "").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    head = header(manifest, view, len(lines), len((text or "").encode("utf-8")))
+    q = " ".join(str(quote).split())
+    q = q if len(q) <= 80 else q[:79] + "…"
+    say = ['── not in %s: "%s", spaces and case aside; the outline below names its lines for --from N ──' % (view, q)]
+    room = min(OUTLINE_BYTES * 2, (BUDGET_BYTES - _bytes(head + say)) // 2, (BUDGET_CHARS - _chars(head + say)) // 2)
+    starts, n = [], 1
+    while n <= len(lines):
+        starts.append(n)
+        n = window(lines, n, BUDGET_BYTES - _bytes(head) - POINTER_BYTES, BUDGET_LINES - len(head) - 3,
+                   BUDGET_CHARS - _chars(head) - POINTER_BYTES)
+    rows = outline(lines, room, starts) if lines else []
+    return "\n".join(head + say + (["outline (line, heading):"] + rows if rows else [])) + "\n"
+
+
+def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_lines=BUDGET_LINES, chars=BUDGET_CHARS,
+           to=None, call=None):
     """The whole answer as one string, and the line the next block starts at (None at the end).
 
     `next_hint(n, total, view)` words the pointer for the caller: a flag on the command line, an
-    argument of an MCP tool.
+    argument of an MCP tool. `to`: the last line asked for (--to M), the lines up to it sent
+    whatever the block (_sent); `call(frm, view, to=None)` words a call of the caller's that starts at
+    `frm` - a line number, or a quote.
     """
     lines = (text or "").split("\n")
     if lines and lines[-1] == "":
@@ -321,13 +415,15 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
         return "\n".join(head + ["── %s is empty ──" % view]) + "\n", None
     if start > total:
         return "\n".join(head + ["── %s has %d lines: line %d is past the end ──" % (view, total, start)]) + "\n", None
-    if (start == 1 and _bytes(lines) + POINTER_BYTES <= room_b and _chars(lines) + POINTER_BYTES <= room_c
-            and total + 2 <= room_l):
+    whole = (start == 1 and _bytes(lines) + POINTER_BYTES <= room_b and _chars(lines) + POINTER_BYTES <= room_c
+             and total + 2 <= room_l)
+    to = int(to) if to and int(to) >= start else None
+    if whole and to is None:
         return "\n".join(head + ["── %s: all %d lines ──" % (view, total)] + pictures.compact(lines)) + "\n", None
 
     block, block_c = room_b - POINTER_BYTES, room_c - POINTER_BYTES
     rows = []
-    if start == 1:
+    if start == 1 and not whole:
         # the blocks the answers will really have: the first one shares its room with the
         # outline, every continuation (no outline) gets the whole block. Two passes, because the
         # first block depends on the outline's size and a heading-less outline on the blocks.
@@ -345,6 +441,8 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
         rows = outline(lines, room_o, starts_after(first_end))
         if rows:
             rows = ["outline (line, heading):"] + rows
+    if to is not None:
+        return _sent(head, rows, lines, view, start, min(to, total), total, call or _call)
     end = window(lines, start, block - _bytes(rows), room_l - len(rows) - 3, block_c - _chars(rows))
     while True:
         # a picture's first marker in this answer is full, a repeat short

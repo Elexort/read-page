@@ -46,6 +46,30 @@ file, from the saved copy, with no network; without `--file` it goes on in the f
 lines may have moved. The files stay in the work folder: the per-URL cache entry under the system
 temp directory, or `--dir DIR`.
 
+`--from "text"` starts at the first line that holds a piece of text, whitespace folded and then without case; when
+several do, the first at or after where the last answer of that file started, so an agent that quotes the last line
+it saw goes on from its own place. A quote cut in the middle of a line matches, one of several lines is looked for
+by its first, and a marker is found by its type and name - a picture by its number - whatever its state and
+properties say: `--from "[tab · Developer Plan Limits]"`, `--from "[img #3]"`. When no line holds it, the answer says
+so and shows the outline (its line numbers are what `--from N` takes), and no text. It works on `content.md` and
+`page.md` alike.
+
+`--from N --to M` prints lines N to M whatever the block, for a harness that shows more than one (Codex with an
+OpenAI model shows about 40 000 bytes, Claude Code 30 000, goose and OpenCode 50 000), at most 150 KB a call; `--to`
+alone reads from line 1, and one before `--from` is left out and named on the `ignored:` line. The skill cannot see
+what the harness shows, so such an answer never says its lines were shown: it says they were sent, and carries the
+way on at its top and at its bottom, as most harnesses keep both ends of what they cut:
+
+```
+── content.md: lines 1-300 of 812 sent; cut by your tool? go on from the last line before the cut: the same command with --from "<its words>" --file content.md ──
+(lines 1-300)
+── next: line 301 of 812 → the same command with --from 301 --to 600 --file content.md; cut by your tool? go on from the last line before the cut: the same command with --from "<its words>" --file content.md ──
+```
+
+The text's own lines carry no numbers, as an editor would show them; the range sent, the pointers and the
+outline (an answer from line 1 has it) keep theirs. The next range is as long as this one; at the end of the file
+the bottom line says so.
+
 | File | What it is |
 |---|---|
 | `content.md` | the main content, what the answer prints; picture markers `[img #3 · 100x80 3K · alt] img/03-alt.png` point at `img/`. For `media_only` it is one line naming the saved file |
@@ -120,7 +144,8 @@ A PDF's tables come as Markdown tables where the layout model is installed (`--s
 
 | Flag | Meaning |
 |---|---|
-| `--from N` | print the block that starts at line N of the saved copy, no network; without `--file` it goes on in the file read last (`--file` switches it) |
+| `--from N` | print the block that starts at line N of the saved copy, no network; without `--file` it goes on in the file read last (`--file` switches it). `--from "text"`: from the first line that holds it, a marker by its type and name (see The answer) |
+| `--to M` | with `--from N`: lines N to M at once, past one block, for a harness that shows more; said to be sent, with the way on at both ends (see The answer) |
 | `--file page.md` | answer with the whole page (default: `content.md`, or `page.md` for a fragment) |
 | `--json` | print the manifest instead of the answer |
 | `--ocr N` | answer with the text drawn in picture N, the number on its marker, instead of the page's text: for a model that cannot see pictures (see Pictures) |

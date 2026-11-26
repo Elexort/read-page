@@ -8,6 +8,23 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **`--from "text"`: go on from a quote** (KNOWN-ISSUES 265): the answer starts at the first line holding a piece of
+  text, whitespace folded and then without case; when several do, the first at or after where the last answer of that
+  file started (`_from` in the saved manifest). A quote cut in the middle of a line matches, one of several lines by its
+  first; a marker is found by its type and name - a picture by its number - whatever its state and properties say:
+  `--from "[tab · Developer Plan Limits]"`, `--from "[img #3]"`. No line holds it: the answer says so and shows the
+  outline. `content.md` and `page.md` alike; MCP's `from` takes text on `read_url` and `read`. SKILL.md's "rest of a long
+  text" bullet names `--from "<words of a line>"` and `--to M`; the room came from its own lines (5 625 -> 5 614
+  characters, 930 words).
+- **`--from N --to M`: a range the agent asks for** (KNOWN-ISSUES 264): lines N to M whatever the block, for a harness
+  that shows more than one (Codex with an OpenAI model about 40 000 bytes, goose and OpenCode 50 000), at most 150 KB
+  a call; `--to` alone reads from line 1. The skill cannot see what the harness shows, so such an answer says its lines
+  were sent - `── content.md: lines 1-300 of 812 sent; cut by your tool? go on from the last line before the cut: the
+  same command with --from "<its words>" --file content.md ──` - and its bottom line names the next range, as long as
+  this one, and the same way back: most harnesses keep both ends of what they cut. The text's lines carry no numbers;
+  the range, the pointers and the outline keep theirs. Without `--to` nothing changes; a `--to` before `--from` is left
+  out and named. MCP: `to` on `read_url` and `read`. `--until`, `--lines` and the like are still not flags; their note
+  names `--to`.
 - **The answer's block counts characters too** (KNOWN-ISSUES 263): Cline's SDK runtime cuts every tool result, MCP
   too, at 8 000 characters (UTF-16 units), keeping about 3 985 at each end - in its code since 2026-06-19, and missed
   by the survey the block was set on, so an English block of 9 850 characters lost about 2 000 from its middle there.

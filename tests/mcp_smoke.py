@@ -82,8 +82,8 @@ check("tools/list", names == {"read_url", "read"}, sorted(names))
 props = {t["name"]: sorted((t["inputSchema"] or {}).get("properties") or {}) for t in tools}
 check("read_url arguments", props["read_url"] == [
     "allow_external", "alternate", "clear_cookies", "deny_images", "download", "file",
-    "force_external", "from", "inline_images", "ocr", "refresh", "screenshots", "url"], props["read_url"])
-check("read arguments", props["read"] == ["dir", "file", "from", "ocr"], props["read"])
+    "force_external", "from", "inline_images", "ocr", "refresh", "screenshots", "to", "url"], props["read_url"])
+check("read arguments", props["read"] == ["dir", "file", "from", "ocr", "to"], props["read"])
 
 # 3. ping
 check("ping", "result" in rpc("ping"))

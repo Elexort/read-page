@@ -71,6 +71,16 @@ ROUTES = {
                        "".join("<li><a href='/f%d'>Footer link %d of the site and its pages</a></li>" % (i, i)
                                for i in range(150)))).encode("utf-8")),
 }
+# a page with a tab set and a picture: their markers are found by type and name (KNOWN-ISSUES 265)
+ROUTES["/tabs"] = page("Plans", "<h1>Plans</h1>" + sections(12, EN) + (
+    "<div role='tablist'><button role='tab' aria-selected='true' aria-controls='p1'>Free Plan Limits</button>"
+    "<button role='tab' aria-controls='p2'>Developer Plan Limits</button></div>"
+    "<div role='tabpanel' id='p1'><p>FREE-PANEL requests per minute: thirty, and tokens per day: a few.</p></div>"
+    "<div role='tabpanel' id='p2' hidden><p>DEV-PANEL requests per minute: a thousand, tokens per day: many.</p></div>")
+    + "<p>Before the chart comes a sentence that says what it shows.</p><p><img src='/chart.png' alt='Usage chart'></p>"
+    + sections(12, EN, "Later section"))
+
+
 class Versioned:
     """A page with an ETag: a matching If-None-Match gets a 304; `version` changes the page."""
 
@@ -132,6 +142,15 @@ def body(text):
     if rest and rest[-1].startswith("── next: "):
         rest.pop()
     return rest
+
+
+def sent(text):
+    """A --to answer: its top line, its text lines, its bottom line."""
+    lines = text.rstrip("\n").split("\n")
+    i = next((k for k, ln in enumerate(lines) if ln.startswith("── ") and " sent" in ln), None)
+    if i is None or len(lines) < i + 2:
+        return "", [], ""
+    return lines[i], lines[i + 1:-1], lines[-1]
 
 
 def next_line(text):
@@ -272,6 +291,91 @@ try:
     check("a new reading (no --from) starts at content.md again", "── content.md: lines 1-" in anew.text,
           first_line(anew)[:80])
 
+    # --from N --to M: lines N to M whatever the block, for a harness that shows more; the skill cannot
+    # see what the harness shows, so they are said to be sent, with the way back at both ends (KNOWN-ISSUES 264)
+    plain = run_read(srv.url("/plainlong"))
+    saved = lines_of(plain)
+    big = run_read(srv.url("/plainlong"), "--from", "1", "--to", "300", reuse=plain)
+    top, got, tail = sent(big.text)
+    check("--to: lines 1 to 300 come whole, past one block, the text's lines unnumbered",
+          got == saved[:300] and len(big.out) > BUDGET, "%d lines, %d bytes" % (len(got), len(big.out)))
+    check("--to: the top line says they were sent, and how to go on if a tool cut them",
+          top == '── content.md: lines 1-300 of %d sent; cut by your tool? go on from the last line before the cut: '
+                 'the same command with --from "<its words>" --file content.md ──' % len(saved), top[:160])
+    check("--to: the bottom line names the next range of the same size, and the way back",
+          tail == '── next: line 301 of %d → the same command with --from 301 --to 600 --file content.md; cut by your '
+                  'tool? go on from the last line before the cut: the same command with --from "<its words>" '
+                  '--file content.md ──' % len(saved), tail[:160])
+    check("--to from line 1: the outline keeps its line numbers", "outline (line, heading):" in big.text
+          and big.text.index("outline (line, heading):") < big.text.index(top), "")
+    mid = run_read(srv.url("/plainlong"), "--from", "50", "--to", "60", reuse=plain)
+    top, got, tail = sent(mid.text)
+    check("--from 50 --to 60: those 11 lines, sent, the next range 61-71",
+          got == saved[49:60] and "lines 50-60 of %d sent" % len(saved) in top and "--from 61 --to 71 " in tail
+          and "outline" not in mid.text, "%d lines; %s" % (len(got), tail[:90]))
+    end = run_read(srv.url("/plainlong"), "--from", str(len(saved) - 5), "--to", "99999", reuse=plain)
+    top, got, tail = sent(end.text)
+    check("--to past the end: the lines to the end, and the bottom says it is the end",
+          got == saved[-6:] and tail.startswith("── the end of content.md; cut by your tool? "), tail[:90])
+    back = run_read(srv.url("/plainlong"), "--from", "10", "--to", "5", reuse=plain)
+    ign = next((ln for ln in back.text.split("\n") if ln.startswith("ignored: ")), "")
+    check("--to before --from is left out and named; the block is the usual one",
+          ign == "ignored: --to 5 (before --from 10)" and "── content.md: lines 10-" in back.text
+          and " sent; " not in back.text and next_line(back.text), ign or first_line(back)[:80])
+    alone = run_read(srv.url("/short"), "--to", "3")
+    top, got, tail = sent(alone.text)
+    check("--to alone: from line 1", got == lines_of(alone)[:3] and "lines 1-3 of " in top, top[:80])
+
+    # --from "text": the answer starts at the first line holding it - whitespace folded, then without case -,
+    # the first at or after where the last answer started when several do; a marker by its type and name, a
+    # picture by its number; not found, the outline (KNOWN-ISSUES 265)
+    first = run_read(srv.url("/long"))
+    saved = lines_of(first)
+    at = next(i for i, ln in enumerate(saved, 1) if "Sentence 20.4 explains" in ln)
+    for quote, why in (("Sentence 20.4 explains one more detail", "a quote"),
+                       ("20.4 explains one more det", "a quote cut in the middle of a line"),
+                       ("  sentence   20.4 EXPLAINS one  ", "spaces and case aside"),
+                       ("Sentence 20.4 explains one more detail\nSentence 20.5 explains", "two lines, by the first")):
+        r = run_read(srv.url("/long"), "--from", quote, reuse=first)
+        check("--from \"text\", %s: the answer starts at the line holding it" % why,
+              "── content.md: lines %d-" % at in r.text and body(r.text)[:1] == saved[at - 1:at]
+              and "ignored:" not in r.text, first_line(r)[:60] + " | " + (re.findall(r"── content\.md: lines \S+", r.text)
+                                                                           or ["no block"])[0])
+    many = "explains one more detail of the reader"
+    hits = [i for i, ln in enumerate(saved, 1) if many in ln]
+    run_read(srv.url("/long"), "--from", "1", reuse=first)
+    r = run_read(srv.url("/long"), "--from", many, reuse=first)
+    check("--from \"text\" that many lines hold: the first, the last answer having started at line 1",
+          "── content.md: lines %d-" % hits[0] in r.text, (re.findall(r"── content\.md: lines \S+", r.text) or [""])[0])
+    run_read(srv.url("/long"), "--from", str(hits[3] - 1), reuse=first)
+    r = run_read(srv.url("/long"), "--from", many, reuse=first)
+    check("... and the first after where the last answer started (line %d)" % (hits[3] - 1),
+          "── content.md: lines %d-" % hits[3] in r.text, (re.findall(r"── content\.md: lines \S+", r.text) or [""])[0])
+    r = run_read(srv.url("/long"), "--from", "no line of this page holds these words", reuse=first)
+    check("--from \"text\" not found: the answer says so and shows the outline, no text",
+          '── not in content.md: "no line of this page holds these words", spaces and case aside; the outline below '
+          'names its lines for --from N ──' in r.text and "outline (line, heading):" in r.text
+          and re.search(r"^\s+\d+ ## Section 30$", r.text, re.M) and "── content.md: lines" not in r.text
+          and "Sentence 1.1" not in r.text, r.text.split("\n")[-2][:90])
+    r = run_read(srv.url("/long"), "--from", "Sentence 20.4 explains", "--file", "page.md", reuse=first)
+    pm = lines_of(first, "page.md")
+    at_p = next(i for i, ln in enumerate(pm, 1) if "Sentence 20.4 explains" in ln)
+    check("--from \"text\" in page.md alike", "── page.md: lines %d-" % at_p in r.text, first_line(r)[:80])
+    r = run_read(srv.url("/long"), "--from", "Sentence 20.4 explains", "--to", str(at + 3), "--file", "content.md",
+                 reuse=first)
+    top, got, tail = sent(r.text)
+    check("--from \"text\" --to M: from the quote's line to M, sent", got == saved[at - 1:at + 3], top[:80])
+    tabs_r = run_read(srv.url("/tabs"))
+    tl = lines_of(tabs_r)
+    for quote, want in (("[tab · Developer Plan Limits]", "[tab · hidden, but extracted · Developer Plan Limits]"),
+                        ("[tab · Free Plan Limits]", "[tab · shown · Free Plan Limits]"),
+                        ("[img #1]", "[img #1 · ")):
+        line = next((i for i, ln in enumerate(tl, 1) if want in ln), None)
+        r = run_read(srv.url("/tabs"), "--from", quote, reuse=tabs_r)
+        check("--from \"%s\": the marker is found whatever its state says" % quote,
+              line and "── content.md: lines %d-" % line in r.text, "line %s; %s" % (
+                  line, (re.findall(r"── content\.md: lines \S+|── not in .*", r.text) or [""])[0][:80]))
+
     # no saved copy (or --refresh): the page is read again and the answer says so
     fresh = run_read(srv.url("/long"), "--from", "40")
     check("--from with no saved copy reads the page and says the lines may have moved",
@@ -322,11 +426,13 @@ try:
     check("any status but ok names its rule on a reason: line", "\nreason: HTTP 404" in r.text,
           next((ln for ln in r.text.split("\n") if ln.startswith("reason:")), "no reason line"))
     # a flag that is not ours, or a value that cannot be used, does not stop the read (a model
-    # invented --to 407 and lost the call): the page is read and the header names what was left out
+    # invented --to 407 and lost the call, before --to was one): the page is read and the header names what was
+    # left out
     for flags, said in ((["--print"], "--print"), (["--public"], "--public"), (["--external"], "--external"),
                         (["--allow-images"], "--allow-images (no such flag)"),
                         (["--from", "-1"], "--from -1"), (["--file", "notes.md"], "--file notes.md"),
-                        (["--to", "407"], "--to 407 (no such flag")):
+                        (["--until", "407"], "--until 407 (no such flag: --from N --to M prints lines N to M)"),
+                        (["--to", "abc"], "--to abc (a line number)")):
         r = run_read(srv.url("/short"), *flags)
         ign = next((ln for ln in r.text.split("\n") if ln.startswith("ignored: ")), "")
         check("not ours, %s: the page is read, the header names it, exit 0" % " ".join(flags),
@@ -335,16 +441,16 @@ try:
     r = run_read(srv.url("/short"), "--fil", "page.md", "--form", "2")
     check("a typo of a flag does what the flag does, with no note",
           r.rc == 0 and "── page.md: lines 2-" in r.text and "ignored:" not in r.text, first_line(r)[:90])
-    r = run_read("--to", "5", srv.url("/short"))           # the stray flag first, its value taken for the URL
+    r = run_read("--until", "5", srv.url("/short"))        # the stray flag first, its value taken for the URL
     check("a stray flag before the URL: the URL is still the one read",
-          r.rc == 0 and r.text.startswith("read-page · ok") and "ignored: --to 5" in r.text, first_line(r)[:90])
-    r = run_read(srv.url("/short"), "--json", "--to", "3")
+          r.rc == 0 and r.text.startswith("read-page · ok") and "ignored: --until 5" in r.text, first_line(r)[:90])
+    r = run_read(srv.url("/short"), "--json", "--until", "3")
     try:
         ignored = json.loads(r.text).get("ignored")
     except ValueError:
         ignored = None
     check("--json names the left-out flags too; the saved manifest does not keep them",
-          ignored == ["--to 3 (no such flag: an answer prints what fits and names the next line, --from N)"]
+          ignored == ["--until 3 (no such flag: --from N --to M prints lines N to M)"]
           and "ignored" not in json.loads(open(os.path.join(r.dir, "manifest.json"), encoding="utf-8").read()),
           str(ignored)[:120])
     r = run_read("ftp://example.com/file.txt")
@@ -412,6 +518,30 @@ try:
     res3 = mcp_server.tool_read_url({"url": srv.url("/long"), "from": n})
     said3 = "".join(b.get("text", "") for b in res3["content"] if b["type"] == "text")
     check("MCP read_url from=N: the same block", ("lines %d-" % n) in said3, said3.split("\n")[0][:70])
+    long_lines = open(os.path.join(sc["dir"], "content.md"), encoding="utf-8").read().rstrip("\n").split("\n")
+    rt = mcp_server.tool_read_url({"url": srv.url("/long"), "from": 1, "to": 120})
+    top, got, tail = sent("".join(b.get("text", "") for b in rt["content"] if b["type"] == "text"))
+    check("MCP read_url to=: the lines sent, the ways on in read()'s words",
+          got == long_lines[:120] and 'go on from the last line before the cut: read(dir, file="content.md", '
+          'from="<its words>") ──' in top
+          and 'read(dir, file="content.md", from=121, to=%d)' % min(240, len(long_lines)) in tail
+          and rt["structuredContent"]["mcp"].get("to") == 120, tail[:120])
+    rr = mcp_server.tool_read({"dir": sc["dir"], "from": 121, "to": 130})
+    top, got, tail = sent(rr["content"][0]["text"])
+    check("MCP read to=: lines 121-130 sent", got == long_lines[120:130] and "lines 121-130 of " in top
+          and rr["structuredContent"].get("to") == 130, top[:90])
+    at = next(i for i, ln in enumerate(long_lines, 1) if "Sentence 20.4 explains" in ln)
+    rq = mcp_server.tool_read_url({"url": srv.url("/long"), "from": "sentence 20.4 EXPLAINS"})
+    said_q = "".join(b.get("text", "") for b in rq["content"] if b["type"] == "text")
+    check("MCP read_url from=\"text\": from the line holding it", ("── content.md: lines %d-" % at) in said_q
+          and rq["structuredContent"]["mcp"]["from"] == at, (re.findall(r"── content\.md: lines \S+", said_q) or [""])[0])
+    rq = mcp_server.tool_read({"dir": sc["dir"], "from": "20.4 explains one"})
+    check("MCP read from=\"text\": from the line holding it", ("── content.md: lines %d-" % at) in rq["content"][0]["text"]
+          and rq["structuredContent"]["from"] == at, rq["content"][0]["text"].split("\n")[-2][:80])
+    rq = mcp_server.tool_read({"dir": sc["dir"], "from": "words no line holds"})
+    check("MCP read from=\"text\" not found: the outline", '── not in content.md: "words no line holds"'
+          in rq["content"][0]["text"] and "outline (line, heading):" in rq["content"][0]["text"]
+          and not rq.get("isError"), rq["content"][0]["text"][:90])
     resf = mcp_server.tool_read_url({"url": srv.url("/fragment")})
     saidf = resf["content"][0]["text"].split("\n")[0]
     check("MCP read_url: a suspected fragment's first line says what the CLI's does",
@@ -419,12 +549,16 @@ try:
     resw = mcp_server.tool_read_url({"url": srv.url("/short")})
     saidw = resw["content"][0]["text"].split("\n")[0]
     check("MCP read_url: a whole text's first line names no share", not re.search(r"\d+%", saidw), saidw[:90])
-    odd = mcp_server.tool_read_url({"url": srv.url("/short"), "to": 407, "from": "abc", "file": "notes"})
+    odd = mcp_server.tool_read_url({"url": srv.url("/short"), "till": 407, "from": -3, "file": "notes"})
     said = odd["content"][0]["text"]
     check("MCP read_url leaves out what it cannot use, says so and reads the page",
           not odd.get("isError") and said.startswith("read-page · ok")
-          and "ignored: to (no such parameter) · file notes (content.md or page.md) · from abc (a line number)" in said,
-          next((ln for ln in said.split("\n") if ln.startswith("ignored")), said[:90]))
+          and "ignored: till (no such parameter) · file notes (content.md or page.md) · from -3 (a line number, 1 or "
+              "more)" in said, next((ln for ln in said.split("\n") if ln.startswith("ignored")), said[:90]))
+    odd = mcp_server.tool_read_url({"url": srv.url("/short"), "from": "abc"})
+    said = odd["content"][0]["text"]
+    check("MCP read_url from=\"abc\" is a quote: not found, it says so", not odd.get("isError")
+          and '── not in content.md: "abc", spaces and case aside' in said and "ignored" not in said, said[:120])
     typo = mcp_server.tool_read_url({"url": srv.url("/short"), "fiel": "page.md"})
     said = typo["content"][0]["text"]
     check("MCP: a misspelled argument is the one meant, with no note",

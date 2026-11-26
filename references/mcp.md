@@ -23,13 +23,13 @@ error, so a prompt-injected model cannot turn the tool into a general file reade
 
 ```
 read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?,
-         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?)
-read(dir, file?, from=1)
+         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, to?)
+read(dir, file?, from=1, to?)
 ```
 
 Arguments are the CLI flags without dashes: `--allow-external` -> `allow_external`, `--from` ->
 `from`, and so on; `inline_images` is the one argument the CLI does not have. An argument outside
-the schema, or a value a tool cannot use (`from: "abc"`), does not refuse the call: it is left out
+the schema, or a value a tool cannot use (`from: -3`), does not refuse the call: it is left out
 and the answer's `ignored:` line names it - an old `offset`, `limit` or `allow_images` among them -
 as the CLI does with a flag that is not its own. A misspelled argument (`allow_externl`) is the one
 meant. `read_url(..., ocr=N)` answers with the text drawn in picture N, as `--ocr N` does, and
@@ -54,8 +54,20 @@ the saved copy, with no network. A call that names no `file` goes on in the text
 (a named one becomes the text being read; `read_url` without `from` starts at `content.md`, or
 `page.md` for a fragment), so a model that drops `file` still reads the same text under the
 same line numbers. The full manifest is in `structuredContent` and in
-`dir/manifest.json`; `structuredContent.mcp` adds `file`, `from`, `next_from`, `total_lines` and
+`dir/manifest.json`; `structuredContent.mcp` adds `file`, `from`, `to`, `next_from`, `total_lines` and
 the picture counts.
+
+`from` takes a piece of text as well as a line number (both tools, as the CLI's `--from "text"`): the
+answer starts at the first line that holds it - whitespace folded, then without case; when several do,
+the first at or after where the last answer of that file started - and a marker is found by its type
+and name, a picture by its number: `from="[tab · Developer Plan Limits]"`, `from="[img #3]"`. No line
+holds it: the answer says so and shows the outline, `structuredContent` names no `next_from`.
+
+`to` (both tools) is the CLI's `--to`: the lines from `from` up to it at once, past one block, for a
+client that shows more - said to be sent, not shown, with the way on at the top and at the bottom in
+`read()`'s words: `read(dir, file="content.md", from=301, to=600)` for the next range, and
+`read(dir, file="content.md", from="<its words>")` for a tool that cut the answer. One before `from` is
+left out and named on the `ignored:` line.
 
 `read` behaves by file type:
 
