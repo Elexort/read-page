@@ -8,6 +8,12 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **Row 186's last sentence is true again, and two by-design rows are filed** (KNOWN-ISSUES 186, 247, 248): row
+  186 said the user's second OCR pack beside English had never been measured on every scan - since row 225 a scan
+  is read with the pack of its own script, so the sentence now says what the code does and what row 225's
+  measure bounds (all ten packs beside English on an English scan: 0.4 % CER against 0.3, 2.54 s a page
+  against 0.92). Filed with their numbers: uv's cache keyed by its index (a toggled `UV_DEFAULT_INDEX` doubles it
+  until the 150 MB prune), and Turkish and Vietnamese left undecided by `intl.latin_pack`.
 - **`--screenshots` that takes no picture says why** (KNOWN-ISSUES 246): `screens.capture` returned nothing when a
   step of the page failed, and the answer had no screenshots and no word of it (CI's browser job once printed
   `screens None` and nothing else). It returns the step and what it said now: `signals.screenshots_failed`, a
