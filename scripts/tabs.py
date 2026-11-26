@@ -196,11 +196,13 @@ def _inside(el, anc):
 
 
 def _descendants(el):
-    out, todo = [], list(el.kids)
+    """Every element under el, in the page's order. A stack: taken from a list's head, a section of 80 000 items
+    took 11.5 s on a fast machine."""
+    out, todo = [], el.kids[::-1]
     while todo:
-        k = todo.pop(0)
+        k = todo.pop()
         out.append(k)
-        todo[0:0] = k.kids
+        todo.extend(k.kids[::-1])
     return out
 
 
@@ -516,8 +518,8 @@ def _table_tabs(tree, src, page, edits, info):
 
 def _only_tables(src, el):
     """A box whose text is all in its tables (wrappers of a header table and of its rows' table)."""
-    tables = [d for d in _descendants(el) if d.tag == "table" and not any(
-        _inside(d, o) for o in _descendants(el) if o.tag == "table" and o is not d)]
+    every = [d for d in _descendants(el) if d.tag == "table"]
+    tables = [d for d in every if not any(_inside(d, o) for o in every if o is not d)]
     if not tables:
         return False
     return len(_text(src, el).split()) - sum(len(_text(src, t, outer=True).split()) for t in tables) <= 2

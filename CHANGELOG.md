@@ -18,8 +18,9 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   for a closed `<details>` or a collapsed accordion, `[select · chosen: EU · also US, APAC · Region]`. A hidden panel
   over 4 KB stays in `page.md`, and its marker says so and names its line there. Only the main content is marked; a
   panel keeps its place and its attributes but those that hide it; the browser's `page.md` keeps the hidden panels
-  too; the engines are weighed without the markers. On 109 saved pages of the bench and the corpus read offline
-  before and after, the 89 with nothing to mark came back the same, file for file. `signals.tabs` counts them.
+  too; the engines are weighed without the markers. On 143 saved pages of the bench, the corpus and the tab set
+  read offline before and after, the 101 with nothing to mark came back the same, file for file. `signals.tabs`
+  counts them. The marking walks each tree once: a closed `<details>` of 80 000 items takes 0.8 s, not 11.5.
   SKILL.md's line on clicking says a tab loaded on click is named, not extracted; with the share's lines it stays
   shorter than before (5 625 characters and 930 words, from 5 640 and 932).
 - **A page that shows only a loading message is no plain `ok`** (KNOWN-ISSUES 259): console.groq.com/settings/limits

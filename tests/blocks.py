@@ -12,6 +12,7 @@ import importlib.util
 import os
 import re
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -231,6 +232,23 @@ else:
              "<a href='/c'>C</a></details></main></body></html>")
     check("a page with none of them is left as it is: a menu folded under a button, an icon's popover",
           tabs.mark(plain)[0] == plain, tabs.mark(plain)[1]["counts"])
+    # a section's or a panel's tree walked from the head of a list took 11.5 s for 80 000 items (a fast machine),
+    # a minute on a weak laptop: the read's whole time, spent before any extractor ran
+    # Walked once, four times the items take about four times as long (sixteen when walked so), on any machine
+    took = {}
+    for kind, frame in (("details", "<details><summary>All items</summary><ul>%s</ul></details>"),
+                        ("tab", "<div role='tablist'><button role='tab' aria-selected='true' aria-controls='a'>A"
+                                "</button><button role='tab' aria-controls='b'>B</button></div><div role='tabpanel' "
+                                "id='a'><p>x</p></div><div role='tabpanel' id='b' hidden><ul>%s</ul></div>")):
+        for n_items in (20000, 80000):
+            big = frame % "".join("<li>item %d</li>" % i for i in range(n_items))
+            t_big = time.time()
+            big_info = tabs.mark("<html><body><main><p>Intro.</p>%s</main></body></html>" % big)[1]
+            took[kind, n_items] = (round(time.time() - t_big, 2),
+                                   big_info["counts"]["sections"] + big_info["counts"]["tabs"])
+    check("a closed <details> and a hidden tab of 80 000 items are marked in time that grows as their size does",
+          all(took[k, 80000][1] == 1 and (took[k, 80000][0] < 2 or took[k, 80000][0] < 8 * took[k, 20000][0])
+              for k in ("details", "tab")), str(took))
 
 # ------------------------------------------------ inside a read
 EN = ("Reading pages reliably is harder than it looks, because servers lie about what they send and "
