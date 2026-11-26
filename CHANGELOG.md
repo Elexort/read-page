@@ -81,6 +81,13 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   paragraphs and pictures before its table (they were lost, or glued into one cell word to word), and a cell's
   comment is a note of its cell, after the table (comments were left out: one said why a sheet's figures are
   missing). Every deck read the same, byte for byte.
+- **GPT-3's Table H.1 in its 30 columns** (KNOWN-ISSUES 209): the layout model's grid held them in 14 - five models'
+  numbers in one cell, "54.7 62.8 67.4 70.9 78.9" under "XL 2.7B 6.7B 13B 175B" -, so which number was which model's
+  was a reader's guess. A column of the grid is now cut where the page's own columns stand inside it: at the gaps no
+  word of its rows crosses, when a row names each part, the rows under it are numbers alone and each part's words
+  share an edge (`pdftables.split_cols`). On the PDF corpus with no time limit the papers' rows with each cell its own
+  654 -> 726 of 889 (H.1 1 -> 59 of 65, and Faster R-CNN's and ResNet's VOC tables whole); no other table changed and
+  no word was lost.
 - **CI: the layout model's checks hold on a slow runner** (KNOWN-ISSUES 241): row 237's two checks of a model that
   waits failed once on `install.yml`'s macOS 15 x64 runner, whose stand-in load - imports, work done before its sleep -
   took all of the 2 s the checks gave the model. The checks now give it twice that load on the machine and a second

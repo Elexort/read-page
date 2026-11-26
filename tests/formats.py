@@ -186,6 +186,37 @@ def paired_pdf(path):
     doc.close()
 
 
+# Columns of the page two of which the model's grid holds as one (KNOWN-ISSUES 209, GPT-3's Table H.1: its 30
+# columns in the model's 14, "43.6 51.0" under "Med Large"); a row is its cells, (x, text). A column whose cells
+# hold two numbers under one name ("27.3 (0.4)" under "BLEU") is one column of the page, and so is one whose
+# second numbers stand in no column of their own
+MERGED = [[(72, "Task"), (200, "Small"), (260, "Med"), (320, "Large")],
+          [(72, "HellaSwag"), (200, "33.7"), (260, "43.6"), (320, "51.0")],
+          [(72, "LAMBADA"), (200, "42.7"), (260, "54.3"), (320, "60.4")],
+          [(72, "StoryCloze"), (200, "63.3"), (260, "68.5"), (320, "72.4")],
+          [(72, "NQs"), (200, "0.64"), (260, "1.75"), (320, "2.71")]]
+MERGED_GRID = {"xs": [70, 190, 250, 420], "ys": [140, 158, 176, 194, 212, 230]}    # Med and Large: one column
+ONE_NAME = [[(72, "Model"), (200, "BLEU")], [(72, "Base"), (200, "27.3 (0.4)")], [(72, "Big"), (200, "28.4 (0.3)")],
+            [(72, "Deep"), (200, "26.9 (0.5)")], [(72, "Wide"), (200, "27.8 (0.2)")]]
+ASKEW = [[(72, "Model"), (200, "Mean"), (260, "SD")], [(72, "Base"), (200, "27.3"), (255, "0.4")],
+         [(72, "Big"), (200, "28.4"), (266, "1.3")], [(72, "Deep"), (200, "26.9"), (249, "0.5")],
+         [(72, "Wide"), (200, "27.8"), (262, "0.2")]]
+TWO_GRID = {"xs": [70, 190, 420], "ys": [140, 158, 176, 194, 212, 230]}
+
+
+def cells_pdf(path, rows):
+    import pymupdf
+    doc = pymupdf.open()
+    pg = doc.new_page()
+    pg.insert_text((72, 100), "COLUMNS-INTRO the paragraph before the table.", fontsize=10)
+    for k, row in enumerate(rows):
+        for x, cell in row:
+            pg.insert_text((x, 151 + 18 * k), cell, fontsize=10)
+    pg.insert_text((72, 290), "COLUMNS-OUTRO the paragraph after the table.", fontsize=10)
+    doc.save(path)
+    doc.close()
+
+
 # pymupdf4llm as the tests need it, first on the model's process' path (READ_PAGE_TEST_MODEL_PATH,
 # which pdftables.py alone reads: the process runs with -E): the tables above with the model's own
 # (cut) cells; a page that fails, a process that ends at a page, a page or a Markdown call that
@@ -564,6 +595,34 @@ try:
         check("... and a label of two lines beside one value stays one row (its lines are no items of one kind)",
               any("Average number of" in ln and "co-occurrences" in ln and "17.5" in ln
                   for ln in out_p.splitlines() if ln.startswith("|")), repr(out_p[-200:]))
+        # KNOWN-ISSUES 209: two columns of the page in one column of the model's grid are two again
+        cols = {}
+        for key, rows_c, grid_c in (("merged", MERGED, MERGED_GRID), ("one", ONE_NAME, TWO_GRID),
+                                    ("askew", ASKEW, TWO_GRID)):
+            cpdf = os.path.join(tmp, "cols-%s.pdf" % key)
+            cells_pdf(cpdf, rows_c)
+            os.environ.update(RP_STUB_TABLE="1", RP_STUB_GRID=json.dumps(grid_c))
+            sys.modules["pymupdf4llm"] = stub
+            try:
+                dcol = pymupdf.open(cpdf)
+                out_c, n_c, _notes = pt.page_tables(dcol, 0)
+                cols[key] = (out_c or "", n_c, dcol[0].get_text())
+            finally:
+                for k in ("RP_STUB_TABLE", "RP_STUB_GRID"):
+                    os.environ.pop(k, None)
+                if real4llm is not None:
+                    sys.modules["pymupdf4llm"] = real4llm
+                else:
+                    sys.modules.pop("pymupdf4llm", None)
+        out_c, n_c, plain_c = cols["merged"]
+        check("209: two columns of the page in one column of the model's grid are two, each name over its numbers "
+              "(GPT-3's \"Med Large | 43.6 51.0\")",
+              n_c == 1 and "| Task | Small | Med | Large |" in out_c and "| HellaSwag | 33.7 | 43.6 | 51.0 |" in out_c
+              and "| NQs | 0.64 | 1.75 | 2.71 |" in out_c and wordbag(out_c) == wordbag(plain_c), repr(out_c[:400]))
+        check("... but a column of two numbers a cell under one name is one (\"27.3 (0.4)\" under \"BLEU\"), and so is "
+              "one whose second numbers stand in no column of their own",
+              "| Base | 27.3 (0.4) |" in cols["one"][0] and "| Base | 27.3 0.4 |" in cols["askew"][0],
+              repr((cols["one"][0][:300], cols["askew"][0][:300])))
         # a word is on its side by its line's direction; its box only when no direction is known
         flat_d, side_d = {(0, 0): (1.0, 0.0)}, {(0, 0): (0.0, -1.0)}
         short = (10, 0, 20, 30, "the", 0, 0, 0)
