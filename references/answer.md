@@ -50,7 +50,10 @@ temp directory, or `--dir DIR`.
 several do, the first at or after where the last answer of that file started, so an agent that quotes the last line
 it saw goes on from its own place. A quote cut in the middle of a line matches, one of several lines is looked for
 by its first, and a marker is found by its type and name - a picture by its number - whatever its state and
-properties say: `--from "[tab · Developer Plan Limits]"`, `--from "[img #3]"`. When no line holds it, the answer says
+properties say: `--from "[tab · Developer Plan Limits]"`, `--from "[img #3]"`. The line is matched as it stands too,
+whitespace folded, so a quote that ends inside a marker is found - the case when a harness cut the answer in the middle
+of a picture's or a tab's line: `--from "#3 · 100x80 3K · picture 3] im"`, `--from "[tab · hidden, but extr"`. When no
+line holds it, the answer says
 so and shows the outline (its line numbers are what `--from N` takes), and no text. It works on `content.md` and
 `page.md` alike.
 

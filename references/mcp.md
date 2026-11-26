@@ -60,7 +60,8 @@ the picture counts.
 `from` takes a piece of text as well as a line number (both tools, as the CLI's `--from "text"`): the
 answer starts at the first line that holds it - whitespace folded, then without case; when several do,
 the first at or after where the last answer of that file started - and a marker is found by its type
-and name, a picture by its number: `from="[tab · Developer Plan Limits]"`, `from="[img #3]"`. No line
+and name, a picture by its number: `from="[tab · Developer Plan Limits]"`, `from="[img #3]"`; the line is
+matched as it stands too, so a quote that ends inside a marker (a client cut the result there) is found. No line
 holds it: the answer says so and shows the outline, `structuredContent` names no `next_from`.
 
 `to` (both tools) is the CLI's `--to`: the lines from `from` up to it at once, past one block, for a

@@ -8,6 +8,13 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A quote that ends inside a marker is found** (KNOWN-ISSUES 269): `--from "text"` compared a quote with each
+  line in its folded form, a marker reduced to its type and name (`[img #3]`, `[tab · Name]`), so the words an agent
+  has when its harness cut the answer in the middle of a picture's or a tab's line - `#299997 · 100x80 3K ·
+  picture 299997] im` - gave `not in content.md`. The line is matched as it stands too, whitespace folded (then
+  without case), in the same order of preference: the head of a marker, its middle, its tail with the text after it
+  and a marker quoted without its state are found; a quote found before is found at the same line. `find` on
+  300 000 marker lines: 0.60 s before, 0.72 s after for a quote found at the last line (0.84 s not found).
 - **A probe for measuring harnesses** (KNOWN-ISSUES 268), for testing the skill rather than for reading:
   `readpage.py --probe N` prints N characters of numbered lines and nothing else, with no network - each line its
   number and how many characters stand before it, a head and a tail sentinel, 100 characters a line, ASCII -, so what

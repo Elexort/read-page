@@ -377,6 +377,39 @@ try:
         check("--from \"%s\": the marker is found whatever its state says" % quote,
               line and "── content.md: lines %d-" % line in r.text, "line %s; %s" % (
                   line, (re.findall(r"── content\.md: lines \S+|── not in .*", r.text) or [""])[0][:80]))
+    # a quote that ends INSIDE a marker - what an agent quotes when its harness cut the answer in the middle of a
+    # picture's or a tab's line (Cline keeps about 3 985 characters at each end): the line as it stands is matched
+    # too, whitespace folded, so a part of a marker and a marker quoted without its state are both found
+    # (KNOWN-ISSUES 269)
+    tab_at = next(i for i, ln in enumerate(tl, 1) if "[tab · hidden, but extracted · Developer Plan Limits]" in ln)
+    img_at = next(i for i, ln in enumerate(tl, 1) if "[img #1 · " in ln)
+    for quote, want, why in (("[tab · hidden, but extr", tab_at, "the head of a tab's marker"),
+                             ("hidden, but extracted · Developer Pl", tab_at, "the middle of a tab's marker"),
+                             ("but extracted · Developer Plan Limits]", tab_at, "the tail of a tab's marker"),
+                             ("[img #1 · not downloaded", img_at, "the head of a picture's marker"),
+                             ("not downloaded: 404 · Usage", img_at, "the middle of a picture's marker"),
+                             ("Usage chart] " + srv.url("/chart.png"), img_at, "the tail of a picture's marker and the text after it"),
+                             ("  usage   CHART]  " + srv.url("/CHART.png"), img_at, "... with spaces and case aside")):
+        r = run_read(srv.url("/tabs"), "--from", quote, reuse=tabs_r)
+        check("--from \"%s\": %s is found" % (quote.strip(), why),
+              "── content.md: lines %d-" % want in r.text, "line %s; %s" % (
+                  want, (re.findall(r"── content\.md: lines \S+|── not in .*", r.text) or [""])[0][:80]))
+    # the order of preference does not change: an exact match at or after the last answer's start comes first
+    r = run_read(srv.url("/tabs"), "--from", "Plan Limits]", reuse=tabs_r)
+    free_at = next(i for i, ln in enumerate(tl, 1) if "[tab · shown · Free Plan Limits]" in ln)
+    check("--from \"Plan Limits]\" (two markers hold it): the first, as before",
+          "── content.md: lines %d-" % free_at in r.text, (re.findall(r"── content\.md: lines \S+", r.text) or [""])[0])
+    # 300 000 marker lines, the case that was measured: the quote of a cut marker is found, and not slowly
+    import time
+    import answer                                              # noqa: E402
+    marks =["[img #%d · 100x80 3K · picture %d] img/%06d-picture-%d.png" % (k, k, k, k) for k in range(1, 300001)]
+    t0 = time.perf_counter()
+    got = answer.find(marks, "#299997 · 100x80 3K · picture 299997] im")
+    took = time.perf_counter() - t0
+    check("find on 300 000 lines: a quote that ends inside a marker is found, in seconds", got == 299997 and took < 6,
+          "line %s in %.2f s" % (got, took))
+    check("... a marker quoted by its number and name is found as before", answer.find(marks, "[img #299997]") == 299997
+          and answer.find(marks, "[img #299997 · 100x80 3K · picture 299997]") == 299997, "")
 
     # no saved copy (or --refresh): the page is read again and the answer says so
     fresh = run_read(srv.url("/long"), "--from", "40")

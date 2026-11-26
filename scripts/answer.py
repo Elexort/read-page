@@ -370,28 +370,59 @@ def _plain(s):
     return " ".join(s.split())
 
 
+def _first(rows, want, after):
+    """(the first line at or after `after` that holds `want`, the first line that holds it): line numbers or
+    None, from (number, text) pairs in order; stops at the first line at or after `after`."""
+    first = None
+    for i, x in rows:
+        if want in x:
+            if first is None:
+                first = i
+            if i >= after:
+                return i, first
+    return None, first
+
+
+def _earliest(*numbers):
+    got = [n for n in numbers if n is not None]
+    return min(got) if got else None
+
+
 def find(lines, quote, after=1):
     """The line a quote starts at (`--from "text"`), from 1, or None: the first line holding it - whitespace
     folded, then without case -, the first at or after `after` (where the last answer of the page started)
     when there are several. A quote cut in the middle of a line matches; one of several lines is looked for
-    by its first, when it is not found whole."""
-    wants = [_plain(quote)]
+    by its first, when it is not found whole. A marker is matched twice: by its type and name (_plain) and as
+    it stands, so a quote that ends inside a marker - what an agent has when its harness cut the answer in
+    the middle of a picture's or a tab's line - is found too."""
+    texts = [str(quote)]
     rows = [r for r in str(quote).split("\n") if r.strip()]
     if len(rows) > 1:
-        wants.append(_plain(rows[0]))
-    plain = folded = None
-    for want in wants:
+        texts.append(rows[0])
+    after = after or 1
+    plain = folded = alt = alt_folded = None
+    for text in texts:
+        want, raw = _plain(text), " ".join(text.split())
         if not want:
             continue
         if plain is None:
             plain = [_plain(x) for x in lines]
-            folded = [x.casefold() for x in plain]
-        exact = [i for i, x in enumerate(plain, 1) if want in x]
-        loose = [i for i, x in enumerate(folded, 1) if want.casefold() in x]
+            # the lines that hold a marker, as they stand: the only ones whose two forms differ
+            alt = {i: r for i, r in ((i, " ".join(x.split())) for i, x in enumerate(lines, 1) if "[" in x)
+                   if r != plain[i - 1]}
         # where the reading is first: an agent goes on from its own place, a retyped quote may differ in case
-        for hits in ([i for i in exact if i >= (after or 1)], [i for i in loose if i >= (after or 1)], exact, loose):
-            if hits:
-                return hits[0]
+        hit = _first(enumerate(plain, 1), want, after), _first(alt.items(), raw, after)
+        if hit[0][0] or hit[1][0]:
+            return _earliest(hit[0][0], hit[1][0])
+        if folded is None:
+            folded = [x.casefold() for x in plain]
+            alt_folded = {i: x.casefold() for i, x in alt.items()}
+        loose = _first(enumerate(folded, 1), want.casefold(), after), _first(alt_folded.items(), raw.casefold(), after)
+        if loose[0][0] or loose[1][0]:
+            return _earliest(loose[0][0], loose[1][0])
+        for first in (_earliest(hit[0][1], hit[1][1]), _earliest(loose[0][1], loose[1][1])):
+            if first is not None:
+                return first
     return None
 
 
