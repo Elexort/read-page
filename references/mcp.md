@@ -23,7 +23,7 @@ error, so a prompt-injected model cannot turn the tool into a general file reade
 
 ```
 read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?,
-         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, to?)
+         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, to?, probe?)
 read(dir, file?, from=1, to?)
 ```
 
@@ -76,6 +76,15 @@ left out and named on the `ignored:` line.
 | text (`content.md`, `page.md`, `manifest.json`, `raw.html`) | the block that starts at line `from`, inside the same budget, naming the next line. A line longer than a whole answer (a minified `raw.html`) shows its head and says so |
 | image (`img/03-alt.png`, `raw.jpg`) | a native `image` block and a caption `[WxH size] name` |
 | audio / video / other binary | metadata only (name, type, size); audio is attached only with `READ_PAGE_MCP_MEDIA=audio` |
+
+## A probe, for testing a client
+
+`read_url(url="probe", probe=N)` answers with N characters of numbered lines and nothing else, as
+`readpage.py --probe N` prints them, with no network - each line its number and how many characters stand
+before it, a head and a tail sentinel, ASCII - so what a client shows of a tool's result, and where it cut,
+can be read off what reaches the model (Cline's SDK runtime keeps about 3 985 characters at each end of
+8 000). `read_url(url="probe:N")` is a page of the same lines answered the normal way, and with `from` and
+`to` it shows what a range sends. It is for testing the skill, not for reading; SKILL.md does not name it.
 
 ## The header
 

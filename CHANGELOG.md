@@ -8,6 +8,13 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A probe for measuring harnesses** (KNOWN-ISSUES 268), for testing the skill rather than for reading:
+  `readpage.py --probe N` prints N characters of numbered lines and nothing else, with no network - each line its
+  number and how many characters stand before it, a head and a tail sentinel, 100 characters a line, ASCII -, so what
+  a harness shows of a command's output and where it cut can be read off what reaches the model; `probe:N` read as an
+  address is a page of the same lines, answered as any page is, so `--from N --to M` shows what a range sends. Over MCP,
+  `read_url(url="probe", probe=N)` gives the lines alone, `read_url(url="probe:N", from, to)` the page. README's
+  development notes and `mcp.md` name it; SKILL.md does not.
 - **What a cut workbook lost, said where it was lost** (KNOWN-ISSUES 267): a sheet the archive was cut in ends with
   `[rows · lost in the cut · 54-78954 · Third]` after its last row that arrived - the total from its extent,
   `<dimension ref="A1:G78954"/>`, which Excel and openpyxl write at its top (`54-?` without one) -, and a sheet the

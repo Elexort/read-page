@@ -30,10 +30,37 @@ LINE_BYTES = 6000      # keeps every line inside one block even with the outline
 POINTER_BYTES = 200    # the separator above the text and the pointer below it (characters too)
 RANGE_BYTES = 150000   # a --to answer at most: the most a harness shows (Claude Code with its limit raised)
 OUTSIDE_SHOWN = 1024   # less than this outside the text (a footer line) is not worth a header row
+PROBE_LINE = 100       # characters a probe line takes, its "\n" too
+PROBE_MAX = 10000000   # characters a probe prints at most
 
 _SENTENCE_END = re.compile(r"[.!?…](?=\s)|[。！？]")     # CJK full stops need no space after
 _SPACE = re.compile(r"\s")
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+
+
+def probe(n):
+    """`readpage.py --probe N`: N characters of numbered lines and nothing else, for measuring what a harness
+    shows of a command's output or of a tool's result - no network, outside the answer's block. Each line says
+    its number and how many characters stand before it, the first and the last are sentinels, and a line is
+    PROBE_LINE characters (the last 100 to 199): what a harness cut shows as the lines and numbers missing, and
+    a line cut in its middle still names itself. ASCII alone, so its characters, bytes and UTF-16 units are one
+    count. `probe:N` read as an address is a page of the same text (readpage.probe_page)."""
+    n = max(0, min(int(n), PROBE_MAX))
+    if n < 2 * PROBE_LINE:
+        return ("PROBE HEAD AND TAIL: %d characters in one line " % n + "." * n)[:max(0, n - 1)] + ("\n" if n else "")
+    last = (n - PROBE_LINE) // PROBE_LINE + 1
+    out = []
+    for k in range(1, last + 1):
+        at = (k - 1) * PROBE_LINE
+        width = PROBE_LINE if k < last else n - at
+        if k == 1:
+            words = "PROBE HEAD: line 1, 0 characters before it, %d characters in %d lines" % (n, last)
+        elif k == last:
+            words = "PROBE TAIL: line %d, %d characters before it, the last of %d" % (k, at, n)
+        else:
+            words = "line %d, %d characters before it" % (k, at)
+        out.append((words + " " + "." * width)[:width - 1] + "\n")
+    return "".join(out)
 
 
 def _too_long(line):

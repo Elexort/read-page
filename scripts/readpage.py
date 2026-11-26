@@ -9643,10 +9643,23 @@ def main(argv=None):
                     help="print the text drawn in picture N (the number on its marker) instead of the "
                          "page's text: for a model that cannot see pictures")
     ap.add_argument("--dir", default="")
+    ap.add_argument("--probe", default="", metavar="N",
+                    help="for testing a harness, not for reading: print N characters of numbered lines and nothing "
+                         "else, no network (what it shows of a command's output); probe:N read as an address is a "
+                         "page of them, for --from and --to")
     known = [s for a in ap._actions for s in a.option_strings if s.startswith("--")]
     argv = [(typo_fixed(t.partition("=")[0], known) + t.partition("=")[1] + t.partition("=")[2])
             if t.startswith("--") else t for t in (sys.argv[1:] if argv is None else argv)]
     args, extra = ap.parse_known_args(argv)
+    if str(args.probe).strip():
+        # numbered lines and nothing else, outside the answer's block (answer.probe): what a harness shows
+        try:
+            n = int(str(args.probe).strip())
+        except ValueError:
+            return usage_error("--probe takes a number of characters, such as --probe 8000")
+        sys.stdout.write(answer.probe(n))
+        sys.stdout.flush()
+        return 0
     args.ignored = ignored_flags(extra, args, known)
     # a value we cannot use is left out the same way: the read goes on with the default
     view = (args.file or "").strip().lower()
@@ -9714,6 +9727,33 @@ def main(argv=None):
             os.umask(mask)
 
 
+PROBE_URL = re.compile(r"(?i)probe:(\d{1,8})$")
+
+
+def probe_page(args, n, t0):
+    """`probe:N` read as an address: a page whose text is answer.probe(N), answered as any page is - its
+    outline, its block, `--from`, `--to` and a quote - so a harness's tester sees what an answer and a range
+    send. No network; the text is the same every time, so a continuation reads it from the folder."""
+    url = "probe:%d" % n
+    workdir = args.dir or page_dir(url)
+    os.makedirs(workdir, exist_ok=True)
+    prev = load_manifest(workdir) or {}
+    content, page = os.path.join(workdir, "content.md"), os.path.join(workdir, "page.md")
+    text = answer.probe(n)
+    for p in (content, page):
+        write_view(p, text)
+    manifest = {
+        "schema": SCHEMA, "generator": "read-page", "status": "ok",
+        "url": {"requested": url, "final": url},
+        "content": {"engine": "probe", "chars": len(text), "words": len(text.split()), "cover": 1.0},
+        "candidates": [], "signals": {}, "chain": {"tried": ["probe"], "skipped": []},
+        "files": {"content": content, "page": page}, "missing": [], "improve": [], "advice": "",
+        "cache": "hit" if prev.get("url", {}).get("requested") == url else "miss",
+        "privacy": {"mode": "sensitive", "refused": ["external"], "why": "a probe: no network"},
+        "_view": prev.get("_view"), "_from": prev.get("_from")}
+    return finish(workdir, manifest, t0, args)
+
+
 def read(args):
     """One read: the page, its files, the answer. stderr stays quiet here (quiet_stderr)."""
     shots_want = 0
@@ -9755,6 +9795,9 @@ def read(args):
     if not args.url:
         print(setup_report(caps(fresh=True)))  # no URL: the "what is missing" report, asked now
         return 0
+    probe = PROBE_URL.match(args.url.strip())
+    if probe:
+        return probe_page(args, int(probe.group(1)), t0)
     url = args.url
     # a file on this machine (a path or a file:// URL) goes through the same
     # converters, with no network at all: no reader, archive, browser or picture download

@@ -135,6 +135,10 @@ TOOLS = [
                 "ocr": {"type": "integer", "minimum": 1,
                         "description": "answer with the text drawn in picture N (the number on its marker) instead "
                                        "of the page's text: for a model that cannot see pictures"},
+                "probe": {"type": "integer", "minimum": 0,
+                          "description": "for testing a client, not for reading: answer with N characters of numbered "
+                                         "lines and nothing else, no network (the url is not read). url=\"probe:N\" is "
+                                         "a page of them, answered the normal way (with from and to)"},
             },
             "required": ["url"],
             "additionalProperties": False,
@@ -570,6 +574,13 @@ def tool_read_url(args):
     known = TOOLS[0]["inputSchema"]["properties"]
     args = {readpage.typo_fixed(k, list(known)): v for k, v in args.items()}
     ignored = ["%s (no such parameter)" % k for k in args if k not in known]
+    if args.get("probe") not in (None, False, ""):
+        # numbered lines and nothing else, as `readpage.py --probe N` prints them: what the client shows of a result
+        try:
+            n = int(args.get("probe"))
+        except (TypeError, ValueError):
+            return err("probe takes a number of characters, such as probe=8000")
+        return result([text(answer.probe(n))], {"probe": max(0, min(n, answer.PROBE_MAX))})
     url = (args.get("url") or "").strip()
     if not url:
         return err("url is required")

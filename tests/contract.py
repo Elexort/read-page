@@ -10,6 +10,8 @@ put together are the saved file.
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 
@@ -17,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 
-from harness import PUBLIC, Checks, run_read, serve     # noqa: E402
+from harness import PUBLIC, SCRIPT, Checks, run_read, serve     # noqa: E402
 
 check = Checks()
 BUDGET, LINES = 9980, 495
@@ -576,6 +578,44 @@ try:
     check("MCP: an old offset argument is left out and named, the text still comes",
           not (old.get("result") or {}).get("isError") and "ignored: offset (no such parameter)" in said
           and "lines 1-" in said, said.split("\n")[0][:90])
+
+    # a probe for measuring what a harness shows, no network (KNOWN-ISSUES 268): N characters of numbered lines,
+    # outside the answer's block; probe:N read as an address is a page of them, for --from and --to
+    e = dict(os.environ, READ_PAGE_CACHE=tempfile.mkdtemp(prefix="rp-probe-"))
+    p = subprocess.run([sys.executable, "-X", "utf8", SCRIPT, "--probe", "8000"], capture_output=True, timeout=120, env=e)
+    out = p.stdout.decode("utf-8", "replace")
+    rows = out.split("\n")[:-1]
+    check("--probe 8000: 8 000 characters of numbered lines, ASCII, LF, nothing else, exit 0",
+          p.returncode == 0 and len(p.stdout) == 8000 and out.isascii() and b"\r" not in p.stdout and p.stderr == b""
+          and len(rows) == 80 and not out.startswith("read-page"), "rc %s, %d bytes, %d lines, stderr %r" % (
+              p.returncode, len(p.stdout), len(rows), p.stderr[:80]))
+    check("... each line its number and the characters before it, a head and a tail sentinel",
+          rows and rows[0].startswith("PROBE HEAD: line 1, 0 characters before it, 8000 characters in 80 lines")
+          and rows[-1].startswith("PROBE TAIL: line 80, 7900 characters before it, the last of 8000")
+          and all(r.startswith("line %d, %d characters before it" % (k, (k - 1) * 100)) and len(r) == 99
+                  for k, r in enumerate(rows[1:-1], 2)), (rows[:1] + rows[-1:]) if rows else out[:80])
+    bad = subprocess.run([sys.executable, "-X", "utf8", SCRIPT, "--probe", "lots"], capture_output=True, timeout=120,
+                         env=e)
+    check("--probe with no number: exit 2, the reason on stderr", bad.returncode == 2 and b"--probe" in bad.stderr,
+          "rc %s %r" % (bad.returncode, bad.stderr[:80]))
+    page_r = run_read("probe:20000")
+    fits("probe:20000", page_r)
+    check("probe:N read as an address: the answer any page has, its text the probe's",
+          first_line(page_r).startswith("read-page · ok · probe · content.md ") and page_r.file("content.md") == \
+          answer.probe(20000) and next_line(page_r.text) is not None, first_line(page_r)[:90])
+    sent_r = run_read("probe:20000", "--from", "101", "--to", "160", reuse=page_r)
+    top, got, tail = sent(sent_r.text)
+    check("probe:N with --from and --to shows what --to sends", got == answer.probe(20000).split("\n")[100:160]
+          and "lines 101-160 of 200 sent" in top and "--from 161 --to 200 " in tail, top[:90])
+    raw = mcp_server.tool_read_url({"url": "probe", "probe": 8000})
+    check("MCP read_url(probe=N): the same N characters, nothing else",
+          [b.get("text") for b in raw["content"]] == [answer.probe(8000)] and not raw.get("isError"),
+          str(raw.get("structuredContent"))[:90])
+    pr = mcp_server.tool_read_url({"url": "probe:20000", "from": 101, "to": 160})
+    top, got, tail = sent("".join(b.get("text", "") for b in pr["content"] if b["type"] == "text"))
+    check("MCP read_url(url=\"probe:N\", from, to): the answer --to gives, in read()'s words",
+          got == answer.probe(20000).split("\n")[100:160] and 'from=161, to=200)' in tail, tail[:120])
+    shutil.rmtree(e["READ_PAGE_CACHE"], ignore_errors=True)
 finally:
     srv.close()
 
