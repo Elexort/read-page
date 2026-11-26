@@ -176,10 +176,14 @@ def header(manifest, view, total_lines, text_bytes):
         if content.get("restored"):
             # blocks the extractor dropped and the text got back from page.md
             engine += " + %d block%s of page.md" % (content["restored"], "" if content["restored"] == 1 else "s")
-        if isinstance(content.get("cover"), (int, float)):
-            # the proof the description promises: how much of the visible page the text holds
-            engine += ", %d%% of the page" % min(100, int(round(content["cover"] * 100)))
         first.append(engine)
+        if signals.get("fragment"):
+            # the share only where it decides something: a text under a third of the page's words. On a
+            # whole text "49% of the page" read as "half the content", and an agent kept re-reading
+            # (menus, links and footers make the rest); content.cover keeps it in the manifest
+            cover = content.get("cover")
+            first.append("maybe a fragment: the text is %d%% of the page's words" % min(100, int(round(cover * 100)))
+                         if isinstance(cover, (int, float)) else "maybe a fragment")
         if content.get("track"):
             first.append(str(content["track"]))     # a video's subtitle track: human, automatic or machine-translated
     stamp = str((m.get("archive") or {}).get("timestamp") or "")
@@ -194,8 +198,6 @@ def header(manifest, view, total_lines, text_bytes):
     first.append("%s %s, %d line%s" % (view, _human(text_bytes), total_lines, "" if total_lines == 1 else "s"))
     if m.get("cache") in ("hit", "revalidated"):
         first.append("from cache" if m["cache"] == "hit" else "from cache, revalidated")
-    if signals.get("fragment"):
-        first.append("fragment")
     if signals.get("partial"):
         first.append("partial")
     if m.get("elapsed_ms") is not None:

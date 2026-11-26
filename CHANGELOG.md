@@ -8,6 +8,15 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The first line names the share of the page only for a suspected fragment** (KNOWN-ISSUES 255): it said
+  "defuddle, 49% of the page" on every read, and an agent took that for "I got half the content" and kept calling
+  `--alternate` - while a whole text seldom holds all of a page's words (menus, footers and links make the rest: on
+  the acceptance bench 7 of 40 whole texts were under 70 %, the 3 fragments under 30 %). A whole text's line has no
+  share now; a text under a third of the page's words says `maybe a fragment: the text is 21% of the page's words`
+  beside the engine (it was a bare `fragment` near the end), and its advice says the same measure. `content.cover`
+  stays in the manifest for every read; the MCP server's answer is the same. SKILL.md's description, example, `ok`
+  row and `--alternate` (for when neither the text nor `page.md` has what the page shows) say so, and SKILL.md is
+  69 characters and 12 words shorter than before.
 - **A cut workbook shows what arrived of the part it was cut in** (KNOWN-ISSUES 254), the fix wave's design question
   decided by measuring what each choice shows: 9 Excel workbooks from government sites cut at 21 points each.
   Excel keeps a workbook's text in its shared strings, after its sheets; a cut took them whole in 47 % of the cuts

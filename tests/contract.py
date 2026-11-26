@@ -54,6 +54,16 @@ ROUTES = {
     # Prejudice's EPUB had only its title there, and its last page was 16 answers away)
     "/book": page("Book", "<h1>The Book</h1>" + sections(70, EN, "A chapter with a rather long title, as old books have, number")),
     "/plainlong": page("Plain long", "".join("<p>%s</p>" % " ".join(EN % (i, j) for j in range(9)) for i in range(400))),
+    # a short article between two long menus: the text is a small share of the page's words, maybe a fragment
+    "/fragment": (200, {"Content-Type": "text/html; charset=utf-8"},
+                  ("<!doctype html><html><head><meta charset='utf-8'><title>Fragment</title></head><body><header><nav>"
+                   "<ul>%s</ul></nav></header><article><h1>Fragment</h1><p>%s</p></article><footer><ul>%s</ul></footer>"
+                   "</body></html>" % (
+                       "".join("<li><a href='/p%d'>Section %d of the site menu and its sub pages</a></li>" % (i, i)
+                               for i in range(150)),
+                       " ".join(EN % (1, j) for j in range(8)),
+                       "".join("<li><a href='/f%d'>Footer link %d of the site and its pages</a></li>" % (i, i)
+                               for i in range(150)))).encode("utf-8")),
 }
 class Versioned:
     """A page with an ETag: a matching If-None-Match gets a 304; `version` changes the page."""
@@ -137,8 +147,27 @@ try:
           and body(r.text) == lines_of(r), r.text.split("\n")[0][:80])
     check("short: the header names status, engine and the files",
           r.text.startswith("read-page · ok · ") and "files: " + r.dir in r.text, r.text.split("\n")[0][:80])
-    check("short: the first line says how much of the page the text holds",
-          re.search(r"^read-page · ok · [^·]+, \d+% of the page · ", r.text) is not None, r.text.split("\n")[0][:90])
+    # an agent read "49% of the page" on a whole text as "I got half the content" and kept re-reading
+    # (KNOWN-ISSUES 255): a whole text's first line names no share; the manifest keeps it
+    check("short: a whole text's first line names no share of the page, the manifest keeps it",
+          not re.search(r"\d+%", first_line(r)) and "fragment" not in first_line(r)
+          and isinstance((r.manifest.get("content") or {}).get("cover"), (int, float)), first_line(r)[:90])
+
+    # a suspected fragment: the share beside the words, and the answer shows page.md
+    r = run_read(srv.url("/fragment"))
+    fits("fragment", r)
+    frag_line = (r"^read-page · ok · [^·]+ · maybe a fragment: the text is \d+% of the page's words · "
+                 r"page\.md [\d.]+ [KMG]?B, \d+ lines · ")
+    check("a suspected fragment: the first line says so with the share beside it, and shows page.md",
+          re.search(frag_line, first_line(r)) is not None and " · fragment · " not in first_line(r),
+          first_line(r)[:120])
+    cover = (r.manifest.get("content") or {}).get("cover")
+    check("... the manifest keeps the share (content.cover) and signals.fragment",
+          isinstance(cover, (int, float)) and cover < 0.35 and (r.manifest.get("signals") or {}).get("fragment") is True
+          and ("is %d%% of" % int(round(cover * 100))) in first_line(r), "%s %s" % (cover, first_line(r)[:60]))
+    check("... the advice says the same measure: the share of the page's words, and that page.md is shown",
+          "of the page's words" in (r.manifest.get("advice") or "") and "page.md" in (r.manifest.get("advice") or ""),
+          (r.manifest.get("advice") or "")[:120])
 
     # long pages: an outline, blocks inside the budget, and the blocks put together are the file
     for path in ("/long", "/flat", "/ru", "/zh"):
@@ -373,6 +402,13 @@ try:
     res3 = mcp_server.tool_read_url({"url": srv.url("/long"), "from": n})
     said3 = "".join(b.get("text", "") for b in res3["content"] if b["type"] == "text")
     check("MCP read_url from=N: the same block", ("lines %d-" % n) in said3, said3.split("\n")[0][:70])
+    resf = mcp_server.tool_read_url({"url": srv.url("/fragment")})
+    saidf = resf["content"][0]["text"].split("\n")[0]
+    check("MCP read_url: a suspected fragment's first line says what the CLI's does",
+          re.search(frag_line, saidf) is not None, saidf[:120])
+    resw = mcp_server.tool_read_url({"url": srv.url("/short")})
+    saidw = resw["content"][0]["text"].split("\n")[0]
+    check("MCP read_url: a whole text's first line names no share", not re.search(r"\d+%", saidw), saidw[:90])
     odd = mcp_server.tool_read_url({"url": srv.url("/short"), "to": 407, "from": "abc", "file": "notes"})
     said = odd["content"][0]["text"]
     check("MCP read_url leaves out what it cannot use, says so and reads the page",

@@ -820,10 +820,10 @@ def handle(msg):
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": "read-page", "version": SERVER_VERSION},
             "instructions": ("Read a URL or document and prove what was obtained. The header of "
-                             "every answer says which engine produced the text, how much of the "
-                             "page it covers and what to do next. Follow advice when it appears; "
-                             "pass allow_external=true only for public URLs; pass inline_images=true when "
-                             "the pictures themselves matter."),
+                             "every answer says which engine produced the text, whether it may be "
+                             "only a fragment of the page and what to do next. Follow advice when it "
+                             "appears; pass allow_external=true only for public URLs; pass "
+                             "inline_images=true when the pictures themselves matter."),
         }}
     if method in ("notifications/initialized", "initialized"):
         return None

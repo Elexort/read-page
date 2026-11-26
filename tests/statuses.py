@@ -463,7 +463,7 @@ try:
               "%s | %s | %s" % (status(r), sig[:70], (r.manifest.get("advice") or "")[:50]))
     r = run_read(s.public.url("/pw-fragment"), env=NO_BROWSER)
     check("a paywalled page that is also a fragment of its page: the advice says both",
-          "paywalled" in (r.manifest.get("advice") or "") and "of the visible text" in (r.manifest.get("advice") or ""),
+          "paywalled" in (r.manifest.get("advice") or "") and "of the page's words" in (r.manifest.get("advice") or ""),
           (r.manifest.get("advice") or "")[:120])
     r = run_read(s.public.url("/pw-ld"), env=NO_BROWSER)
     check("a paywalled page keeps its text: content.md has the article, not a stub",

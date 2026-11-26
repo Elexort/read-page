@@ -10,8 +10,8 @@ Prints the answer (a header, then the text: whole when it fits the output budget
 outline, the first block and the line to go on from with --from); --json prints the manifest
 instead. Writes content.md, page.md, the raw response and manifest.json into the working
 folder (the per-URL cache entry, or --dir). Never returns a partial page
-silently: it reports which engine produced the text, how much of the page it covers, and
-what to try next.
+silently: it reports which engine produced the text, whether it may be only a fragment of the
+page, and what to try next.
 
 Every limit lives in this file, so the CLI and the MCP server (scripts/mcp_server.py) share
 one policy: MAX_DOWNLOAD, MAX_PAGE_BYTES, MEDIA_LIMIT, the timeouts and the attempts (the answer
@@ -10662,11 +10662,9 @@ def read(args):
                               "the server sent and may be only the part open to everyone, or the whole article a "
                               "script hides; this skill cannot subscribe")
         if fragment:
-            manifest["advice"] += "; content.md holds %d%% of the visible text, so the answer shows page.md" % int(
-                round((cover or 0) * 100))
+            manifest["advice"] += "; " + fragment_advice(cover)
     elif fragment:
-        manifest["advice"] = "content.md holds %d%% of the visible text, so the answer shows page.md" % int(
-            round((cover or 0) * 100))
+        manifest["advice"] = fragment_advice(cover)
     elif state == "weak":
         manifest["advice"] = "the page mentions signing in; the text may be partial"
     elif manifest["status"] == "ok" and tables_said and tables_advice(_PDF):
@@ -10710,6 +10708,12 @@ def read(args):
     rc = finish(workdir, manifest, t0, args, content_path)
     trace("phase", total=int((now() - t0) * 1000))
     return rc
+
+
+def fragment_advice(cover):
+    """What a suspected fragment's answer does, in the first line's measure: the share of the page's words."""
+    return ("content.md holds %d%% of the page's words, so the answer shows page.md, the whole page (the extracted "
+            "text may have missed part of it)" % int(round((cover or 0) * 100)))
 
 
 def _prune(node):

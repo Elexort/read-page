@@ -126,7 +126,7 @@
             "number",
             "null"
           ],
-          "description": "text words / visible words"
+          "description": "the text's words over the visible page's words (menus, footers and links counted): a whole text is often 40-90 %; the first line names it only for a suspected fragment"
         },
         "large": {
           "type": "boolean"
@@ -160,7 +160,8 @@
           "type": "string"
         },
         "fragment": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "cover under 0.35 and a text over 200 characters: the first line says `maybe a fragment: the text is N% of the page's words` and the answer shows page.md"
         },
         "blocked": {
           "type": "boolean"
