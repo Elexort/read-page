@@ -1344,6 +1344,144 @@ try:
               said(r))
     except ImportError:
         check.skip("167: a cut PPTX", "python-pptx is not installed here")
+    # a workbook as Excel writes one - its text in xl/sharedStrings.xml, after its sheets - cut in transit or on
+    # disk: the shared strings that did not arrive leave its cells' numbers (they read nothing: openpyxl stops at
+    # the first string it does not have), and what arrived of the part it was cut in is read up to the cut
+    def excel_xlsx(sheets, sst_first=False):
+        """sheets: [(name, [(label, number)])], each label a shared string; the members in Excel's order (the
+        shared strings after the sheets), or with the shared strings first, and an external link last (a
+        government workbook had five; openpyxl stopped at one whose part the cut took). openpyxl writes no
+        shared strings."""
+        main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        ooxml = "application/vnd.openxmlformats-officedocument.spreadsheetml."
+        strings, at, parts = [], {}, []
+        for k, (_name, rows) in enumerate(sheets, 1):
+            xml = []
+            for r, (label, number) in enumerate(rows, 1):
+                at.setdefault(label, len(strings))
+                if at[label] == len(strings):
+                    strings.append(label)
+                xml.append('<row r="%d"><c r="A%d" t="s"><v>%d</v></c><c r="B%d"><v>%s</v></c></row>'
+                           % (r, r, at[label], r, number))
+            parts.append(("xl/worksheets/sheet%d.xml" % k, '<?xml version="1.0" encoding="UTF-8"?><worksheet '
+                          'xmlns="%s"><sheetData>%s</sheetData></worksheet>' % (main, "".join(xml))))
+        sst = ('<?xml version="1.0" encoding="UTF-8"?><sst xmlns="%s" count="%d" uniqueCount="%d">%s</sst>'
+               % (main, len(strings), len(strings), "".join("<si><t>%s</t></si>" % s for s in strings)))
+        n = len(sheets)
+        index = [
+            ("[Content_Types].xml", '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.'
+             'org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-'
+             'package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName='
+             '"/xl/workbook.xml" ContentType="%ssheet.main+xml"/>%s<Override PartName="/xl/sharedStrings.xml" '
+             'ContentType="%ssharedStrings+xml"/><Override PartName="/xl/externalLinks/externalLink1.xml" '
+             'ContentType="%sexternalLink+xml"/></Types>' % (ooxml, "".join(
+                 '<Override PartName="/xl/worksheets/sheet%d.xml" ContentType="%sworksheet+xml"/>' % (k, ooxml)
+                 for k in range(1, n + 1)), ooxml, ooxml)),
+            ("_rels/.rels", '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.'
+             'org/package/2006/relationships"><Relationship Id="rId1" Type="%s/officeDocument" Target="xl/workbook.xml"/>'
+             '</Relationships>' % rel),
+            ("xl/workbook.xml", '<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="%s" xmlns:r="%s"><sheets>%s'
+             '</sheets><externalReferences><externalReference r:id="rId%d"/></externalReferences></workbook>'
+             % (main, rel, "".join('<sheet name="%s" sheetId="%d" r:id="rId%d"/>' % (name, k, k)
+                                   for k, (name, _rows) in enumerate(sheets, 1)), n + 2)),
+            ("xl/_rels/workbook.xml.rels", '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.'
+             'openxmlformats.org/package/2006/relationships">%s<Relationship Id="rId%d" Type="%s/sharedStrings" '
+             'Target="sharedStrings.xml"/><Relationship Id="rId%d" Type="%s/externalLink" Target="externalLinks/'
+             'externalLink1.xml"/></Relationships>' % ("".join(
+                 '<Relationship Id="rId%d" Type="%s/worksheet" Target="worksheets/sheet%d.xml"/>' % (k, rel, k)
+                 for k in range(1, n + 1)), n + 1, rel, n + 2, rel))]
+        link = [("xl/externalLinks/externalLink1.xml", '<?xml version="1.0" encoding="UTF-8"?><externalLink xmlns="%s" '
+                 'xmlns:r="%s"><externalBook r:id="rId1"><sheetNames><sheetName val="Totals"/></sheetNames>'
+                 '</externalBook></externalLink>' % (main, rel)),
+                ("xl/externalLinks/_rels/externalLink1.xml.rels", '<?xml version="1.0" encoding="UTF-8"?><Relationships '
+                 'xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="%s/'
+                 'externalLinkPath" Target="file:///C:/totals.xlsx" TargetMode="External"/></Relationships>' % rel)]
+        order = index + ([("xl/sharedStrings.xml", sst)] + parts if sst_first else
+                         parts + [("xl/sharedStrings.xml", sst)]) + link
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for member, text in order:
+                z.writestr(member, text)
+        return buf.getvalue()
+
+    def into(data, member, share):
+        """The file's bytes up to `share` of the way into `member`'s packed data."""
+        info = zipfile.ZipFile(io.BytesIO(data)).getinfo(member)
+        start = info.header_offset + 30 + len(info.filename)
+        return data[:start + int(info.compress_size * share)]
+
+    try:
+        import openpyxl  # noqa: F401
+        rows = lambda tag, n, add: [("%s-LABEL %d" % (tag, r), r * 7 + add) for r in range(n)]   # noqa: E731
+        book = excel_xlsx([("First", rows("FIRST", 40, 1)), ("Second", rows("SECOND", 40, 2)),
+                           ("Third", rows("THIRD", 400, 3))])
+        p = os.path.join(tmpc, "strings-lost.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(into(book, "xl/worksheets/sheet3.xml", 0.5))
+        r = run_read(p, env=env)
+        text, sig = r.file("content.md"), (r.manifest.get("signals") or {}).get("broken_archive") or {}
+        check("254: an XLSX cut in a sheet, its shared strings after the sheets (Excel's order): the numbers of the "
+              "sheets that arrived and of the cut one's first rows, each lost text [lost] (it read nothing)",
+              r.manifest.get("status") == "ok" and "[lost] | 274\n" in text and "[lost] | 275\n" in text
+              and "[lost] | 3\n" in text and "LABEL" not in text and sig.get("lost_strings", 0) >= 80
+              and sig.get("partial") == "xl/worksheets/sheet3.xml" and "[lost]" in (r.manifest.get("advice") or ""),
+              said(r))
+        p = os.path.join(tmpc, "strings-cut.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(into(book, "xl/sharedStrings.xml", 0.5))
+        r = run_read(p, env=env)
+        text = r.file("content.md")
+        check("254: an XLSX cut in its shared strings keeps the strings that arrived, the rest [lost]",
+              "FIRST-LABEL 0 | 1" in text and "SECOND-LABEL 39 | 275" in text and "THIRD-LABEL 399" not in text
+              and "[lost] | 2796" in text, said(r))
+        early = excel_xlsx([("First", rows("FIRST", 40, 1)), ("Second", rows("SECOND", 400, 2))], sst_first=True)
+        p = os.path.join(tmpc, "sheet-cut.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(into(early, "xl/worksheets/sheet2.xml", 0.5))
+        r = run_read(p, env=env)
+        text = r.file("content.md")
+        check("254: an XLSX cut in a sheet after its shared strings reads that sheet's rows up to the cut, their text "
+              "with them", "FIRST-LABEL 39 | 274" in text and "SECOND-LABEL 0 | 2" in text and "[lost]" not in text
+              and "SECOND-LABEL 399" not in text and r.manifest.get("status") == "ok", said(r))
+        p = os.path.join(tmpc, "link-cut.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(into(book, "xl/externalLinks/_rels/externalLink1.xml.rels", 0.5))
+        r = run_read(p, env=env)
+        text = r.file("content.md")
+        check("254: an XLSX cut in its last part, an external link's relationships: every sheet read with its text "
+              "(openpyxl stopped at the link, and the whole workbook read nothing)", r.manifest.get("status") == "ok"
+              and "THIRD-LABEL 399 | 2796" in text and "FIRST-LABEL 0 | 1" in text and "[lost]" not in text, said(r))
+    except ImportError:
+        check.skip("254: a cut XLSX's shared strings", "openpyxl is not installed here")
+
+    def excel_ods(sheets):
+        """An ODS in Excel's order: content.xml right after the styles, before the rest."""
+        body = "".join('<table:table table:name="%s">%s</table:table>' % (name, "".join(
+            '<table:table-row><table:table-cell office:value-type="string"><text:p>%s</text:p></table:table-cell>'
+            '<table:table-cell office:value-type="float" office:value="%d"><text:p>%d</text:p></table:table-cell>'
+            '</table:table-row>' % (label, n, n) for label, n in rows)) for name, rows in sheets)
+        ns = ('xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:'
+              'opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"')
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr(zipfile.ZipInfo("mimetype"), "application/vnd.oasis.opendocument.spreadsheet")
+            z.writestr("styles.xml", '<?xml version="1.0"?><office:document-styles %s/>' % ns)
+            z.writestr("content.xml", '<?xml version="1.0" encoding="UTF-8"?><office:document-content %s><office:body>'
+                       '<office:spreadsheet>%s</office:spreadsheet></office:body></office:document-content>' % (ns, body))
+            z.writestr("meta.xml", '<?xml version="1.0"?><office:document-meta %s/>' % ns)
+        return buf.getvalue()
+    sheet = excel_ods([("First", [("FIRST-ROW %d of the survey" % k, k) for k in range(600)]),
+                       ("Second", [("SECOND-ROW %d of the survey" % k, k) for k in range(600)])])
+    p = os.path.join(tmpc, "cut.ods")
+    with open(p, "wb") as fh:
+        fh.write(into(sheet, "content.xml", 0.3))
+    r = run_read(p, env=env)
+    text, sig = r.file("content.md"), (r.manifest.get("signals") or {}).get("broken_archive") or {}
+    check("254: an ODS cut in its content.xml reads the rows that arrived (it read nothing: the one part with its "
+          "text was not whole)", r.manifest.get("status") == "ok" and "FIRST-ROW 0 of the survey" in text
+          and "SECOND-ROW 599" not in text and sig.get("partial") == "content.xml"
+          and "cut" in (r.manifest.get("advice") or ""), said(r))
     try:
         import docx
         d = docx.Document()

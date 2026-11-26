@@ -8,6 +8,17 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A cut workbook shows what arrived of the part it was cut in** (KNOWN-ISSUES 254), the fix wave's design question
+  decided by measuring what each choice shows: 9 Excel workbooks from government sites cut at 21 points each.
+  Excel keeps a workbook's text in its shared strings, after its sheets; a cut took them whole in 47 % of the cuts
+  and openpyxl, at the first string it did not have, read nothing - 34 % of the cells were shown in all. Now the
+  member the archive was cut in is read as far as it arrived where a reader can take one in part (an ODS's
+  content.xml, a workbook's sheet up to its last whole row, its shared strings up to the last whole entry), and a
+  cell whose string is lost reads `[lost]` beside its number: 53 % of the cells right, 18 % marked, none wrong
+  (empty cells for the lost strings would have left 15 % wrong with nothing said). An external link whose part or
+  relationships are lost no longer stops openpyxl. On the ODS corpus cut the same way, 28 % -> 54 % of the cells
+  (Excel's ODS, content.xml first: 10 % -> 54 %). `signals.broken_archive` names the `partial` member and the
+  `lost_strings`, and the advice says both.
 - **Our ODS reader on real workbooks** (KNOWN-ISSUES 250-253), measured on 34 workbooks and 16 decks from data.gov.uk,
   data.gouv.fr, Zenodo and LibreOffice's own tests, each against its content.xml read apart. A workbook is read as
   its content.xml unpacks, each sheet's rows as they end, so a sheet costs what its rows hold, not its XML: Excel

@@ -206,6 +206,14 @@
             "all_members": {
               "type": "boolean",
               "description": "every member was looked at: the archive is cut or damaged in its table of contents (or its table names them all), so none is missing after the last one read; with no member in not_whole the document is all there"
+            },
+            "partial": {
+              "type": "string",
+              "description": "the member the archive was cut in, read as far as it arrived: an OpenDocument file's content.xml, a workbook's sheet (up to its last whole row) or its shared strings"
+            },
+            "lost_strings": {
+              "type": "integer",
+              "description": "a workbook's cells whose text was in its shared strings, which the cut or the damage took (whole, or past the entries that arrived): each reads [lost], its number as it was"
             }
           }
         },
