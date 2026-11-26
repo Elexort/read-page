@@ -90,7 +90,10 @@ git-ignored, so a contributor may keep a file of their own under that name.
   uv's wheel, Node's archive and PyPI's Node wheel are pinned by SHA256 too (`UV_WHEEL_SHA256`,
   `NODE_SHA256`, `NODE_WHEEL_SHA256`): they move with `UV_VERSION`, `NODE_VERSION` and `NODE_WHEEL`, copied from
   PyPI's JSON and nodejs.org's `SHASUMS256.txt` (`tests/environment.py` compares every pin with its source when
-  online). A pin moves only after the suites ran green with it. yt-dlp
+  online). A pin moves only after the suites ran green with it. What one layout model process takes
+  (`TABLES_PROC_RAM`, `TABLES_PROC_COMMIT` in readpage.py: a read counts from them how many it starts) was measured
+  with the onnxruntime, pymupdf4llm and pymupdf-layout of the lock (`TABLES_PROC_MEASURED`): when one of those pins
+  moves, measure the figures again and move their versions (`tests/environment.py` fails until then). yt-dlp
   alone is not pinned: the newest release that has been out three days, never older than the one
   installed (`YTDLP_FLOATS` is what floats with it). No source of `--setup` is used in plain http
   (`READ_PAGE_ALLOW_HTTP` names an intranet host that may be).

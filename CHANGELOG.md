@@ -3,11 +3,32 @@
 ## Unreleased (0.5.0)
 
 Two branches: `main` is the skill alone - SKILL.md, README.md, scripts/,
-references/, LICENSE and .gitattributes, 35 files - so a clone, a ZIP or an installer
+references/, LICENSE and .gitattributes, 37 files - so a clone, a ZIP or an installer
 brings an agent nothing else; `dev` carries the code with its tests, CI, notes and this log.
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A PDF's table pages in several layout model processes** (KNOWN-ISSUES 242): the pages that look like a table
+  go to as many model processes as 85 % of the CPUs the read may use (1-3 all of them, from 4 one free), the pages
+  and the memory hold, a page each from one queue, the tables in page order; each process with onnxruntime's
+  threads the CPUs over the processes. The memory is the one guard: every read's processes on the machine together
+  (a note in the cache) within 80 % of the free physical memory by a process's peak working set and, on Windows,
+  80 % of the commit left by its private commit, and within a job's or a cgroup's room - `scripts/hostmem.py`, the
+  standard library alone. Two start at once when two fit by what one takes with `--setup`'s model (512 MB of each;
+  `tests/environment.py` fails when the lock moves the versions it was measured with); more once they say their
+  own figures, while the pages left outlast a new one's load, at most twice those that have laid a page out and
+  none while they wait for the CPU. Row 237's pace is the processes' together; one that runs out of memory gives
+  its page back.
+- **A layout model process no longer commits memory it never touches** (KNOWN-ISSUES 270): numpy, which onnxruntime and
+  pymupdf.layout import, started OpenBLAS with a thread a CPU, each committing a buffer of about 32 MB it never
+  touched - 612 of a process's 731 MB of commit on 20 CPUs. The process runs OpenBLAS on one thread
+  (`OPENBLAS_NUM_THREADS=1`, unless the user set it): 119 MB after its load (731 before), 318-442 MB after a long
+  PDF's pages (931-1 055), the pages as fast.
+- **The CPUs a read may use on Windows are its affinity's** (KNOWN-ISSUES 271): `os.process_cpu_count()` ignores
+  the mask; `pdftables.cpus()` asks Windows for it (a job kept to 2 of 20 CPUs gave onnxruntime 4 threads).
+- **A model process that ends at a page costs that page alone** (KNOWN-ISSUES 272): the page goes to another
+  process once and is named only when that one ends at it too; the pages after it are laid out (on 6e514c6 they
+  were named "the layout model did not work").
 - **`tests/cjk.py`: the read into a folder named in Chinese takes several blocks whatever reads it** - a local file of
   300 lines, each its own, in place of a page of one paragraph again and again, which trafilatura (CI has no
   defuddle) took as 3 lines with no `next:`, so both checks of its command failed on every CI job.

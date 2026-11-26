@@ -109,6 +109,7 @@ import ddworker                                                     # noqa: E402
 import debuglog                                                     # noqa: E402
 import docreaders                                                   # noqa: E402
 import engines                                                      # noqa: E402
+import hostmem                                                      # noqa: E402
 import intl                                                         # noqa: E402
 import netguard                                                     # noqa: E402
 import pdftables                                                    # noqa: E402
@@ -6239,11 +6240,103 @@ PDF_TABLES_RESERVE = 1.5       # tails the step leaves the rest of the read, as 
 PDF_TABLES_SLOW = 1.1          # slowed less than this, the model keeps its 10 s: a CPU of its own read 1.00-1.01
 
 
-def tables_pace(w):
-    """How many times longer than on a CPU of its own the read's model process takes: what it last
-    said of its pace, or what the read's last one did; 1 under PDF_TABLES_SLOW."""
-    slow = (w.slow if w is not None else None) or _TABLES["slow"]
+# KNOWN-ISSUES 242: a PDF's table pages are laid out by as many model processes as the CPUs and the memory hold, a
+# page each from one queue (one process took GPT-3's 33 pages in 8.4 s here, 17.1 s on an N100's four cores). The
+# CPUs: 85 % of those the read may use, rounded half up - 1-3 all of them, from 4 one stays free for the system
+# ((17 * cpus + 10) // 20: 4 -> 3, 8 -> 7, 20 -> 17) - never more than the pages; each process's onnxruntime gets
+# the CPUs over the processes. The memory, the one guard: our processes together take at most 80 % of the free
+# physical memory by what a process really uses (its peak working set), and on Windows at most 80 % of the commit
+# left by what it reserves (its private commit) - the commit limit is the danger, past it every program's
+# allocations fail -, within a job's or a cgroup's room too (hostmem.free_memory). Two start at once when two fit by
+# the figures below; more once the first say theirs after a page, and several reads count together through a note
+# in the cache.
+PDF_TABLES_MEM_SHARE = 0.8
+# What one model process takes, rounded up, with numpy's OpenBLAS on one thread (pdftables.main): its peak working
+# set and private commit at the end of GPT-3's 33 pages 450 and 442 MB, after its first page 255-277 and 239-259 MB
+# (2026-11-27, here and on an emulated N100; 0.9 GB of commit before OpenBLAS's threads were one). A read takes the
+# larger of these and what its processes say: one grows over its pages. They hold for the onnxruntime and the
+# layout model `--setup` installs; tests/environment.py fails when scripts/setup-lock.txt names other versions.
+TABLES_PROC_RAM = 512 << 20
+TABLES_PROC_COMMIT = 512 << 20
+TABLES_PROC_MEASURED = {"onnxruntime": "1.20.1", "pymupdf4llm": "1.28.2", "pymupdf-layout": "1.28.2"}
+TABLES_NOTE = "tables-procs"   # .json and .lock in the cache root: every read's model processes, what each takes
+PDF_TABLES_CROWDED = 1.5       # their pace past which no more processes start: they wait for the CPU already
+
+
+def tables_cpus():
+    """The CPUs the read may use (its affinity: pdftables.cpus); READ_PAGE_TEST_CPUS for the suites."""
+    try:
+        n = int(os.environ.get("READ_PAGE_TEST_CPUS") or 0)
+    except ValueError:
+        n = 0
+    return n if n > 0 else pdftables.cpus()
+
+
+def tables_cpu_share(cpus):
+    """85 % of the CPUs, rounded half up: 1-3 all of them, from 4 one free for the system."""
+    return max(1, (17 * max(1, int(cpus)) + 10) // 20)
+
+
+def tables_pace(w=None):
+    """How many times longer than on a CPU of its own the read's model processes take: their seconds at
+    work over their CPU seconds, all of them together, as they last said - or as the read's last ones
+    did; 1 under PDF_TABLES_SLOW."""
+    live = [x for x in ([w] if w is not None else _TABLES["pool"]) if x is not None and x.work]
+    slow = (max(1.0, sum(x.busy for x in live) / max(sum(x.work for x in live), 0.05)) if live
+            else _TABLES["slow"])
     return slow if slow >= PDF_TABLES_SLOW else 1.0
+
+
+def tables_note(change=None):
+    """The note of the model processes every read on this machine runs (the cache root's tables-procs.json),
+    read and written under its lock; the processes that ended are dropped. change(entries) may alter the list
+    in place. Returns the entries: {"pid", "read", "ram", "commit", "said"} - said: it has laid a page out, so
+    its memory is taken already."""
+    root = cache_root()
+    path = os.path.join(root, TABLES_NOTE + ".json")
+    entries = []
+    try:
+        os.makedirs(root, exist_ok=True)
+        with file_lock(os.path.join(root, TABLES_NOTE + ".lock"), seconds=2.0):
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    entries = [e for e in json.load(fh) if isinstance(e, dict)]
+            except (OSError, ValueError):
+                entries = []
+            was = len(entries)
+            # (a model process ends with its read: an entry whose read has gone is gone, its pid maybe another's)
+            entries = [e for e in entries if hostmem.alive(int(e.get("pid") or 0))
+                       and hostmem.alive(int(e.get("read") or 0))]
+            if change is not None:
+                change(entries)
+            if change is not None or len(entries) != was:
+                tmp = path + ".%d.tmp" % os.getpid()
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(entries, fh)
+                os.replace(tmp, path)
+    except (OSError, ValueError, TypeError) as e:
+        debuglog.exc("pdf: tables note", e)
+    return entries
+
+
+def tables_fit(ram, commit):
+    """How many more model processes of `ram` and `commit` bytes the memory holds now: 80 % of the free physical
+    memory, and of the commit left where the OS charges it, and of a job's or a cgroup's room - less what the
+    processes of every read that have not laid a page out yet will still take (their figures as noted). None
+    when the OS does not say (then the read keeps to what it runs)."""
+    m = hostmem.free_memory()
+    # (figures a test fakes do not fall as processes take memory: there every noted process still takes its own)
+    pending = [e for e in tables_note() if m.get("fake") or not e.get("said")]
+    still_ram = sum(int(e.get("ram") or 0) for e in pending)
+    still_commit = sum(int(e.get("commit") or 0) for e in pending)
+    counts = []
+    for free, each, still in ((m.get("phys"), ram, still_ram), (m.get("commit"), commit, still_commit),
+                              (m.get("room"), max(ram, commit), max(still_ram, still_commit))):
+        if free is not None and each > 0:
+            counts.append(int(max(0.0, PDF_TABLES_MEM_SHARE * free - still) // each))
+    return min(counts) if counts else None
+
+
 PDF_TABLE_CAPTION = pdftables.CAPTION
 PDF_TABLE_NUMBER = re.compile(r"(?m)^\s*[-+−–±$€£]?\s?\(?\d[\d.,]*\)?\s?[%‰KMBkmb]?\s*$")
 PDF_TABLE_NUMBERS = 12         # lines that are one short number: a table's cells, one a line
@@ -6261,9 +6354,9 @@ PDF_MARKDOWN_WARMUP = 2        # --alternate: the first call's pages, which give
 PDF_MARKDOWN_CALL = 10         # ... and the most of one call after it: the time's end costs one call
 PDF_MARKDOWN_PAGE = 0.5        # a page's seconds when no call said its rate
 _PDF = {}                      # what the read did about tables, all its PDFs, for the manifest
-# the read's tables clock, its model's process, and that process's pace (1: a CPU of its own) when
-# its process has gone
-_TABLES = {"spent": 0.0, "worker": None, "slow": 1.0}
+# the read's tables clock, its model's processes and the queue of their answers, and their pace (1: a CPU
+# of its own) when they have gone
+_TABLES = {"spent": 0.0, "pool": [], "q": queue.Queue(), "slow": 1.0}
 _TABLES_LOCK = threading.RLock()
 PACE_LOOK = 0.5                # a wait for the model's answer looks at its pace this often
 
@@ -6277,14 +6370,18 @@ def tables_reset():
 
 
 class TablesWorker:
-    """The read's layout model in a process of its own (pdftables.py): pages go in, each page's
-    answer comes out as it is done, and the read takes what came by its time. The model's call
-    cannot be interrupted, so a process still at it then is killed. `slow`: how many times longer
-    than on a CPU of its own the process takes - its seconds at work over its CPU seconds (one a
-    second at most), from what it last said of its pace (None before it said anything)."""
+    """One of the read's layout model processes (pdftables.py): pages go in, each page's answer
+    comes out as it is done, and the read takes what came by its time. The model's call cannot be
+    interrupted, so a process still at it then is killed. `slow`: how many times longer than on a
+    CPU of its own the process takes - its seconds at work over its CPU seconds (one a second at
+    most), from what it last said of its pace (None before it said anything); `busy` and `work`
+    those seconds; `mem` what it said it takes ({"ram", "commit"} in bytes, after a page); `page`
+    the page it is at (None when it waits); `ready`: its model has loaded. `threads`: its share of
+    the CPUs for onnxruntime (0: pdftables' own four at most). The read's note in the cache has it,
+    with what it will take, until it ends."""
 
-    def __init__(self):
-        self.slow = None
+    def __init__(self, threads=0):
+        self.slow, self.busy, self.work, self.mem, self.page, self.ready = None, 0.0, 0.0, {}, None, False
         popen_kw = {"start_new_session": True} if os.name != "nt" else {
             "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
         # -E: a caller's PYTHONPATH stays out of the model, as the hop keeps it out of the read (a
@@ -6292,12 +6389,28 @@ class TablesWorker:
         # --parent: it ends with this read, however the read ends
         self.p = subprocess.Popen([sys.executable, "-E", "-B", "-X", "utf8",
                                    os.path.join(os.path.dirname(os.path.abspath(__file__)), "pdftables.py"),
-                                   "--parent", str(os.getpid())],
+                                   "--parent", str(os.getpid())] + (["--threads", str(threads)] if threads else []),
                                   stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                                   **popen_kw)
         _CHILDREN.add(self.p)
-        self.q = queue.Queue()
+        self.q = _TABLES["q"]                    # one queue for the read's processes: an answer names its own
         threading.Thread(target=self._pump, daemon=True).start()
+        me = {"pid": self.p.pid, "read": os.getpid(), "ram": TABLES_PROC_RAM, "commit": TABLES_PROC_COMMIT, "said": False}
+        tables_note(lambda entries: entries.append(me))
+
+    def noted(self):
+        """What it says it takes, in the note: its memory is taken now, nothing more to come."""
+        pid, ram, commit = self.p.pid, int(self.mem.get("ram") or 0), int(self.mem.get("commit") or 0)
+
+        def change(entries):
+            for e in entries:
+                if e.get("pid") == pid:
+                    e.update(ram=ram, commit=commit, said=True)
+        tables_note(change)
+
+    def unnoted(self):
+        pid = self.p.pid
+        tables_note(lambda entries: entries.__setitem__(slice(None), [e for e in entries if e.get("pid") != pid]))
 
     def _pump(self):
         try:
@@ -6311,14 +6424,18 @@ class TablesWorker:
                 try:
                     if a.get("busy") is not None and a.get("work") is not None:
                         # (CPU seconds counted at least as 0.05: Windows counts them in steps of 15.6 ms)
-                        self.slow = max(1.0, float(a["busy"]) / max(float(a["work"]), 0.05))
+                        self.busy, self.work = float(a["busy"]), max(float(a["work"]), 0.05)
+                        self.slow = max(1.0, self.busy / self.work)
+                    if isinstance(a.get("mem"), dict) and a["mem"]:
+                        self.mem = a["mem"]
                 except (TypeError, ValueError):
                     pass
                 if not a.get("tick"):                # a tick says its pace alone
+                    a["_w"] = self
                     self.q.put(a)
         except (OSError, ValueError):
             pass
-        self.q.put({"gone": True})
+        self.q.put({"gone": True, "_w": self})
 
     def send(self, req):
         try:
@@ -6329,19 +6446,15 @@ class TablesWorker:
             return False
 
     def get(self, until):
-        """The next answer by the moment `until` (now() based), None when none came. A read with
-        no deadline waits in steps: a lock's wait has a ceiling (Windows: 49 days, not 1e9 s).
-        `until` may be a function that gives the moment: the end moves with the model's pace, so it
-        is asked again every PACE_LOOK seconds of the wait."""
-        moves = callable(until)
-        step = PACE_LOOK if moves else 3600.0
+        """This process's next answer by the moment `until` (tables_get); another's that is still
+        the read's goes back to the queue, one that has gone is dropped."""
         while True:
-            left = (until() if moves else until) - now()
-            try:
-                return self.q.get(timeout=max(0.0, min(left, step)))
-            except queue.Empty:
-                if left <= step and (not moves or until() <= now()):
-                    return None
+            a = tables_get(until)
+            if a is None or a.get("_w") is self:
+                return a
+            if a.get("_w") in _TABLES["pool"]:
+                self.q.put(a)
+                time.sleep(0.01)
 
     def kill(self):
         try:
@@ -6351,6 +6464,7 @@ class TablesWorker:
             debuglog.exc("pdf: tables worker", e)
             kill_tree(self.p)
         _CHILDREN.discard(self.p)
+        self.unnoted()
 
     def close(self):
         try:
@@ -6359,25 +6473,55 @@ class TablesWorker:
         except Exception:                                     # noqa: BLE001
             self.kill()
         _CHILDREN.discard(self.p)
+        self.unnoted()
+
+
+def tables_get(until):
+    """The next answer of any of the read's model processes by the moment `until` (now() based), None
+    when none came. A read with no deadline waits in steps: a lock's wait has a ceiling (Windows: 49
+    days, not 1e9 s). `until` may be a function that gives the moment: the end moves with the model's
+    pace, so it is asked again every PACE_LOOK seconds of the wait."""
+    moves = callable(until)
+    step = PACE_LOOK if moves else 3600.0
+    while True:
+        left = (until() if moves else until) - now()
+        try:
+            return _TABLES["q"].get(timeout=max(0.0, min(left, step)))
+        except queue.Empty:
+            if left <= step and (not moves or until() <= now()):
+                return None
+
+
+def tables_start(threads=0):
+    """One more model process for the read; None when it cannot start."""
+    try:
+        w = TablesWorker(threads)
+    except OSError as e:
+        debuglog.exc("pdf: tables worker", e)
+        return None
+    _TABLES["pool"].append(w)
+    return w
 
 
 def tables_worker():
-    """This read's model process, started at its first page; None when it cannot start."""
-    if _TABLES["worker"] is None:
-        try:
-            _TABLES["worker"] = TablesWorker()
-        except OSError as e:
-            debuglog.exc("pdf: tables worker", e)
-            return None
-    return _TABLES["worker"]
+    """A model process of this read (the first, started now if there is none); None when it cannot
+    start. --alternate's Markdown takes one."""
+    return _TABLES["pool"][0] if _TABLES["pool"] else tables_start()
+
+
+def tables_stop(w, kill=False):
+    """One of the read's model processes goes: killed (at a page, or broken), or told it has no more."""
+    if w in _TABLES["pool"]:
+        if len(_TABLES["pool"]) == 1 and w.work:
+            _TABLES["slow"] = tables_pace()      # the read's next PDF starts at the pace this one ended at
+        _TABLES["pool"].remove(w)
+    w.kill() if kill else w.close()
 
 
 def tables_close(kill=False):
-    w, _TABLES["worker"] = _TABLES["worker"], None
-    if w:
-        if w.slow:
-            _TABLES["slow"] = w.slow             # the read's next PDF starts at the pace this one ended at
-        w.kill() if kill else w.close()
+    """Every model process of the read goes (its end, or a step that killed them)."""
+    for w in list(_TABLES["pool"]):
+        tables_stop(w, kill)
 
 
 def pdf_table_page(page, text, drawings=True):
@@ -6424,13 +6568,15 @@ def _drawings(page):
 
 def pdf_tables(path, doc, pages):
     """The tables of the pages that look like they hold one, put into `pages` (each page's plain
-    text) in place. The model has PDF_TABLES_SECONDS a read of its own work for all its documents,
-    as many times longer as its process is slow by its pace, within what the read has left - and
-    all the time it needs in a read with no deadline (--download); a page too heavy for that time
-    is not asked, and the pages not laid out stay plain and are named: those the time did not
-    reach, and those after the model's process stopped (`stopped`, with `error`).
-    Returns {"pages", "left", "heavy", "stopped", "more", "tables", "asked", "secs", "of", "error"}
-    with page numbers from 1, {} when no page looks like it (then the model is not started)."""
+    text) in place, by as many model processes as the CPUs and the memory hold (KNOWN-ISSUES 242),
+    a page each from one queue in page order. The model has PDF_TABLES_SECONDS a read of its own
+    work for all its documents - its processes' seconds side by side, as many times longer as they
+    are slow by their pace together - within what the read has left, and all the time it needs in
+    a read with no deadline (--download); a page too heavy for that time is not asked, and the
+    pages not laid out stay plain and are named: those the time did not reach, a page a process
+    died at twice (`stopped`, with `error`), and those after the model stopped. Returns {"pages",
+    "left", "heavy", "stopped", "more", "tables", "asked", "secs", "of", "error", "procs"} with page
+    numbers from 1, {} when no page looks like it (then no process is started)."""
     with _TABLES_LOCK:
         t_start = now()
         unlimited = budget.unlimited()
@@ -6443,30 +6589,122 @@ def pdf_tables(path, doc, pages):
         def until():
             """The step's end, as the model's pace comes in: its own seconds (less what the read's
             other PDFs spent) within the read's time less its tail, as it had them; the more its
-            process is slowed, the more seconds, within that time less the rest of the read too."""
+            processes are slowed, the more seconds, within that time less the rest of the read too."""
             if unlimited:
                 return far
-            slow = tables_pace(_TABLES["worker"])
+            slow = tables_pace()
             own = max(0.0, PDF_TABLES_SECONDS - spent)
             more = max(0.0, PDF_TABLES_SECONDS * slow - spent)
             return max(t_start, min(t_start + own, by), min(t_start + more, by_more))
 
         info = {"pages": [], "left": [], "heavy": [], "tables": 0, "asked": 0, "of": len(pages)}
-        sent, named, state = [], [], {"stop": "", "by_text": 0}   # asked and not answered; named
+        pool = _TABLES["pool"]                    # the read's processes: an earlier PDF's go on with this one
+        for w in pool:
+            w.pages = []
+        cpus = tables_cpus()
+        top = tables_cpu_share(cpus)
+        # two at once when two fit by the figures of a process as --setup's model takes it; more once
+        # the processes say theirs after a page, as many as fit then (the larger figures: one grows)
+        fits = tables_fit(TABLES_PROC_RAM, TABLES_PROC_COMMIT)
+        # the processes the read will run: as many as the CPUs hold, the pages want - one a page their text
+        # alone shows, the first taking two (a page of rulings alone shows itself later) - and the memory
+        # holds by those figures (two where it does not say). Each gets the CPUs over them for onnxruntime;
+        # one started past them, its share of those running then
+        likely_at = [pdf_table_page(None, t, drawings=False) for t in pages]
+        plan = max(1, min(top, max(1, sum(likely_at) - 1), 2 if fits is None else len(pool) + max(1, fits)))
+        state = {"stop": "", "by_text": 0, "deaths": 0, "nomem": False, "most": len(pool),
+                 "cap": min(top, 2 if fits is None or fits >= 2 else 1), "ram": 0, "commit": 0,
+                 "load": 0.0, "page_s": [], "fit_at": 0.0}
+        todo, named, retried = [], [], set()
+
+        def grow():
+            """How many processes may run now, by the CPUs, the memory and what the pages need: more than
+            those running only when the pages still to do - waiting, at a process, and those the text of
+            the pages not looked at yet shows - take longer than a new process's load spread over those
+            running (m processes finish R page-seconds in R/m, or with more that load in L in (R+kL)/(m+k),
+            shorter exactly when R > mL); the paper's 4 pages took 7.3 s with a third process started for
+            its last page, 3.0 s with two."""
+            if state["nomem"]:
+                return len(pool)
+            if state["ram"] and state["load"] and state["page_s"]:
+                busy_pages = len(todo) + sum(len(w.pages) for w in pool) + sum(likely_at[i:])
+                worth = busy_pages * (sum(state["page_s"]) / len(state["page_s"])) > len(pool) * state["load"]
+                # the processes wait for the CPU already - ours, or what else runs: more would only share it
+                live = [w for w in pool if w.work]
+                pace = (sum(w.busy for w in live) / sum(w.work for w in live)) if live else 1.0
+                try:
+                    pace = float(os.environ.get("READ_PAGE_TEST_PACE") or 0) or pace    # the suites' stand-in
+                except ValueError:
+                    pass
+                crowded = pace > PDF_TABLES_CROWDED
+                # twice the processes that have laid a page out, at most: a load at a time per running process,
+                # so a crowding shows before the next ones start (16 started at once here took 24.4 s for GPT-3)
+                proven = sum(1 for w in pool if getattr(w, "said", False))
+                limit = min(top, 2 * max(1, proven))
+                if not worth or crowded or len(pool) >= limit:
+                    state["cap"] = max(1, len(pool))
+                elif now() >= state["fit_at"]:     # (the note and the OS asked four times a second at most)
+                    state["fit_at"] = now() + 0.25
+                    more = tables_fit(max(state["ram"], TABLES_PROC_RAM), max(state["commit"], TABLES_PROC_COMMIT))
+                    if more is not None:
+                        state["cap"] = max(len(pool), min(limit, len(pool) + more))
+            return state["cap"]
+
+        def gone(w, why):
+            """A process ended: the page it was at goes to another once, then is named; one it had
+            not begun goes back to the queue; one that could not get its memory gives its pages back."""
+            if w in pool:
+                tables_stop(w, kill=True)
+            state["deaths"] += 1
+            if getattr(w, "nomem", False):
+                why = "memory"                     # it said so before it went: its pages are not to blame
+            for k, p in enumerate(w.pages):
+                if k == 0 and w.ready and p in retried and why != "memory":
+                    named.append(p + 1)
+                    info["stopped"] = sorted(set(info.get("stopped") or []) | {p + 1})
+                    info["error"] = ("page %d: the model's process ended" % (p + 1))[:160]
+                else:
+                    if k == 0 and w.ready and why != "memory":
+                        retried.add(p)
+                    todo.append(p)
+            w.pages = []
+            todo.sort()
 
         def answer(a):
-            if a is None:
+            w = a.get("_w")
+            if w not in pool:
+                return                             # a process an earlier step let go
+            if a.get("ready") is not None:
+                w.ready = True
+                state["load"] = max(state["load"], float(a.get("busy") or a.get("ready") or 0))
                 return
-            if a.get("gone") or a.get("fatal"):
-                # the model does not load here, or its process ended: no page fares better
-                info["error"] = (a.get("fatal") or "the model's process ended")[:160]
+            if a.get("fatal"):
+                if "MemoryError" in str(a["fatal"]):
+                    state["nomem"] = True
+                    gone(w, "memory")
+                    return
+                # the model does not load here: no page fares better
+                info["error"] = str(a["fatal"])[:160]
                 state["stop"] = "error"
                 return
-            p = a.get("page")
-            if not isinstance(p, int) or p not in sent:
+            if a.get("gone"):
+                gone(w, "ended")
+                if not pool and state["deaths"] >= 2:
+                    info["error"] = info.get("error") or "the model's process ended"
+                    state["stop"] = "error"
                 return
-            sent.remove(p)
+            p = a.get("page")
+            if not isinstance(p, int) or p not in w.pages:
+                return
+            w.pages.remove(p)
+            if a.get("nomem"):
+                state["nomem"], w.nomem = True, True
+                todo.append(p)
+                todo.sort()
+                return
             info["asked"] += 1
+            if a.get("s") is not None:
+                state["page_s"].append(float(a["s"]))
             if a.get("error"):
                 info["error"] = ("page %d: %s" % (p + 1, a["error"]))[:160]   # this page only
                 trace("pdf.tables", page=p + 1, error=a["error"][:120])
@@ -6476,88 +6714,109 @@ def pdf_tables(path, doc, pages):
                 info["tables"] += int(a["n"])
             for note in a.get("notes") or []:
                 trace("pdf.tables", page=p + 1, note=note)
+            if w.mem and not getattr(w, "said", False):
+                w.said = True
+                w.noted()
+                trace("pdf.tables", pid=w.p.pid, ram_mb=int(w.mem.get("ram") or 0) >> 20,
+                      commit_mb=int(w.mem.get("commit") or 0) >> 20, load_s=state["load"])
+                state["ram"] = max(state["ram"], int(w.mem.get("ram") or 0))
+                state["commit"] = max(state["commit"], int(w.mem.get("commit") or 0))
 
-        w = None
-        for i in range(len(pages)):
-            while w is not None and not state["stop"]:
-                a = w.get(0)                  # what came meanwhile
-                if a is None:
+        i = 0
+        while True:
+            while True:                            # what came meanwhile
+                try:
+                    a = _TABLES["q"].get_nowait()
+                except queue.Empty:
                     break
                 answer(a)
-            if state["stop"] or now() >= until():
-                # no time, or no model, for one more page: the rest is named by the text's own
-                # signs, which cost nothing (a page's drawings can take a tenth of a second)
-                state["stop"] = state["stop"] or "time"
-                state["by_text"] += 1
-                if pdf_table_page(None, pages[i], drawings=False):
-                    named.append(i + 1)
-                continue
-            page = doc[i]
-            draw = _drawings(page)
-            if not pdf_table_page(page, pages[i], drawings=draw):
-                continue
-            why = "" if unlimited else pdf_heavy(page, draw)
-            if why:
-                info["left"].append(i + 1)
-                info["heavy"].append(i + 1)
-                trace("pdf.tables", page=i + 1, heavy=why)
-                continue
-            if w is None:
-                w = tables_worker()
-                if w is None:
-                    info["error"] = "the model's process did not start"
-                    state["stop"] = "error"
-                    named.append(i + 1)
-                    continue
-            while len(sent) >= PDF_TABLES_AHEAD and not state["stop"]:
-                a = w.get(until)
-                if a is None:
-                    state["stop"] = "time"
-                answer(a)
+            if not state["stop"] and now() >= until():
+                state["stop"] = "time"
             if state["stop"]:
-                named.append(i + 1)
+                break
+            # every process takes a page from the queue; one alone takes two, so it never waits for one
+            for w in list(pool):
+                while todo and len(w.pages) < (2 if len(pool) == 1 else 1):
+                    p = todo.pop(0)
+                    if w.send({"path": path, "pages": [p]}):
+                        w.pages.append(p)
+                    else:
+                        todo.insert(0, p)          # it has ended: its last words say why, and its gone follows
+                        break
+            # one more process while pages wait and the CPUs and the memory hold one
+            if todo and len(pool) < grow() and len(pool) < len(todo) + sum(len(w.pages) for w in pool):
+                threads = max(1, cpus // max(plan, len(pool) + 1))
+                w = tables_start(threads)
+                if w is None:
+                    if not pool:
+                        info["error"] = "the model's process did not start"
+                        state["stop"] = "error"
+                    state["nomem"] = True              # (no more tries)
+                else:
+                    w.pages, w.said = [], False
+                    state["most"] = max(state["most"], len(pool))
+                    trace("pdf.tables", procs=len(pool), cap=state["cap"], threads=threads)
                 continue
-            if not w.send({"path": path, "pages": [i]}):
-                # it has ended: what it said before it went (a model that does not load) is the why
-                while not state["stop"]:
-                    answer(w.get(min(until(), now() + 2.0)) or {"gone": True})
-                named.append(i + 1)
+            if i < len(pages):                     # the next page: does it look like a table
+                page = doc[i]
+                draw = _drawings(page)
+                if pdf_table_page(page, pages[i], drawings=draw):
+                    why = "" if unlimited else pdf_heavy(page, draw)
+                    if why:
+                        info["left"].append(i + 1)
+                        info["heavy"].append(i + 1)
+                        trace("pdf.tables", page=i + 1, heavy=why)
+                    else:
+                        todo.append(i)
+                i += 1
                 continue
-            sent.append(i)
-        while sent and w is not None and not state["stop"]:
-            a = w.get(until)
+            if not todo and not any(w.pages for w in pool):
+                break                              # every page asked and answered
+            if not pool:                           # none left to ask and none may start
+                info["error"] = info.get("error") or ("the model's processes found no memory" if state["nomem"]
+                                                      else "the model's process did not start")
+                state["stop"] = "error"
+                break
+            a = tables_get(until)                  # the next answer, or the time's end
             if a is None:
                 state["stop"] = "time"
+                break
             answer(a)
-        live = _TABLES["worker"]
-        said = (live.slow if live is not None else None) or _TABLES["slow"]      # as it said, for the trace
-        slow = tables_pace(live)
-        if sent and w is not None:
-            # the model is still at a page, or has stopped: its process goes, the pages are named
-            tables_close(kill=True)
-            named += [p + 1 for p in sent]
-        elif state["stop"] == "error":
-            tables_close(kill=True)
+        # the time's end, or the model's: what was not reached is named - the pages not looked at by
+        # their text's own signs, which cost nothing (a page's drawings can take a tenth of a second)
+        for k in range(i, len(pages)):
+            state["by_text"] += 1
+            if pdf_table_page(None, pages[k], drawings=False):
+                named.append(k + 1)
+        named += [p + 1 for p in todo]
+        slow = tables_pace()
+        for w in list(pool):
+            if w.pages or state["stop"] == "error":
+                named += [p + 1 for p in w.pages]          # still at a page: it goes, its pages named
+                w.pages = []
+                tables_stop(w, kill=True)
+        info["pages"] = sorted(info["pages"])             # (answered as each process was done)
         info["left"] = sorted(set(info["left"]) | set(named))
         if state["stop"] == "error" and named:
-            info["stopped"] = sorted(set(named))
+            info["stopped"] = sorted(set(info.get("stopped") or []) | set(named) - set(info["heavy"]))
         if state["by_text"] and state["stop"] == "time":
             info["more"] = True               # rulings alone were not looked for after the time
         info["secs"] = round(now() - t_start, 2)
+        info["procs"] = state["most"]
         _TABLES["spent"] += info["secs"]
         if not (info["asked"] or info["left"] or info.get("error")):
             return {}
         given = until() - t_start
-        trace("pdf.tables", slow=round(said, 2), given=round(given, 2))
+        trace("pdf.tables", slow=round(slow, 2), given=round(given, 2), procs=state["most"])
         # its time ran out: its own (as many times over as it was slow), or the read's, which had less
         ended = "deadline" if given < max(0.0, PDF_TABLES_SECONDS * slow - spent) - 0.5 else "cap"
         budget.record("pdf-tables", t_start, "fail" if info.get("error") and not info["asked"] else
                       "ok" if not info["left"] else ended,
                       own=PDF_TABLES_SECONDS, given=None if unlimited else given,
-                      note="%d tables on %d of %d pages asked%s%s%s" % (
-                          info["tables"], len(info["pages"]), info["asked"],
+                      note="%d tables on %d of %d pages asked, %d model processes%s%s%s" % (
+                          info["tables"], len(info["pages"]), info["asked"], state["most"],
                           ", %d pages not laid out" % len(info["left"]) if info["left"] else "",
-                          ", its process %.1f times slower than on a CPU of its own" % slow if slow > 1.0 else "",
+                          ", %.1f times slower than on CPUs of their own" % slow if slow > 1.0 else "",
                           ", " + info["error"] if info.get("error") else ""))
         return info
 

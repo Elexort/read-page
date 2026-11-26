@@ -281,6 +281,17 @@ with open(envsetup.LOCK_FILE, encoding="utf-8") as fh:
     lock = fh.read().lower().replace("_", "-")
 missing = [t for t in envsetup.TOP if t.split("[")[0].lower().replace("_", "-") + "==" not in lock]
 check("every engine --setup promises is pinned in setup-lock.txt", not missing, str(missing))
+# KNOWN-ISSUES 242: what one layout model process takes (readpage's TABLES_PROC_RAM and TABLES_PROC_COMMIT), from which
+# a read counts how many it may start, was measured with the onnxruntime, pymupdf4llm and layout model the lock pins:
+# a pin of theirs that moves fails here until the figures are measured again and their versions moved with them
+import ast  # noqa: E402
+with open(os.path.join(SCRIPTS, "readpage.py"), encoding="utf-8") as fh:
+    _measured = re.search(r"(?m)^TABLES_PROC_MEASURED = (\{[^}]*\})", fh.read())
+_pins = envsetup.lock_pins(open(envsetup.LOCK_FILE, encoding="utf-8").read())
+_stale = {k: (v, _pins.get(k)) for k, v in (ast.literal_eval(_measured.group(1)) if _measured else {}).items()
+          if _pins.get(k) != v}
+check("242: the model process's memory figures were measured with the versions setup-lock.txt pins (measure them "
+      "again when a pin moves)", bool(_measured) and not _stale, str(_stale))
 # defuddle's own packages have ranges (linkedom ^0.18.12, turndown ^7.2.0...): npm would take the
 # newest of the day of each install, so the tree is a lock of its own, every tarball held to its SHA512
 dcmd = envsetup.defuddle_command("node", "npm-cli.js", "ROOT")

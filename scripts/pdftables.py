@@ -26,7 +26,13 @@ against a word in the wrong cell. On 29 PDFs (398 pages, 9 papers with known cel
 or added (187 and 277 before), 142 caption lines of 142 (137), the papers' rows whole on a line
 89 % (78 %) and as table rows 74 % (70 %), with no time limit.
 
-    python -E -B -X utf8 pdftables.py --parent PID     requests on stdin, answers on stdout
+    python -E -B -X utf8 pdftables.py --parent PID [--threads N]     requests on stdin, answers on stdout
+
+A read runs several of these at once, a page each from one queue (readpage.pdf_tables, KNOWN-ISSUES 242);
+--threads is each one's share of the CPUs for onnxruntime. A page's answer has "mem", what the process takes
+(own_memory: its peak working set and private commit on Windows, its peak resident size elsewhere), from
+which the read counts how many more fit; one that ran out of memory says "nomem" and ends, and its page goes
+back to the queue.
 
 A request: {"path": PDF, "pages": [i, ...]} for those pages' tables (pages from 0), with
 "markdown": true for pymupdf4llm's Markdown of the pages instead (--alternate). The answers, a
@@ -67,13 +73,28 @@ TICK = 0.5             # seconds between the words of the process's pace while n
 
 
 def cpus():
-    """The CPUs this process may use: its affinity where the OS keeps one (Linux: a container's
-    share, taskset), else the machine's count - on Windows `os.process_cpu_count()` ignores the
-    affinity mask (20 under a mask of 4, 2026-11-21)."""
+    """The CPUs this process may use: its affinity (Linux: a container's share, taskset; Windows: its
+    mask, which a job's affinity sets - `os.process_cpu_count()` ignores it there, 20 under a mask of
+    4, 2026-11-21), else the machine's count."""
     try:
         return len(os.sched_getaffinity(0)) or 1
     except (AttributeError, OSError):
         pass
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            k32 = ctypes.WinDLL("kernel32")
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            k32.GetProcessAffinityMask.argtypes = (wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t),
+                                                   ctypes.POINTER(ctypes.c_size_t))
+            mine, system = ctypes.c_size_t(), ctypes.c_size_t()
+            if k32.GetProcessAffinityMask(k32.GetCurrentProcess(), ctypes.byref(mine), ctypes.byref(system)):
+                n = bin(mine.value).count("1")
+                if n:
+                    return n
+        except Exception:                                       # noqa: BLE001
+            pass
     count = getattr(os, "process_cpu_count", None)               # Python 3.13
     try:
         return (count() if count else 0) or os.cpu_count() or 1
@@ -81,12 +102,13 @@ def cpus():
         return os.cpu_count() or 1
 
 
-def calm_onnx():
+def calm_onnx(threads=0):
     """onnxruntime as a small model needs it on a machine that does other things: four threads at
     most, none spinning while it waits. As the library sets its sessions up (a thread a core, each
     spinning) a page of the layout model took 0.23 s and 2.4 s of CPU on 20 cores, but 4.5 s on
     four slow cores and 1.8 s (at most 2.5) on two; so set: 0.23, 0.51 and 0.32 s, a third of a
-    CPU second (2026-11-19). The threads come from cpus(). pymupdf.layout makes its sessions when
+    CPU second (2026-11-19). The threads come from cpus(), or `threads` - the read's share of the
+    CPUs for each of its model processes (KNOWN-ISSUES 242). pymupdf.layout makes its sessions when
     it is imported, so this comes before that import. A class, not a function: the library names
     the type in its annotations. Returns why it could not ("" when it did)."""
     try:
@@ -103,7 +125,7 @@ def calm_onnx():
         def __init__(self, path, sess_options=None, **kw):
             so = sess_options or ort.SessionOptions()
             try:
-                so.intra_op_num_threads = min(4, cpus())
+                so.intra_op_num_threads = threads or min(4, cpus())
                 so.inter_op_num_threads = 1
                 so.add_session_config_entry("session.intra_op.allow_spinning", "0")
             except Exception:                                  # noqa: BLE001
@@ -111,6 +133,38 @@ def calm_onnx():
             real.__init__(self, path, sess_options=so, **kw)
     ort.InferenceSession = Calm
     return ""
+
+
+def own_memory():
+    """What this process takes, in bytes: {"ram": its peak working set, "commit": its private commit} on Windows
+    (GetProcessMemoryInfo), its peak resident size for both elsewhere (Linux and macOS charge no untouched memory).
+    {} when the OS will not say."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+                    (n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                                   "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                                                   "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage",
+                                                   "PrivateUsage")]
+            k32 = ctypes.WinDLL("kernel32")
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            psapi = ctypes.WinDLL("psapi")
+            psapi.GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.POINTER(PMC), wintypes.DWORD)
+            pmc = PMC()
+            pmc.cb = ctypes.sizeof(pmc)
+            if psapi.GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+                return {"ram": int(pmc.PeakWorkingSetSize), "commit": int(max(pmc.PrivateUsage, pmc.PeakPagefileUsage))}
+            return {}
+        import resource
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        peak = peak if sys.platform == "darwin" else peak * 1024            # bytes on macOS, KB on Linux
+        return {"ram": int(peak), "commit": int(peak)}
+    except Exception:                                          # noqa: BLE001
+        return {}
 
 
 def gfm_table(rows):
@@ -562,7 +616,15 @@ def watch_parent(pid):
 
 def main():
     t0, cpu0 = time.time(), time.process_time()
+    # numpy's OpenBLAS (onnxruntime and pymupdf.layout import numpy) commits a buffer of about 32 MB for
+    # each thread it starts, a thread a CPU: 612 MB of a process's 731 MB of commit on 20 CPUs right after
+    # its load, never touched; on one thread 119 MB, and the pages take as long (2026-11-27, KNOWN-ISSUES 270)
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     args = sys.argv[1:]
+    try:
+        threads = max(0, int(args[args.index("--threads") + 1])) if "--threads" in args else 0
+    except (IndexError, ValueError):
+        threads = 0
     if "--parent" in args:
         try:
             pid = int(args[args.index("--parent") + 1])
@@ -614,7 +676,7 @@ def main():
     def why(e):
         return ("%s: %s" % (type(e).__name__, e))[:200]
     try:
-        calm = calm_onnx()
+        calm = calm_onnx(threads)
         import pymupdf
         import pymupdf4llm
     except Exception as e:                                     # noqa: BLE001
@@ -675,12 +737,16 @@ def main():
             t = time.time()
             try:
                 text, n, notes = page_tables(doc, p)
-                say({"page": p, "text": text, "n": n, "s": round(time.time() - t, 3), "notes": notes})
+                say({"page": p, "text": text, "n": n, "s": round(time.time() - t, 3), "notes": notes,
+                     "mem": own_memory()})
             except (ImportError, NotImplementedError) as e:      # the model does not work here
                 say({"fatal": why(e)})
                 return 0
+            except MemoryError as e:                           # its pages go back to the read's queue
+                say({"page": p, "nomem": why(e), "s": round(time.time() - t, 3)})
+                return 0
             except Exception as e:                             # noqa: BLE001 - this page only
-                say({"page": p, "error": why(e), "s": round(time.time() - t, 3)})
+                say({"page": p, "error": why(e), "s": round(time.time() - t, 3), "mem": own_memory()})
     return 0
 
 

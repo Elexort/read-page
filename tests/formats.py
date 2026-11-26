@@ -237,8 +237,19 @@ def to_json(doc, pages, **kw):
     p = pages[0] if pages else -1
     if os.environ.get("RP_STUB_CRASH") == str(p):
         os._exit(9)
+    once = (os.environ.get("RP_STUB_NOMEM") or "").split(":", 1)    # "page:marker": the first process there
+    if len(once) == 2 and once[0] == str(p) and not os.path.exists(once[1]):
+        open(once[1], "w").close()
+        raise MemoryError("RP-STUB: no memory for this page")
     if os.environ.get("RP_STUB_SLEEP"):
         time.sleep(float(os.environ["RP_STUB_SLEEP"]))
+    slow = json.loads(os.environ.get("RP_STUB_PAGE_SLEEP") or "{}")      # {"page": seconds more}
+    if str(p) in slow:
+        time.sleep(float(slow[str(p)]))
+    if os.environ.get("RP_STUB_HANG") == str(p):            # at work and never done: no wait to lengthen its time
+        t = time.time()
+        while time.time() - t < 60:
+            pass
     if os.environ.get("RP_STUB_BUSY"):
         t = time.time()
         while time.time() - t < float(os.environ["RP_STUB_BUSY"]):
@@ -475,7 +486,7 @@ try:
         dp = pymupdf.open(prose)
         got = mod3.pdf_tables(prose, dp, [p.get_text() for p in dp])
         check("... and the model is not asked: its process is not even started",
-              got == {} and mod3._TABLES["worker"] is None, str(got))
+              got == {} and not mod3._TABLES.get("pool") and mod3._TABLES.get("worker") is None, str(got))
         said = mod3.tables_advice({"pages": [1], "left": [2, 3], "asked": 1, "secs": 1.0, "of": 3})
         check("a PDF's tables: the advice names the pages left and --download, which gives the model the time",
               "pages 2-3" in said and "--download" in said and "about 3 s" in said
@@ -653,17 +664,116 @@ try:
                   str(info))
             os.environ.pop("RP_STUB_FAIL", None)
             mod3.tables_close(kill=True)
-            os.environ["RP_STUB_CRASH"] = "1"
+            os.environ.update(RP_STUB_CRASH="1", READ_PAGE_TEST_CPUS="1")       # one CPU: one process
             mod3.tables_reset()
             info = mod3.pdf_tables(many, d3, [p.get_text() for p in d3])
-            check("a PDF's tables: when the model's process ends at a page, that page and the ones after it "
-                  "are named, as the time's end names them",
+            check("a PDF's tables: when the model's process ends at a page, and the one started after it too, that "
+                  "page and the ones after it are named, as the time's end names them",
                   info.get("asked") == 1 and info.get("left") == [2, 3] and info.get("stopped") == [2, 3]
                   and "process ended" in (info.get("error") or "")
                   and "pages 2-3 are still one cell a line (the layout model did not work" in mod3.tables_advice(info),
                   "%s | %s" % (info, mod3.tables_advice(info)))
+            mod3.tables_close(kill=True)
+            # KNOWN-ISSUES 242: as many model processes as the CPUs and the memory hold, a page each from one queue
+            # (READ_PAGE_TEST_CPUS and READ_PAGE_TEST_MEMORY stand in for the machine: the suites never squeeze its
+            # memory). A process that dies at a page, or hangs, loses that page alone; the others are laid out
+            big = json.dumps({"phys": 64 << 30, "commit": 64 << 30})
+            os.environ.update(READ_PAGE_TEST_CPUS="4", READ_PAGE_TEST_MEMORY=big)
+            mod3.tables_reset()
+            info = mod3.pdf_tables(many, d3, [p.get_text() for p in d3])
+            check("242: a process that dies at a page loses that page alone, which is named; the others laid out",
+                  info.get("asked") == 2 and info.get("left") == [2] and info.get("stopped") == [2]
+                  and (info.get("procs") or 0) >= 2 and "process ended" in (info.get("error") or ""), str(info))
             os.environ.pop("RP_STUB_CRASH", None)
             mod3.tables_close(kill=True)
+            os.environ["RP_STUB_HANG"] = "1"
+            keep_hang, mod3.PDF_TABLES_SECONDS = mod3.PDF_TABLES_SECONDS, 3.0
+            mod3.tables_reset()
+            info = mod3.pdf_tables(many, d3, [p.get_text() for p in d3])
+            mod3.PDF_TABLES_SECONDS = keep_hang
+            os.environ.pop("RP_STUB_HANG", None)
+            mod3.tables_close(kill=True)
+            check("... and one that hangs at a page loses that page alone when the time is up",
+                  info.get("asked") == 2 and info.get("left") == [2] and info.get("secs", 99) < 8, str(info))
+            six_p = os.path.join(tmp, "tables6-pool.pdf")
+            table_pdf(six_p, pages=6)
+            d6p = pymupdf.open(six_p)
+            # pages slow enough that more processes pay for their load; their pace as on CPUs of their own (a
+            # sleeping stand-in reads as starved, READ_PAGE_TEST_PACE stands in for its measure)
+            os.environ.update(RP_STUB_SLEEP="1.5", READ_PAGE_TEST_PACE="1")
+            mod3.tables_reset()
+            texts6 = [p.get_text() for p in d6p]
+            info = mod3.pdf_tables(six_p, d6p, texts6)
+
+            def threads_of():
+                """The onnxruntime threads each of the read's model processes was started with."""
+                return [a[a.index("--threads") + 1] if "--threads" in a else "-"
+                        for a in (list(w.p.args) for w in mod3._TABLES.get("pool") or [])]
+            got_threads = threads_of()
+            check("242: on 4 CPUs three processes (85 %) lay out the pages, every one asked, each with a thread",
+                  info.get("procs") == 3 and info.get("asked") == 6 and not info.get("left")
+                  and got_threads == ["1"] * 3, "%s %s" % (info, got_threads))
+            mod3.tables_close(kill=True)
+            # the tables land on their own pages, in page order, whatever order the processes end them in (the
+            # first page the slowest, so a later one is done before it)
+            os.environ.update(RP_STUB_TABLE="1", RP_STUB_PAGE_SLEEP=json.dumps({"0": 3.0}))
+            mod3.tables_reset()
+            texts_t = list(texts6)
+            info = mod3.pdf_tables(six_p, d6p, texts_t)
+            mod3.tables_close(kill=True)
+            for k in ("RP_STUB_TABLE", "RP_STUB_PAGE_SLEEP"):
+                os.environ.pop(k, None)
+            own_page = [("TABLE-INTRO %d." % (k + 1)) in t and "TABLE-INTRO %d." % (k + 2) not in t
+                        and row_whole(t, T_ROWS[0]) and "\n|" in t for k, t in enumerate(texts_t)]
+            check("242: the tables of several processes land on their own pages, in page order, a slow first page "
+                  "and all", info.get("pages") == [1, 2, 3, 4, 5, 6] and info.get("tables") == 6
+                  and (info.get("procs") or 0) >= 2 and all(own_page), "%s %s" % (info, own_page))
+            # one that runs out of memory at a page gives it back: another lays it out, and none more starts
+            marker = os.path.join(tmp, "nomem-once")
+            os.environ["RP_STUB_NOMEM"] = "2:" + marker
+            mod3.tables_reset()
+            info = mod3.pdf_tables(six_p, d6p, list(texts6))
+            mod3.tables_close(kill=True)
+            os.environ.pop("RP_STUB_NOMEM", None)
+            check("... and one that runs out of memory at a page gives it back: another lays it out, and no more "
+                  "processes start", os.path.exists(marker) and info.get("asked") == 6 and not info.get("left")
+                  and info.get("procs") == 2 and not info.get("error"), str(info))
+            os.environ["READ_PAGE_TEST_PACE"] = "3"        # three times slower than on CPUs of their own
+            mod3.tables_reset()
+            info = mod3.pdf_tables(six_p, d6p, list(texts6))
+            mod3.tables_close(kill=True)
+            os.environ.pop("READ_PAGE_TEST_PACE", None)
+            check("... but two processes that already wait for the CPU start no third: it would only share it",
+                  info.get("procs") == 2 and info.get("asked") == 6 and not info.get("left"), str(info))
+            os.environ.update(RP_STUB_SLEEP="0.4", READ_PAGE_TEST_MEMORY=json.dumps({"phys": 600 << 20,
+                                                                                      "commit": 64 << 30}))
+            mod3.tables_reset()
+            info = mod3.pdf_tables(six_p, d6p, list(texts6))
+            got_threads = threads_of()
+            mod3.tables_close(kill=True)
+            check("... and where the free memory holds one process alone (80 % of 600 MB), one does it all, with the "
+                  "four CPUs for its onnxruntime", info.get("procs") == 1 and info.get("asked") == 6
+                  and not info.get("left") and got_threads == ["4"], "%s %s" % (info, got_threads))
+            # several reads count together: the processes another read has started and not yet measured take
+            # their figures from the same memory, as the note in the cache says
+            os.environ["READ_PAGE_TEST_MEMORY"] = json.dumps({"phys": 3 << 30, "commit": 64 << 30})
+            other = {"pid": os.getpid(), "read": os.getpid(), "ram": 1 << 30, "commit": 1 << 30, "said": False}
+            dead = subprocess.Popen([sys.executable, "-c", "pass"])
+            dead.wait()
+            gone_one = dict(other, pid=dead.pid)
+            note = getattr(mod3, "tables_note", None) or (lambda change=None: [])     # (none before 242)
+            note(lambda e: e.extend([dict(other), dict(other), gone_one]))
+            mod3.tables_reset()
+            info = mod3.pdf_tables(six_p, d6p, list(texts6))
+            mod3.tables_close(kill=True)
+            left_note = note()
+            note(lambda e: e.__setitem__(slice(None), [x for x in e if x.get("pid") != os.getpid()]))
+            check("... and another read's two processes still to grow leave this one a single process; a process "
+                  "that ended is dropped from the note", info.get("procs") == 1 and info.get("asked") == 6
+                  and not any(x.get("pid") == dead.pid for x in left_note)
+                  and sum(1 for x in left_note if x.get("pid") == os.getpid()) == 2, "%s %s" % (info, left_note))
+            for k in ("RP_STUB_SLEEP", "READ_PAGE_TEST_MEMORY", "READ_PAGE_TEST_CPUS"):
+                os.environ.pop(k, None)
             os.environ["RP_STUB_NOLOAD"] = "1"
             mod3.tables_reset()
             info = mod3.pdf_tables(many, d3, [p.get_text() for p in d3])
@@ -686,6 +796,7 @@ try:
             table_pdf(six, pages=6)
             d6 = pymupdf.open(six)
             try:
+                os.environ["READ_PAGE_TEST_CPUS"] = "1"        # one process: its own seconds, as a CPU of its own
                 w0 = mod3.TablesWorker()
                 ready = w0.get(time.time() + 60) or {}
                 w0.kill()
@@ -710,11 +821,14 @@ try:
                       "%s (its own %.1f s)" % (info, base))
             finally:
                 os.environ.pop("RP_STUB_BUSY", None)
+                os.environ.pop("READ_PAGE_TEST_CPUS", None)
                 mod3.PDF_TABLES_SECONDS = keep_secs
                 mod3.budget._state.update(clock)
         finally:
             for k in ("RP_STUB_NOLOAD", "RP_STUB_FAIL", "RP_STUB_CRASH", "READ_PAGE_TEST_MODEL_PATH",
-                      "RP_STUB_LOAD_SLEEP", "RP_STUB_SLEEP", "RP_STUB_BUSY"):
+                      "RP_STUB_LOAD_SLEEP", "RP_STUB_SLEEP", "RP_STUB_BUSY", "RP_STUB_HANG", "READ_PAGE_TEST_CPUS",
+                      "READ_PAGE_TEST_PACE", "READ_PAGE_TEST_MEMORY", "RP_STUB_NOMEM", "RP_STUB_PAGE_SLEEP",
+                      "RP_STUB_TABLE"):
                 os.environ.pop(k, None)
             mod3.tables_close(kill=True)
         zp = os.path.join(tmp, "three.zip")
@@ -821,6 +935,12 @@ try:
             check("a PDF's tables: a slow page does not hold the read past its deadline (4 s here)",
                   r.manifest.get("status") == "ok" and tab.get("left") == "1" and r.seconds < 7
                   and "Row 8" in r.file("content.md"), "%.1f s %s %s" % (r.seconds, r.manifest.get("status"), tab))
+            r = run_read(many, env=dict(env, READ_PAGE_TEST_DEADLINE="4", READ_PAGE_TEST_MODEL_PATH=stubdir,
+                                        RP_STUB_SLEEP="30", READ_PAGE_TEST_CPUS="4"))
+            tab = (r.manifest.get("signals") or {}).get("tables") or {}
+            check("242: ... nor three processes, each at a slow page: the deadline holds, every page named",
+                  r.manifest.get("status") == "ok" and tab.get("left") == "1-3" and r.seconds < 7,
+                  "%.1f s %s %s" % (r.seconds, r.manifest.get("status"), tab))
             # --alternate lays out what fits the read's time, and names the rest
             lp = os.path.join(tmp, "long.pdf")
             table_pdf(lp, pages=200)                         # 0.1-0.5 s a page: far more than 6 s
