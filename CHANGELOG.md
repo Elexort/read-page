@@ -19,6 +19,7 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   relationships are lost no longer stops openpyxl. On the ODS corpus cut the same way, 28 % -> 54 % of the cells
   (Excel's ODS, content.xml first: 10 % -> 54 %). `signals.broken_archive` names the `partial` member and the
   `lost_strings`, and the advice says both.
+  At most 2^20 stand-ins are made (23 MB of XML): a sheet that names a string far past the table gets none, as before - one index of ten digits asked for 220 GB, and the MemoryError read as "damaged, before its first member".
 - **Our ODS reader on real workbooks** (KNOWN-ISSUES 250-253), measured on 34 workbooks and 16 decks from data.gov.uk,
   data.gouv.fr, Zenodo and LibreOffice's own tests, each against its content.xml read apart. A workbook is read as
   its content.xml unpacks, each sheet's rows as they end, so a sheet costs what its rows hold, not its XML: Excel

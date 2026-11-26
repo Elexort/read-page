@@ -1452,6 +1452,26 @@ try:
         check("254: an XLSX cut in its last part, an external link's relationships: every sheet read with its text "
               "(openpyxl stopped at the link, and the whole workbook read nothing)", r.manifest.get("status") == "ok"
               and "THIRD-LABEL 399 | 2796" in text and "FIRST-LABEL 0 | 1" in text and "[lost]" not in text, said(r))
+        # a sheet that names a shared string far past any table (ten digits): the lost strings made for a cut
+        # workbook were as many as its highest index asked - 10 000 000 000 of them, a 220 GB allocation
+        z_in = zipfile.ZipFile(io.BytesIO(excel_xlsx([("First", rows("FIRST", 40, 1))])))
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z_out:
+            for info in z_in.infolist():
+                data = z_in.read(info.filename)
+                if info.filename == "xl/worksheets/sheet1.xml":
+                    data = data.replace(b'<v>0</v></c><c r="B1">', b'<v>9999999999</v></c><c r="B1">')
+                z_out.writestr(info.filename, data)
+        p = os.path.join(tmpc, "strings-far.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(into(buf.getvalue(), "xl/sharedStrings.xml", 0.5))
+        r = run_read(p, env=env)
+        sig = (r.manifest.get("signals") or {}).get("broken_archive") or {}
+        reason = str((r.manifest.get("signals") or {}).get("status_reason") or "")
+        check("254: a cut XLSX whose sheet names a shared string ten digits past its table is salvaged, no stand-ins "
+              "made past a bound (it asked for 220 GB, and the MemoryError read as 'damaged, before its first member')",
+              r.rc == 0 and sig.get("partial") == "xl/sharedStrings.xml" and "before its first member" not in reason
+              and r.seconds < 60, "rc %s, %.1f s, %s | %s" % (r.rc, r.seconds, json.dumps(sig)[:160], said(r)))
     except ImportError:
         check.skip("254: a cut XLSX's shared strings", "openpyxl is not installed here")
 

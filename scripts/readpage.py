@@ -4313,6 +4313,7 @@ _XL_MAIN = b"http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _SHARED_CELL = re.compile(rb"<(?:\w{1,32}:)?c\b(?=[^<>]{0,%d}?\bt=[\"']s[\"'])[^<>]{0,%d}>\s*<(?:\w{1,32}:)?v>\s*(\d{1,10})\s*<"
                           % (docreaders.TAG_MAX, docreaders.TAG_MAX))
 LOST_TEXT = "[lost]"                   # a cell whose shared string was lost with the archive's cut
+LOST_MAX = 1 << 20                     # stand-ins made at most (23 MB of XML): a real table past it is rare
 
 
 def _cut_sheet(data):
@@ -4352,22 +4353,30 @@ def _strings_close(out, names):
     if data is None and not top:
         return names                                          # none, and no sheet asks for one
     lost = b"<si><t>%s</t></si>" % LOST_TEXT.encode("ascii")
+    head, p, kept = b"", b"", 0
     if data is not None:
         root = re.search(rb"<(\w{1,32}:)?sst\b[^<>]{0,%d}?(/?)>" % TAG_MAX, data)
         p = (root.group(1) or b"") if root else b""
-        last, kept = None, 0
+        last = None
         for last in re.finditer(rb"</%ssi\s*>" % re.escape(p), data):
             kept += 1
         head = data[:last.end()] if last is not None else data[:root.end()] if root and not root.group(2) else b""
-        if not head:
-            head, p = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="%s">' % _XL_MAIN, b""
-        lost = lost.replace(b"<", b"<" + p).replace(b"<" + p + b"/", b"</" + p) if p else lost
-        data = head + lost * max(0, top - kept) + b"</%ssst>" % p
+        if p:
+            lost = lost.replace(b"<", b"<" + p).replace(b"<" + p + b"/", b"</" + p)
+    if not head:
+        head, p = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="%s">' % _XL_MAIN, b""
+        lost = b"<si><t>%s</t></si>" % LOST_TEXT.encode("ascii")
+    need = max(0, top - kept)
+    cells = sum(1 for k in out.strings if k >= kept)
+    if need > LOST_MAX:
+        # a sheet names a string far past the table: one index of ten digits asked for 220 GB of stand-ins, and the
+        # MemoryError read as "damaged, before its first member". None is made: the strings that arrived stay, and
+        # openpyxl stops at a cell past them, as it did before stand-ins were made at all
+        out.lost = {"cells": cells, "strings": 0, "kept": kept, "too_far": need}
+        need = 0
     else:
-        kept = 0
-        data = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="%s">%s</sst>' % (_XL_MAIN, lost * top)
-    out.lost = {"cells": sum(1 for k in out.strings if k >= kept), "strings": max(0, top - kept), "kept": kept}
-    out._write(_XL_STRINGS, data)
+        out.lost = {"cells": cells, "strings": need, "kept": kept}
+    out._write(_XL_STRINGS, head + lost * need + b"</%ssst>" % p)
     return names | {_XL_STRINGS}
 _PACKAGE_MAIN = {"docx": "word/document.xml", "xlsx": "xl/workbook.xml", "pptx": "ppt/presentation.xml"}
 _OOXML = "application/vnd.openxmlformats-officedocument."
