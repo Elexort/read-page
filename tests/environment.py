@@ -887,6 +887,34 @@ finally:
     envsetup.subprocess.run, envsetup._detached = real_run, real_detached
 check("the launcher tells --setup how it went (exit code 0: free; %d: attached to the command's job)" % envsetup.LAUNCH_ATTACHED,
       codes == [("", False), ("", True), ("boom", False)] and mapped == [0, envsetup.LAUNCH_ATTACHED], "%s %s" % (codes, mapped))
+# KNOWN-ISSUES 245: the three Python processes --setup starts (the launcher, the worker it starts, the yt-dlp updater)
+# run `-E`, which drops PYTHONUTF8 as well: without `-X utf8` a traceback with a Chinese path reached setup-detail.log
+# in the ANSI code page while the rest of the log was UTF-8
+started_argv = {}
+try:
+    envsetup.subprocess.run = lambda cmd, *a, **k: (started_argv.update(launcher=list(cmd))
+                                                    or types.SimpleNamespace(returncode=0, stdout=b""))
+    envsetup._launch(fd, "run", "v")
+    envsetup.subprocess.run = real_run
+    envsetup._detached = lambda cmd, *a, **k: (started_argv.update({"worker" if "--worker" in cmd else "updater": list(cmd)})
+                                               or "free")
+    envsetup._main(["--launch", fd, "run", "v"])
+    envsetup.ytdlp_background(fd)
+finally:
+    envsetup.subprocess.run, envsetup._detached = real_run, real_detached
+for who in ("launcher", "worker", "updater"):
+    argv_ = started_argv.get(who) or []
+    script_ = os.path.abspath(envsetup.__file__)
+    head_ = argv_[:argv_.index(script_)] if script_ in argv_ else []           # the interpreter and its flags
+    check("--setup's %s starts in UTF-8 mode (-E drops PYTHONUTF8, so -X utf8 is on its command line)" % who,
+          "-E" in head_ and "-B" in head_ and ("-X", "utf8") in list(zip(head_, head_[1:])),
+          " ".join(head_[1:]) or "not started")
+    mode_ = ""
+    if head_:                          # those flags in a process whose environment has no PYTHONUTF8 to lose
+        env_ = {k: v for k, v in os.environ.items() if k not in ("PYTHONUTF8", "PYTHONIOENCODING", "LC_ALL", "LANG")}
+        mode_ = subprocess.run(head_ + ["-c", "import sys; print(sys.flags.utf8_mode)"], capture_output=True, env=env_,
+                               timeout=60).stdout.decode("ascii", "replace").strip()
+    check("... and a Python given those flags is in UTF-8 mode (%s)" % who, mode_ == "1", "sys.flags.utf8_mode=%r" % mode_)
 os.mkdir(os.path.join(fd, "no.lock"))
 check("a lock file that cannot be opened (a read-only folder) is nobody's lock - the file existing proves nothing",
       envsetup._lock_state(os.path.join(fd, "no.lock")) == "unusable" and not envsetup._locked(os.path.join(fd, "no.lock")), "")

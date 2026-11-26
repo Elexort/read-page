@@ -8,6 +8,11 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **`--setup`'s three Python processes start in UTF-8 mode** (KNOWN-ISSUES 245): the launcher, the worker it starts
+  and the yt-dlp updater ran `python -E -B` - and `-E` drops `PYTHONUTF8` too - so on a Chinese Windows a traceback
+  with a Chinese path would reach `setup-detail.log` in GBK, in a log that is UTF-8 everywhere else. They have
+  `-X utf8` now, like the rest of the skill's processes; `tests/environment.py` checks each command line and that a
+  Python given those flags, with no `PYTHONUTF8`, is in UTF-8 mode.
 - **The fix for an OCR that does not start survives a long path** (KNOWN-ISSUES 240): its reason was cut at 200
   characters, and under a long tessdata path the words the fix is found by went with the end - the report said
   `readpage.py --setup` where `READ_PAGE_HOME` on an ASCII path is the one that works. A longer reason keeps its start
@@ -30,7 +35,6 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   the read on such a name. `tests/cjk.py` names its folders in Chinese under every locale (they were ASCII where the
   locale is not UTF-8) and makes names of GBK bytes on any Linux; in WSL under `zh_CN.GBK` with no `-X utf8`, `props`
   and `environment` pass, and CI's GBK job runs every suite.
-- **SKILL.md's `error` row fits a cut file too** (KNOWN-ISSUES 238): it said "retry later; `--allow-external` adds
 - **SKILL.md's `error` row fits a cut file too** (KNOWN-ISSUES 238): it said "retry later; `--allow-external` adds
   readers and the archive" for every error, and an archive cut short or damaged comes back the same however often a
   file on this machine is read. It reads "retry later; a cut or damaged file: get it again" now; SKILL.md is 12

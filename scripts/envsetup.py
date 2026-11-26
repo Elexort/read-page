@@ -380,7 +380,7 @@ def _launch(d, run, skill_version):
     attached when a job around the command ends what is in it - the work then ends with the command."""
     me = os.path.abspath(__file__)
     try:
-        p = subprocess.run([sys.executable, "-E", "-B", me, "--launch", d, run, skill_version],
+        p = subprocess.run([sys.executable, "-E", "-B", "-X", "utf8", me, "--launch", d, run, skill_version],
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
     except (OSError, subprocess.SubprocessError) as e:
         return str(e), False
@@ -2368,7 +2368,7 @@ def ytdlp_update(d, uv, py, env, sh, now=None, lock=None):
 def ytdlp_background(d):
     """Start the update apart from the read that asked: nothing waits for it. True when it was started -
     not where a job around the read would end it with the read (it would be killed seconds in)."""
-    return _detached([sys.executable, "-E", "-B", os.path.abspath(__file__), "--ytdlp", d], d,
+    return _detached([sys.executable, "-E", "-B", "-X", "utf8", os.path.abspath(__file__), "--ytdlp", d], d,
                      os.path.join(d, "setup-detail.log"), attached_ok=False) == "free"
 
 
@@ -2794,7 +2794,7 @@ def _check_ocr(d, info):
 def _main(argv):
     if argv[:1] == ["--launch"] and len(argv) >= 4:
         d, run, ver = argv[1], argv[2], argv[3]
-        how = _detached([sys.executable, "-E", "-B", os.path.abspath(__file__), "--worker", d, run, ver], d,
+        how = _detached([sys.executable, "-E", "-B", "-X", "utf8", os.path.abspath(__file__), "--worker", d, run, ver], d,
                         os.path.join(d, "setup-detail.log"))
         return LAUNCH_ATTACHED if how == "attached" else 0
     if argv[:1] == ["--worker"] and len(argv) >= 4:
