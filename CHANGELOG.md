@@ -15,6 +15,11 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   block, 16 characters for each image block, as Cline's SDK counts it - and the text is rendered again inside what
   is left; the pointer to the next line names where the shorter block ends. 12 big pictures and two screenshot tiles:
   7 993 -> 7 300 characters; 60 small pictures: 8 463 -> 7 769.
+- **`--from "text"` under a POSIX locale that is not UTF-8** (KNOWN-ISSUES 274): CI's GBK job passed the quote's
+  `·` as the bytes A1 A4, which Python's UTF-8 mode holds as lone surrogates, so no line held the quote and its
+  `not in` line raised. `ownenv.arg_text` reads an argument in the locale's code set only where it holds a lone
+  surrogate; a clean UTF-8 argument is never re-read (`ownenv.shown` is for paths). A web address typed in those
+  bytes is repaired the same way (it was `%3F%3F`, a 404), and a quote nothing can read is shown with U+FFFD.
 - **A quote that ends inside a marker is found** (KNOWN-ISSUES 269): `--from "text"` compared a quote with each
   line in its folded form, a marker reduced to its type and name (`[img #3]`, `[tab · Name]`), so the words an agent
   has when its harness cut the answer in the middle of a picture's or a tab's line - `#299997 · 100x80 3K ·

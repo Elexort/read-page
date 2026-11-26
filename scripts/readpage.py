@@ -9680,7 +9680,8 @@ def main(argv=None):
         args.from_line = int(str(args.from_line).strip())
     except ValueError:
         # a piece of text: the answer starts at the line holding it (answer.find), in the saved copy
-        args.from_text, args.from_line = str(args.from_line), 1
+        # words, not a path: bytes of the locale's code set that UTF-8 mode held as lone surrogates are read in it
+        args.from_text, args.from_line = ownenv.arg_text(str(args.from_line)), 1
         if not args.from_text.strip():
             args.ignored.append("--from %r (a line number, or words of a line)" % args.from_text)
             args.from_text, args.from_line = "", 0
@@ -9813,6 +9814,7 @@ def read(args):
         url = local_url(local)
         scheme = "file"
     else:
+        url = ownenv.arg_text(url)              # an address typed in the locale's code set (KNOWN-ISSUES 274)
         scheme = (urllib.parse.urlparse(url).scheme or "").lower()
     if not local and not scheme and re.match(r"^[\w-]+(\.[\w-]+)+([/:?#]|$)", url):
         url = "https://" + url                  # "example.com/a" is a host, not a scheme

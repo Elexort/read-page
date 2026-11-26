@@ -466,6 +466,10 @@ def not_found(manifest, text, view, quote):
         lines.pop()
     head = header(manifest, view, len(lines), len((text or "").encode("utf-8")))
     q = " ".join(str(quote).split())
+    try:
+        q = q.encode("utf-8", "surrogateescape").decode("utf-8", "replace")     # bytes of another code set: U+FFFD
+    except UnicodeError:
+        q = q.encode("utf-8", "replace").decode("utf-8")
     q = q if len(q) <= 80 else q[:79] + "…"
     say = ['── not in %s: "%s", spaces and case aside; the outline below names its lines for --from N ──' % (view, q)]
     room = min(OUTLINE_BYTES * 2, (BUDGET_BYTES - _bytes(head + say)) // 2, (BUDGET_CHARS - _chars(head + say)) // 2)

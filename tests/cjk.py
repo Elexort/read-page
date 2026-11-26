@@ -17,6 +17,8 @@ whole of it, offline, and passes the same on every OS:
 - a server's Chinese file name (Content-Disposition, GBK bytes too) is kept;
 - OCR asks for the language pack of the user's language and of the text's script, and names a missing one;
 - a tool that takes narrow arguments is given an ASCII path;
+- words given as an argument (`--from "text"`, an address) in the bytes of a POSIX locale that is not UTF-8 are read
+  in its code set, and a UTF-8 argument is never re-read;
 - the languages that are sent - Accept-Language, the subtitle tracks, the browser's locale - are the user's own;
 - a home folder, a cache and a folder for the answer, all in Chinese.
 
@@ -25,8 +27,10 @@ On Windows `tools`-less way to make the code page real: run this file with a pyt
 """
 import contextlib
 import importlib.util
+import io
 import json
 import os
+import re
 import shutil
 import stat
 import struct
@@ -1701,6 +1705,151 @@ else:
               printed.get("dir") == os.path.join(ROOT, "资料", "shown")
               and "资料" in out2.decode("utf-8", "replace"),
               "%s | %s" % (ascii(printed.get("dir"))[-60:], out2.decode("utf-8", "replace")[:120]))
+
+# ---------------------------------------------------------------- 9c. words to find, in another code set's bytes
+# `--from "text"` under a POSIX locale that is not UTF-8 (CI's GBK job, LC_ALL=zh_CN.GBK, none told -X utf8): the
+# parent writes the quote's `·` as the bytes A1 A4, which Python's UTF-8 mode holds as lone surrogates, and no line
+# held them (KNOWN-ISSUES 274). Paths are repaired by their code set (ownenv.shown) - right for a name from the disk,
+# wrong for an argument a harness wrote in UTF-8, as most do: an argument is repaired only where it holds a lone
+# surrogate, and stays as it is when its code set cannot read it.
+import ownenv                                                                      # noqa: E402,F811
+
+PLANS = ("<!doctype html><html><head><meta charset='utf-8'><title>Plans</title></head><body><article><h1>Plans</h1>"
+         + "".join("<h2>Section %d</h2><p>%s</p>" % (i, " ".join(
+             "Sentence %d.%d explains one more detail of the reader, so the paragraph grows long enough." % (i, j)
+             for j in range(6))) for i in range(1, 7))
+         + "<p>资料说明：这是一个关于读者的测试段落，它只在一行里出现一次。</p>"
+         "<div role='tablist'><button role='tab' aria-selected='true' aria-controls='p1'>Free Plan Limits</button>"
+         "<button role='tab' aria-controls='p2'>Developer Plan Limits</button></div>"
+         "<div role='tabpanel' id='p1'><p>FREE-PANEL requests per minute: thirty, and tokens per day: a few.</p></div>"
+         "<div role='tabpanel' id='p2' hidden><p>DEV-PANEL requests per minute: a thousand, tokens per day: many.</p></div>"
+         + "".join("<h2>Later %d</h2><p>%s</p>" % (i, " ".join(
+             "Sentence %d.%d explains one more detail of the reader, so the paragraph grows long enough." % (i, j)
+             for j in range(6))) for i in range(1, 7))
+         + "</article></body></html>").encode("utf-8")
+QUOTE = "[tab · Developer Plan Limits]"
+as_bytes = QUOTE.encode("gbk")                         # what a GBK parent passes: the `·` is A1 A4
+as_arg = as_bytes.decode("utf-8", "surrogateescape")   # what Python's UTF-8 mode makes of them
+real_codeset = list(ownenv._CODESET)
+
+
+def with_codeset(name, fn, *a):
+    """`fn` as the code set of a POSIX locale `name` ("" for UTF-8, as on every current Linux and macOS)."""
+    ownenv._CODESET[:] = [name]
+    try:
+        return fn(*a)
+    finally:
+        ownenv._CODESET[:] = real_codeset
+
+
+def repaired(name, s):
+    return attempt(with_codeset, name, lambda x: ownenv.arg_text(x), s)
+
+
+check("an argument in GBK bytes (lone surrogates in UTF-8 mode) is read in the locale's code set: [tab · Plans]",
+      repaired("gbk", as_arg) == QUOTE, ascii(repaired("gbk", as_arg)))
+check("... and so is a Chinese one",
+      repaired("gbk", "资料说明".encode("gbk").decode("utf-8", "surrogateescape")) == "资料说明", "")
+check("an argument that is clean text stays as it is - a harness wrote it in UTF-8: `·`, Chinese, ASCII",
+      all(repaired("gbk", s_) == s_ for s_ in (QUOTE, "资料说明", "plain words")),
+      ascii([repaired("gbk", s_) for s_ in (QUOTE, "资料说明")]))
+check("an argument with lone surrogates under a UTF-8 locale has no code set to read it in: it stays",
+      repaired("", as_arg) == as_arg, "")
+check("... and bytes that the locale's code set cannot read stay as they are",
+      repaired("gbk", "\udcff\udcff") == "\udcff\udcff", "")
+check("... and one that names a code set Python does not know stays too",
+      repaired("no-such-codec", as_arg) == as_arg, "")
+lone = attempt(lambda: __import__("answer").not_found({}, "first line\nsecond line", "content.md", "\udca1\udca4 words"))
+check("a quote with lone surrogates that nothing repairs is said as not found, with no internal error (the outline "
+      "could not be written: UTF-8 cannot hold them)",
+      isinstance(lone, str) and "── not in content.md: " in lone and "words" in lone, ascii(lone)[:120])
+
+psrv = serve({"/plans": (200, {"Content-Type": "text/html; charset=utf-8"}, PLANS),
+              "/%E4%B8%AD%E6%96%87": (200, {"Content-Type": "text/html; charset=utf-8"}, PLANS)})   # /中文, as a browser asks
+try:
+    m9 = module()
+    folder = tempfile.mkdtemp(prefix="rp-9c-", dir=ROOT)
+
+    def run_main(*flags):
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                m9.main([psrv.url("/plans"), "--dir", folder] + list(flags))
+        except Exception as e:                                    # noqa: BLE001
+            buf.write("EXCEPTION %s: %s" % (type(e).__name__, e))
+        return buf.getvalue()
+
+    run_main()
+    with open(os.path.join(folder, "content.md"), encoding="utf-8") as fh_:
+        saved_lines = fh_.read().split("\n")
+    tab_line = next((i for i, ln in enumerate(saved_lines, 1) if "Developer Plan Limits]" in ln and "[tab" in ln), 0)
+    zh_line = next((i for i, ln in enumerate(saved_lines, 1) if "资料说明" in ln), 0)
+
+    def started(text_):
+        found = re.search(r"── content\.md: lines (\d+)-", text_)
+        return int(found.group(1)) if found else (0 if "── not in content.md" in text_ else -1)
+    ownenv._CODESET[:] = ["gbk"]
+    try:
+        said_gbk = run_main("--from", as_arg)
+        said_clean = run_main("--from", QUOTE)
+        said_zh = run_main("--from", "资料说明")
+        said_zh_bytes = run_main("--from", "资料说明".encode("gbk").decode("utf-8", "surrogateescape"))
+    finally:
+        ownenv._CODESET[:] = real_codeset
+    check("the CLI: `--from` given the quote as GBK bytes under a GBK locale goes to the tab's line",
+          tab_line and started(said_gbk) == tab_line, "line %s, answer starts at %s; %s" % (
+              tab_line, started(said_gbk), said_gbk[-80:].replace("\n", " | ")))
+    check("... a Chinese quote in GBK bytes too", zh_line and started(said_zh_bytes) == zh_line,
+          "line %s, answer starts at %s" % (zh_line, started(said_zh_bytes)))
+    check("... and the same quotes as clean UTF-8 text go there as before (nothing is re-decoded)",
+          tab_line and started(said_clean) == tab_line and started(said_zh) == zh_line,
+          "%s %s of %s %s" % (started(said_clean), started(said_zh), tab_line, zh_line))
+    # the other words an argument holds: an address typed in the locale's code set is the address a browser asks for
+    # (the UTF-8 escapes of 中文), not `%3F%3F` for lone surrogates
+    zh_url = psrv.url("/") + "中文".encode("gbk").decode("utf-8", "surrogateescape")
+    for label, arg_, name in (("typed in GBK bytes", zh_url, "gbk"), ("typed as UTF-8", psrv.url("/") + "中文", "gbk")):
+        buf9 = io.StringIO()
+        ownenv._CODESET[:] = [name]
+        try:
+            with contextlib.redirect_stdout(buf9):
+                m9.main([arg_, "--dir", tempfile.mkdtemp(prefix="rp-9c-url-", dir=ROOT), "--refresh"])
+        except Exception as e:                                    # noqa: BLE001
+            buf9.write("EXCEPTION %s: %s" % (type(e).__name__, e))
+        finally:
+            ownenv._CODESET[:] = real_codeset
+        check("an address with 中文 %s under a GBK locale is read: the page, not a 404 for `%%3F%%3F`" % label,
+              buf9.getvalue().startswith("read-page · ok"), buf9.getvalue().split("\n")[0][:110])
+finally:
+    psrv.close()
+
+# the real thing, where the OS has the locale (Linux): a child, told -X utf8 as the harness runs them, given the quote
+# as the GBK parent's bytes under LC_ALL=zh_CN.GBK
+have_ = []
+if os.name == "posix":
+    try:
+        have_ = subprocess.run(["locale", "-a"], capture_output=True, timeout=30).stdout.decode("ascii", "replace").split()
+    except (OSError, subprocess.SubprocessError):
+        have_ = []
+gbk_loc = next((x for x in have_ if x.lower().replace("-", "") in ("zh_cn.gbk", "zh_cn.gb18030")), "")
+if not gbk_loc:
+    check.skip("the CLI under a GBK locale, given the quote as GBK bytes", "no POSIX zh_CN.GBK locale here")
+else:
+    psrv = serve({"/plans": (200, {"Content-Type": "text/html; charset=utf-8"}, PLANS)})
+    try:
+        out9 = os.path.join(ROOT, "out-9c-real")
+        e9 = dict(os.environ, READ_PAGE_CACHE=os.path.join(ROOT, "cache-9c-real"), READ_PAGE_TEST_PUBLIC_HOST=PUBLIC,
+                  LC_ALL=gbk_loc, READ_PAGE_SKIP="env")
+        e9.pop("PYTHONUTF8", None)
+        base_ = [os.fsencode(sys.executable), b"-X", b"utf8", os.fsencode(SCRIPT), psrv.url("/plans").encode("ascii"),
+                 b"--dir", os.fsencode(out9)]
+        subprocess.run(base_, capture_output=True, timeout=240, env=e9)
+        p9 = subprocess.run(base_ + [b"--from", as_bytes], capture_output=True, timeout=240, env=e9)
+        t9 = p9.stdout.decode("utf-8", "replace")
+        check("the CLI under %s given the quote as GBK bytes (a parent in GBK): the tab's line, not \"not in content.md\"" % gbk_loc,
+              p9.returncode == 0 and "── content.md: lines %d-" % tab_line in t9,
+              t9.split("\n")[-3][:100] if t9 else str(p9.stderr[:100]))
+    finally:
+        psrv.close()
 
 shutil.rmtree(ROOT, ignore_errors=True)
 sys.exit(check.done())
