@@ -25,7 +25,8 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   the 40-word rule. A workbook cut in its first sheet now reads (its `[Content_Types].xml` named shared strings no
   sheet had asked for, and openpyxl gave up). Measured on the 9 Excel workbooks cut at 21 points: every rows marker
   right (78), lost sheets named where they stood on 36 of 47 cuts and on none of the 11 whose workbook.xml had not
-  arrived, no marker where nothing was lost.
+  arrived, no marker where nothing was lost; on the ODS corpus's 326 cuts in content.xml every rows marker right
+  (259), the lost sheets named or counted on all 53 cuts whose settings.xml or meta.xml had arrived.
 - **One marker grammar, the pictures included** (KNOWN-ISSUES 266): every marker is its type, its state, what more
   there is to say, its name last; a picture not downloaded is now `[img #3 · not downloaded: 404 · alt] https://...`
   (it was `[img #3 · alt · not downloaded: 404]`), one on disk as before. The answer's short repeats, the window's
