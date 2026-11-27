@@ -53,6 +53,23 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
 - **A model process that ends at a page costs that page alone** (KNOWN-ISSUES 272): the page goes to another
   process once and is named only when that one ends at it too; the pages after it are laid out (on 6e514c6 they
   were named "the layout model did not work").
+- **The MCP `probe`'s description names `chars`**: a page of probes, it said, is answered "with from and to";
+  `to` is gone (KNOWN-ISSUES 277).
+- **After a cut, the last size that came back whole** (KNOWN-ISSUES 280): SKILL.md said to go on from a cut answer
+  with about half the `--chars`. Under Cline's cut of the middle the answer's `next:` survives and repeats the size
+  that was cut, and Haiku kept it, filling each gap with a small `--from "<quote>"` call: 15 and 17 calls for 99 % and
+  96 % of a 474-line essay; "about half", worded two ways, took 11-20 calls for 86-100 % (half of 20 000 is still
+  over Cline's 8 000). Now: go on where the text you saw breaks off with the last `--chars` that came back whole
+  (7 900, the default, if none did), and keep that size for the rest; the MCP `read` description says the same of
+  `chars`. Under Cline's cut 3 runs of 3 read 100 % in 10-11 calls: 20 000 (cut), a quote at 7 900, then 7 900 to the
+  end. An agent that raised the size goes back to it after a cut, not to 7 900: raised to 20 000 and cut at 28 000,
+  6 runs of 6 went on at 20 000 (one filled the gap at 7 900 first) and read a 1 786-line page whole.
+- **The line above the text names where it starts, not where it ends** (KNOWN-ISSUES 279):
+  `── content.md: from line 53 of 474 ──` in place of `lines 53-182 of 474`; the end is named in `next:` and in EOF
+  alone. Zed keeps the head of a command's output and cuts its tail, `next:` with it, and leaves the line above the
+  text: Haiku took the end it named for the end of what it had seen and went on after it, 2 runs of 2 skipping 27
+  lines of a 474-line essay (94 % read). With the start alone 6 runs of 6 read 100 %, each going on from a quote of
+  the last line it saw. CLI and MCP alike; SKILL.md's example, `references/answer.md`, `references/mcp.md`, README.
 - **`tests/cjk.py`: the read into a folder named in Chinese takes several blocks whatever reads it** - a local file of
   300 lines, each its own, in place of a page of one paragraph again and again, which trafilatura (CI has no
   defuddle) took as 3 lines with no `next:`, so both checks of its command failed on every CI job.

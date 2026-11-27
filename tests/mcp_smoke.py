@@ -118,7 +118,7 @@ check("the whole result as Cline counts it (its JSON) fits too", cline_form(res)
 nxt = int(nxt_m.group(1)) if nxt_m else None
 if nxt:
     more = call("read", {"dir": folder, "file": "content.md", "from": nxt})
-    check("read continues at that line", ("── content.md: lines %d-" % nxt) in mcp_said(more),
+    check("read continues at that line", ("── content.md: from line %d of " % nxt) in mcp_said(more),
           mcp_said(more).split("\n")[0][:70])
     check("read header names the file", "content.md" in more["content"][0]["text"].splitlines()[0],
           more["content"][0]["text"].splitlines()[0][:70])

@@ -21,14 +21,16 @@ outline (line, heading):
       1 ## Installation
      27 ## Configuration
       …
-── content.md: lines 1-126 of 389 ──
+── content.md: from line 1 of 389 ──
 (the text)
 ── next: line 127 of 389 ──
 python3 -X utf8 "/home/me/.agents/skills/read-page/scripts/readpage.py" "https://example.com/a" --allow-external --from 127 --chars 7900 --file content.md
 ```
 
-The lines around the text are dry (KNOWN-ISSUES 276): above it `── content.md: lines 1-126 of 389 ──`, every block
-alike (a text that fits too: `lines 1-12 of 12`); below it, while text remains, `── next: line 127 of 389 ──` and
+The lines around the text are dry (KNOWN-ISSUES 276): above it `── content.md: from line 1 of 389 ──`, every block
+alike (a text that fits too: `from line 1 of 12`) - where the text starts, never where it ends: a harness that keeps
+an answer's head and cuts its tail (Zed) cuts `next:` off and leaves this line, and a model took an end named there
+for the end of what it had seen (KNOWN-ISSUES 279); below it, while text remains, `── next: line 127 of 389 ──` and
 on a line of its own the command that reads on, literal, so that a model copies it whole - the interpreter by the
 name the agent started the skill with (the first process's, which the environment's child is handed), `-X utf8`,
 the script by its absolute path in forward slashes, the address and `--dir` in double quotes, the flags that matter

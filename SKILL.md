@@ -37,7 +37,7 @@ python -X utf8 "SKILL_DIR/scripts/readpage.py" URL --allow-external
 read-page · ok · defuddle · content.md 24.7 KB, 389 lines · 1.9 s
 files: /tmp/read-page-1000/pages/example.com-9c1f… (content.md, page.md, manifest.json)
 outline (line, heading): …
-── content.md: lines 1-126 of 389 ──
+── content.md: from line 1 of 389 ──
 (the text)
 ── next: line 127 of 389 ──
 python -X utf8 "SKILL_DIR/scripts/readpage.py" URL --allow-external --from 127 --chars 7900 --file content.md
@@ -46,9 +46,9 @@ python -X utf8 "SKILL_DIR/scripts/readpage.py" URL --allow-external --from 127 -
 - The rest of a long text, when you need it: run the command under `next:` (the saved copy, no network); `EOF`
   marks the end. For more at once raise `--chars` in it (7 900 fits every tool): to your tool's output limit if
   you know it, else to about 20 000. If an answer comes back cut (a gap, a note like `truncated` or `omitted`) or
-  saved to a file, go on where it breaks off - `--from "<words of the last line before the gap>"`, or the same
-  `--from` if its start is missing - with about half the `--chars`. Keep the size that comes whole, for the next
-  pages too.
+  saved to a file, go on where the text you saw breaks off - `--from "<words of the last line before the gap>"`,
+  or the same `--from` if its start is missing - with the last `--chars` that came back whole (7 900, the
+  default, if none did), and keep that size for the rest.
 - `content.md` is the main text; `--file page.md` gives the whole page (menus, every link with its
   address, the site's layout), `--screenshots [N]` how it looks, N screens.
 - Markers stand where a page has a picture or tab, `[type · state · name]`:

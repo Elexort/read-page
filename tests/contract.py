@@ -192,11 +192,11 @@ def fits(name, r):
 
 
 def body(text):
-    """The text lines of one answer: after the `── file: lines ...` line, before the pointer - `── next: ...` and
-    the command under it - or the end, `── EOF ...`."""
+    """The text lines of one answer: after the `── file: from line N of T ──` line, before the pointer - `── next: ...`
+    and the command under it - or the end, `── EOF ...`."""
     lines = text.split("\n")
     i = next((k for k, ln in enumerate(lines) if ln.startswith("── ") and not ln.startswith("── EOF ")
-              and (": lines " in ln or ": all " in ln)), None)
+              and ": from line " in ln), None)
     if i is None:
         return []
     rest = lines[i + 1:]
@@ -230,8 +230,8 @@ try:
     r = run_read(srv.url("/short"))
     fits("short", r)
     n_short = len(lines_of(r))
-    check("short: the whole text, no outline, no pointer, its lines above it and EOF its last line (KNOWN-ISSUES 276)",
-          "── content.md: lines 1-%d of %d ──" % (n_short, n_short) in r.text and "outline" not in r.text
+    check("short: the whole text, no outline, no pointer, its start above it and EOF its last line (KNOWN-ISSUES 276)",
+          "── content.md: from line 1 of %d ──" % n_short in r.text and "outline" not in r.text
           and next_line(r.text) is None and body(r.text) == lines_of(r)
           and last_rows(r.text, 1) == ["── EOF content.md: lines 1-%d of %d ──" % (n_short, n_short)],
           str(last_rows(r.text, 1))[:90])
@@ -282,10 +282,11 @@ try:
         check(path + ": every block fits and starts at its line", not over, str(over[:3]))
         check(path + ": the blocks put together are content.md", got == saved,
               "%d of %d lines, %d answers" % (len(got), len(saved), hops + 1))
-        top = re.findall(r"── content\.md: lines (\d+)-(\d+) of (\d+) ──", more.text)
+        top = re.findall(r"── content\.md: from line (\d+) of (\d+) ──", more.text)
         check(path + ": the last block's last line is EOF, with the lines it holds (KNOWN-ISSUES 276)",
-              top and last_rows(more.text, 1) == ["── EOF content.md: lines %s-%s of %s ──" % top[-1]]
-              and top[-1][1] == top[-1][2] == str(len(saved)), str(last_rows(more.text, 1))[:90])
+              top and last_rows(more.text, 1) == ["── EOF content.md: lines %s-%d of %d ──" % (top[-1][0], len(saved),
+                                                                                             len(saved))]
+              and top[-1][1] == str(len(saved)), str(last_rows(more.text, 1))[:90])
 
     # the outline points at real headings
     first = run_read(srv.url("/long"))
@@ -342,24 +343,24 @@ try:
     # a forgotten --file goes on in the file read last; --file switches it
     on = run_read(srv.url("/long"), "--from", str(n or 1), reuse=whole)
     check("--from without --file goes on in page.md when page.md was read last",
-          "── page.md: lines %d-" % (n or 1) in on.text
+          "── page.md: from line %d of " % (n or 1) in on.text
           and body(on.text)[:1] == lines_of(whole, "page.md")[(n or 1) - 1:(n or 1)], first_line(on)[:80])
     plain = run_read(srv.url("/long"))
     k = next_line(plain.text)
     run_read(srv.url("/long"), "--from", "1", "--file", "page.md", reuse=plain)     # switch to the other file
     stay = run_read(srv.url("/long"), "--from", str(k), reuse=plain)
     check("--file switches the file: a later --from without --file stays in page.md",
-          "── page.md: lines %d-" % k in stay.text and body(stay.text)[:1] == lines_of(plain, "page.md")[k - 1:k],
+          "── page.md: from line %d of " % k in stay.text and body(stay.text)[:1] == lines_of(plain, "page.md")[k - 1:k],
           first_line(stay)[:80])
     back = run_read(srv.url("/long"), "--from", str(k), "--file", "content.md", reuse=plain)
     check("the first pointer, which names content.md, still leads back to content.md",
-          "── content.md: lines %d-" % k in back.text and body(back.text)[:1] == lines_of(plain)[k - 1:k],
+          "── content.md: from line %d of " % k in back.text and body(back.text)[:1] == lines_of(plain)[k - 1:k],
           first_line(back)[:80])
     anew = run_read(srv.url("/long"), reuse=plain)
-    check("a new reading (no --from) starts at content.md again", "── content.md: lines 1-" in anew.text,
+    check("a new reading (no --from) starts at content.md again", "── content.md: from line 1 of " in anew.text,
           first_line(anew)[:80])
 
-    # the answer's lines (KNOWN-ISSUES 276): above the text `── content.md: lines A-B of T ──`, every block alike;
+    # the answer's lines (KNOWN-ISSUES 276): above the text `── content.md: from line A of T ──`, every block alike;
     # below it, while text remains, `── next: line N of T ──` and on a line of its own the command that reads on,
     # literal - run here as printed in each shell the machine has; the end is `── EOF content.md: lines A-T of T ──`
     import ownenv                                              # noqa: E402
@@ -389,7 +390,7 @@ try:
         said = p.stdout.decode("utf-8", "replace")
         ran.append(name)
         check("... run as printed in %s: the next block, from line %d" % (name, n),
-              p.returncode == 0 and "── content.md: lines %d-" % n in said and body(said)[:1] == saved[n - 1:n],
+              p.returncode == 0 and "── content.md: from line %d of " % n in said and body(said)[:1] == saved[n - 1:n],
               "rc %s %s" % (p.returncode, (said.split("\n")[0] or p.stderr.decode("utf-8", "replace")[-160:])[:100]))
     check("... in the shells this machine has (cmd and PowerShell on Windows at the least): %s" % ", ".join(ran),
           len(ran) >= (2 if os.name == "nt" else 1), str(ran))
@@ -416,7 +417,24 @@ try:
     ign = next((ln for ln in stray.text.split("\n") if ln.startswith("ignored: ")), "")
     check("a stray ── (a model copied the decoration): left out and named, the read goes on",
           stray.rc == 0 and ign == "ignored: ── (the answer's decoration, not part of the command)"
-          and "── content.md: lines 5-" in stray.text, ign or first_line(stray)[:80])
+          and "── content.md: from line 5 of " in stray.text, ign or first_line(stray)[:80])
+
+    # the line above the text names where it starts, and no end (KNOWN-ISSUES 279): a harness that keeps an answer's
+    # head and cuts its tail (Zed) cuts next: off and leaves that line, and a model took the end it named for the end
+    # of what it had seen and went on after lines it never saw. The end is named in next: and in EOF alone
+    def tops(text):
+        return [ln for ln in text.split("\n") if re.match(r"── (content|page)\.md: ", ln)]
+
+    on_top = run_read(srv.url("/long"), "--from", str(n), "--file", "content.md", reuse=first)
+    page_top = run_read(srv.url("/long"), "--file", "page.md")
+    short_top = run_read(srv.url("/short"))
+    got_tops = [tops(r.text) for r in (first, on_top, page_top, short_top)]
+    want_tops = [["── content.md: from line 1 of %d ──" % len(saved)],
+                 ["── content.md: from line %d of %d ──" % (n, len(saved))],
+                 ["── page.md: from line 1 of %d ──" % len(lines_of(page_top, "page.md"))],
+                 ["── content.md: from line 1 of %d ──" % len(lines_of(short_top))]]
+    check("the line above the text names where it starts and of how many lines, no end: a first block, a later one, "
+          "page.md, a text that fits (KNOWN-ISSUES 279)", got_tops == want_tops, str(got_tops)[:200])
 
     # --chars C, one knob in characters (KNOWN-ISSUES 277): the whole answer - header, outline, the lines above and
     # below the text - within C characters (UTF-16 units), C x 9 980 / 7 900 bytes and C x 495 / 7 900 lines, whole
@@ -445,7 +463,7 @@ try:
     at_q = next(i for i, ln in enumerate(saved, 1) if "Sentence 300.4 explains" in ln)
     q = run_read(srv.url("/plainlong"), "--from", "Sentence 300.4 explains", "--chars", "3000", reuse=plain)
     check("--from \"text\" --chars 3000: from the quote's line, within 3 000 characters",
-          within(q, 3000) and "── content.md: lines %d-" % at_q in q.text and body(q.text)[:1] == saved[at_q - 1:at_q],
+          within(q, 3000) and "── content.md: from line %d of " % at_q in q.text and body(q.text)[:1] == saved[at_q - 1:at_q],
           size(q))
     d0 = run_read(srv.url("/plainlong"), "--from", "5", reuse=plain)
     d79 = run_read(srv.url("/plainlong"), "--from", "5", "--chars", "7900", reuse=plain)
@@ -459,7 +477,7 @@ try:
         r = run_read(srv.url("/plainlong"), "--from", "5", "--chars", value, reuse=plain)
         ign = next((ln for ln in r.text.split("\n") if ln.startswith("ignored: ")), "")
         check("--chars %s: %d used, named on ignored:, the read goes on" % (value, used),
-              r.rc == 0 and note in ign and within(r, used) and "── content.md: lines 5-" in r.text
+              r.rc == 0 and note in ign and within(r, used) and "── content.md: from line 5 of " in r.text
               and (used < 100000 or u16(r.text) > 100000), ign[:90] + " | " + size(r))
     one = run_read(srv.url("/oneline"), "--chars", "1000")
     check("--chars 1000, lines of 1 998 characters: one line at least, its head, within 1 000",
@@ -467,7 +485,7 @@ try:
     gone = run_read(srv.url("/plainlong"), "--from", "50", "--to", "60", reuse=plain)
     ign = next((ln for ln in gone.text.split("\n") if ln.startswith("ignored: ")), "")
     check("--to is gone: left out and named, the usual block from --from",
-          ign == "ignored: --to 60 (gone: --chars sets the size)" and "── content.md: lines 50-" in gone.text
+          ign == "ignored: --to 60 (gone: --chars sets the size)" and "── content.md: from line 50 of " in gone.text
           and " sent" not in gone.text and next_line(gone.text) and within(gone, 7900), ign or first_line(gone)[:80])
     alone = run_read(srv.url("/short"), "--to", "3")
     check("--to alone is gone too: the whole short text, the note", "--to 3 (gone: --chars sets the size)" in alone.text
@@ -517,6 +535,9 @@ try:
     zed = run_read(srv.url("/plainlong"), "--chars", "20000", env={"READ_PAGE_TEST_CUT": "head:16384"})
     check("... head:16384 on the CLI: the head alone, no next: line", zed.text.startswith("Command output too long. ")
           and "── next:" not in zed.text and len(zed.out) <= 16384 + 60, "%d bytes" % len(zed.out))
+    check("... and the line above its text names no end, which a model whose next: was cut off would take for the end "
+          "of what it saw (KNOWN-ISSUES 279)",
+          tops(zed.text) == ["── content.md: from line 1 of %d ──" % len(lines_of(zed))], str(tops(zed.text))[:120])
     js = run_read(srv.url("/plainlong"), "--json", env={"READ_PAGE_TEST_CUT": "middle:2000"})
     check("... --json is never cut", js.text.lstrip().startswith("{") and "...[truncated" not in js.text, js.text[:40])
 
@@ -532,33 +553,33 @@ try:
                        ("Sentence 20.4 explains one more detail\nSentence 20.5 explains", "two lines, by the first")):
         r = run_read(srv.url("/long"), "--from", quote, reuse=first)
         check("--from \"text\", %s: the answer starts at the line holding it" % why,
-              "── content.md: lines %d-" % at in r.text and body(r.text)[:1] == saved[at - 1:at]
-              and "ignored:" not in r.text, first_line(r)[:60] + " | " + (re.findall(r"── content\.md: lines \S+", r.text)
+              "── content.md: from line %d of " % at in r.text and body(r.text)[:1] == saved[at - 1:at]
+              and "ignored:" not in r.text, first_line(r)[:60] + " | " + (re.findall(r"── content\.md: from line \d+", r.text)
                                                                            or ["no block"])[0])
     many = "explains one more detail of the reader"
     hits = [i for i, ln in enumerate(saved, 1) if many in ln]
     run_read(srv.url("/long"), "--from", "1", reuse=first)
     r = run_read(srv.url("/long"), "--from", many, reuse=first)
     check("--from \"text\" that many lines hold: the first, the last answer having started at line 1",
-          "── content.md: lines %d-" % hits[0] in r.text, (re.findall(r"── content\.md: lines \S+", r.text) or [""])[0])
+          "── content.md: from line %d of " % hits[0] in r.text, (re.findall(r"── content\.md: from line \d+", r.text) or [""])[0])
     run_read(srv.url("/long"), "--from", str(hits[3] - 1), reuse=first)
     r = run_read(srv.url("/long"), "--from", many, reuse=first)
     check("... and the first after where the last answer started (line %d)" % (hits[3] - 1),
-          "── content.md: lines %d-" % hits[3] in r.text, (re.findall(r"── content\.md: lines \S+", r.text) or [""])[0])
+          "── content.md: from line %d of " % hits[3] in r.text, (re.findall(r"── content\.md: from line \d+", r.text) or [""])[0])
     r = run_read(srv.url("/long"), "--from", "no line of this page holds these words", reuse=first)
     check("--from \"text\" not found: the answer says so and shows the outline, no text",
           '── not in content.md: "no line of this page holds these words", spaces and case aside; the outline below '
           'names its lines for --from N ──' in r.text and "outline (line, heading):" in r.text
-          and re.search(r"^\s+\d+ ## Section 30$", r.text, re.M) and "── content.md: lines" not in r.text
+          and re.search(r"^\s+\d+ ## Section 30$", r.text, re.M) and "── content.md: from line" not in r.text
           and "Sentence 1.1" not in r.text, r.text.split("\n")[-2][:90])
     r = run_read(srv.url("/long"), "--from", "Sentence 20.4 explains", "--file", "page.md", reuse=first)
     pm = lines_of(first, "page.md")
     at_p = next(i for i, ln in enumerate(pm, 1) if "Sentence 20.4 explains" in ln)
-    check("--from \"text\" in page.md alike", "── page.md: lines %d-" % at_p in r.text, first_line(r)[:80])
+    check("--from \"text\" in page.md alike", "── page.md: from line %d of " % at_p in r.text, first_line(r)[:80])
     r = run_read(srv.url("/long"), "--from", "Sentence 20.4 explains", "--chars", "1500", "--file", "content.md",
                  reuse=first)
     check("--from \"text\" --chars 1500: from the quote's line, within 1 500 characters",
-          "── content.md: lines %d-" % at in r.text and body(r.text)[:1] == saved[at - 1:at]
+          "── content.md: from line %d of " % at in r.text and body(r.text)[:1] == saved[at - 1:at]
           and u16(r.text) <= 1500, "%d characters" % u16(r.text))
     tabs_r = run_read(srv.url("/tabs"))
     tl = lines_of(tabs_r)
@@ -568,8 +589,8 @@ try:
         line = next((i for i, ln in enumerate(tl, 1) if want in ln), None)
         r = run_read(srv.url("/tabs"), "--from", quote, reuse=tabs_r)
         check("--from \"%s\": the marker is found whatever its state says" % quote,
-              line and "── content.md: lines %d-" % line in r.text, "line %s; %s" % (
-                  line, (re.findall(r"── content\.md: lines \S+|── not in .*", r.text) or [""])[0][:80]))
+              line and "── content.md: from line %d of " % line in r.text, "line %s; %s" % (
+                  line, (re.findall(r"── content\.md: from line \d+|── not in .*", r.text) or [""])[0][:80]))
     # a quote that ends INSIDE a marker - what an agent quotes when its harness cut the answer in the middle of a
     # picture's or a tab's line (Cline keeps about 3 985 characters at each end): the line as it stands is matched
     # too, whitespace folded, so a part of a marker and a marker quoted without its state are both found
@@ -585,13 +606,13 @@ try:
                              ("  usage   CHART]  " + srv.url("/CHART.png"), img_at, "... with spaces and case aside")):
         r = run_read(srv.url("/tabs"), "--from", quote, reuse=tabs_r)
         check("--from \"%s\": %s is found" % (quote.strip(), why),
-              "── content.md: lines %d-" % want in r.text, "line %s; %s" % (
-                  want, (re.findall(r"── content\.md: lines \S+|── not in .*", r.text) or [""])[0][:80]))
+              "── content.md: from line %d of " % want in r.text, "line %s; %s" % (
+                  want, (re.findall(r"── content\.md: from line \d+|── not in .*", r.text) or [""])[0][:80]))
     # the order of preference does not change: an exact match at or after the last answer's start comes first
     r = run_read(srv.url("/tabs"), "--from", "Plan Limits]", reuse=tabs_r)
     free_at = next(i for i, ln in enumerate(tl, 1) if "[tab · shown · Free Plan Limits]" in ln)
     check("--from \"Plan Limits]\" (two markers hold it): the first, as before",
-          "── content.md: lines %d-" % free_at in r.text, (re.findall(r"── content\.md: lines \S+", r.text) or [""])[0])
+          "── content.md: from line %d of " % free_at in r.text, (re.findall(r"── content\.md: from line \d+", r.text) or [""])[0])
     # 300 000 marker lines, the case that was measured: the quote of a cut marker is found, and not slowly
     import time
     import answer                                              # noqa: E402
@@ -669,7 +690,7 @@ try:
     # a misspelled flag is the one meant, silently: --fil page.md prints page.md, --form 2 goes on
     r = run_read(srv.url("/short"), "--fil", "page.md", "--form", "2")
     check("a typo of a flag does what the flag does, with no note",
-          r.rc == 0 and "── page.md: lines 2-" in r.text and "ignored:" not in r.text, first_line(r)[:90])
+          r.rc == 0 and "── page.md: from line 2 of " in r.text and "ignored:" not in r.text, first_line(r)[:90])
     r = run_read("--until", "5", srv.url("/short"))        # the stray flag first, its value taken for the URL
     check("a stray flag before the URL: the URL is still the one read",
           r.rc == 0 and r.text.startswith("read-page · ok") and "ignored: --until 5" in r.text, first_line(r)[:90])
@@ -761,8 +782,14 @@ try:
           rows_m[-1][:140])
     on_m = mcp({"dir": call_m.group(1), "file": "content.md", "from": int(call_m.group(2)), "chars": 7900},
                "read") if call_m else {}
-    check("... that call, as printed, gives the next block", ("── content.md: lines %d-" % n) in mcp_said(on_m),
+    check("... that call, as printed, gives the next block", ("── content.md: from line %d of " % n) in mcp_said(on_m),
           mcp_said(on_m)[:80])
+    with open(os.path.join(d, "content.md"), encoding="utf-8") as fh_:
+        n_long = len(fh_.read().rstrip("\n").split("\n"))
+    m_tops = [tops(mcp_said(x)) for x in (res, on_m)]
+    check("MCP: the line above the text names where it starts and of how many lines, no end (KNOWN-ISSUES 279)",
+          m_tops == [["── content.md: from line 1 of %d ──" % n_long], ["── content.md: from line %d of %d ──" % (n, n_long)]],
+          str(m_tops)[:160])
     rp = mcp_server.readpage
     ns = argparse.Namespace(url="https://example.com/a", target="https://example.com/a", dir="", allow_external=True,
                             force_external=True, alternate=True, deny_images=True, download=True, refresh=True,
@@ -774,10 +801,10 @@ try:
           '--download --from 12 --chars 20000 --file page.md' % (me, slashed(SCRIPT)),
           cmd[:160])
     res2 = mcp({"dir": d, "from": n}, "read")
-    check("MCP read: the block at that line", ("── content.md: lines %d-" % n) in mcp_said(res2), mcp_said(res2)[:70])
+    check("MCP read: the block at that line", ("── content.md: from line %d of " % n) in mcp_said(res2), mcp_said(res2)[:70])
     res3 = mcp({"url": srv.url("/long"), "from": n})
     said3 = mcp_said(res3)
-    check("MCP read_url from=N: the same block", ("lines %d-" % n) in said3, said3.split("\n")[0][:70])
+    check("MCP read_url from=N: the same block", ("from line %d of " % n) in said3, said3.split("\n")[0][:70])
     long_lines = open(os.path.join(d, "content.md"), encoding="utf-8").read().rstrip("\n").split("\n")
     # chars, as --chars (KNOWN-ISSUES 277): the whole result as Cline counts it within that many; to is gone
     rc20 = mcp({"url": srv.url("/plainlong"), "chars": 20000})
@@ -786,19 +813,19 @@ try:
           "%d characters as JSON; %s" % (cline_form(rc20), mcp_said(rc20).rstrip("\n").split("\n")[-1][-60:]))
     rc3 = mcp({"dir": d, "from": 121, "chars": 3000}, "read")
     check("MCP read chars=3000: from line 121, as Cline counts it within 3 000 characters",
-          cline_form(rc3) <= 3000 and "── content.md: lines 121-" in mcp_said(rc3) and "chars=3000" in mcp_said(rc3),
+          cline_form(rc3) <= 3000 and "── content.md: from line 121 of " in mcp_said(rc3) and "chars=3000" in mcp_said(rc3),
           "%d characters as JSON" % cline_form(rc3))
     rc1 = mcp({"dir": d, "from": 121, "chars": "99"}, "read")
     check("MCP chars=99: 1 000 used, named on ignored:", "chars 99 (1000 at the least: 1000 used)" in mcp_said(rc1)
           and cline_form(rc1) <= 1000, next((ln for ln in mcp_said(rc1).split("\n") if ln.startswith("ignored")), ""))
     rt = mcp({"url": srv.url("/long"), "from": 1, "to": 120})
     check("MCP read_url to= is gone: named on ignored:, the usual block",
-          "to 120 (gone: chars sets the size)" in mcp_said(rt) and "── content.md: lines 1-" in mcp_said(rt)
+          "to 120 (gone: chars sets the size)" in mcp_said(rt) and "── content.md: from line 1 of " in mcp_said(rt)
           and " sent" not in mcp_said(rt) and cline_form(rt) <= CHARS,
           next((ln for ln in mcp_said(rt).split("\n") if ln.startswith("ignored")), mcp_said(rt)[:80]))
     rr = mcp({"dir": d, "from": 121, "to": 130}, "read")
     check("MCP read to= is gone too", "to 130 (gone: chars sets the size)" in mcp_said(rr)
-          and "── content.md: lines 121-" in mcp_said(rr), mcp_said(rr)[:90])
+          and "── content.md: from line 121 of " in mcp_said(rr), mcp_said(rr)[:90])
     # READ_PAGE_TEST_CUT over MCP: the result's text cut the same way, one text block
     os.environ["READ_PAGE_TEST_CUT"] = "middle:8000"
     try:
@@ -816,10 +843,10 @@ try:
     at = next(i for i, ln in enumerate(long_lines, 1) if "Sentence 20.4 explains" in ln)
     rq = mcp({"url": srv.url("/long"), "from": "sentence 20.4 EXPLAINS"})
     said_q = mcp_said(rq)
-    check("MCP read_url from=\"text\": from the line holding it", ("── content.md: lines %d-" % at) in said_q,
-          (re.findall(r"── content\.md: lines \S+", said_q) or [""])[0])
+    check("MCP read_url from=\"text\": from the line holding it", ("── content.md: from line %d of " % at) in said_q,
+          (re.findall(r"── content\.md: from line \d+", said_q) or [""])[0])
     rq = mcp({"dir": d, "from": "20.4 explains one"}, "read")
-    check("MCP read from=\"text\": from the line holding it", ("── content.md: lines %d-" % at) in mcp_said(rq),
+    check("MCP read from=\"text\": from the line holding it", ("── content.md: from line %d of " % at) in mcp_said(rq),
           mcp_said(rq).split("\n")[-2][:80])
     rq = mcp({"dir": d, "from": "words no line holds"}, "read")
     check("MCP read from=\"text\" not found: the outline", '── not in content.md: "words no line holds"'
@@ -851,7 +878,7 @@ try:
     res4 = mcp({"url": srv.url("/long"), "file": "page.md"})
     n4 = next_line(mcp_said(res4))
     res5 = mcp({"dir": mcp_dir(res4), "from": n4}, "read")
-    check("MCP read without file goes on in the file read last", ("── page.md: lines %d-" % n4) in mcp_said(res5),
+    check("MCP read without file goes on in the file read last", ("── page.md: from line %d of " % n4) in mcp_said(res5),
           mcp_said(res5).split("\n")[0][:70])
     old = mcp_server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
                              "params": {"name": "read", "arguments": {"dir": d, "offset": 5}}})
@@ -859,7 +886,7 @@ try:
     said = mcp_said(old.get("result"))
     check("MCP: an old offset argument is left out and named, the text still comes",
           not (old.get("result") or {}).get("isError") and "ignored: offset (no such parameter)" in said
-          and "lines 1-" in said, said.split("\n")[0][:90])
+          and ": from line 1 of " in said, said.split("\n")[0][:90])
     for args, tool, why in (({"url": ""}, "read_url", "a call with no url"),
                             ({"dir": os.path.join(tempfile.gettempdir(), "no-such-read-page-folder")}, "read", "no such folder"),
                             ({"dir": d, "file": "img/none.png"}, "read", "no such file")):
@@ -1010,9 +1037,22 @@ check("SKILL.md's example answer ends as an answer does: `── next: line N of
       and re.match(r'python -X utf8 "SKILL_DIR/scripts/readpage\.py" URL .*--from %s --chars 7900 --file content\.md$'
                    % re.match(r"── next: line (\d+)", ex_rows[-2]).group(1), ex_rows[-1]) is not None
       if len(ex_rows) >= 2 and ex_rows[-2].startswith("── next: line ") else False, str(ex_rows[-2:])[:160])
-rest = next((p for p in skill.split("\n- ") if p.startswith("The rest of a long text")), "")
-check("SKILL.md: the rest of a text is the command under next:, EOF its end, --chars its size, half of it after a cut",
-      all(w in rest for w in ("`next:`", "`EOF`", "`--chars`", "20 000", "half", "--from \"<words of the last line"))
-      and "--to" not in skill, rest[:120].replace("\n", " "))
+rest = " ".join(next((p for p in skill.split("\n- ") if p.startswith("The rest of a long text")), "").split())
+# after a cut, the last size that came back whole (KNOWN-ISSUES 280): under Cline's middle cut next: survives and
+# repeats the size that was cut, and "about half the --chars" kept a model above the cut (half of 20 000 is 10 000);
+# the words of that rule, here once for both checks
+WHOLE_AGAIN = ("that came back whole", "(7 900, the default, if none did)", "keep that size for the rest")
+check("SKILL.md: the rest of a text is the command under next:, EOF its end, --chars its size; after a cut the last "
+      "--chars that came back whole, 7 900 if none did (KNOWN-ISSUES 280)",
+      all(w in rest for w in ("`next:`", "`EOF`", "`--chars`", "20 000", "--from \"<words of the last line")
+          + WHOLE_AGAIN) and "half" not in rest and "--to" not in skill, rest[:120])
+import mcp_server                                              # noqa: E402
+read_says = " ".join(next((t["description"] for t in mcp_server.TOOLS if t["name"] == "read"), "").split())
+check("the MCP read tool's description says the same of a cut: the last chars that came back whole (KNOWN-ISSUES 280)",
+      all(w in read_says for w in WHOLE_AGAIN) and "half" not in read_says, read_says[-160:])
+# to is gone (KNOWN-ISSUES 277): no description names it, the probe's - a page of probes read the normal way - neither
+probe_says = ((mcp_server.TOOLS[0].get("inputSchema") or {}).get("properties") or {}).get("probe", {}).get("description", "")
+check("the MCP probe's description names what a page of probes is read with, from and chars, not the gone to",
+      "with from and chars" in probe_says and "and to)" not in probe_says, probe_says[-70:])
 
 sys.exit(check.done())

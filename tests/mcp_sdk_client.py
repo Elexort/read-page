@@ -54,7 +54,7 @@ async def main():
                 more = await session.call_tool("read", {"dir": folder, "file": "content.md",
                                                         "from": int(nxt.group(1))})
                 said = "".join(getattr(b, "text", "") or "" for b in more.content)
-                print("read         %r" % (re.findall(r"── content\.md: lines \S+ of \d+", said) or [said[:60]])[0])
+                print("read         %r" % (re.findall(r"── content\.md: from line \d+ of \d+", said) or [said[:60]])[0])
             else:
                 print("read         (the page fit in one answer; reading from line 1)")
                 more = await session.call_tool("read", {"dir": folder})
