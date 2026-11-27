@@ -96,3 +96,15 @@ git-ignored, so a contributor may keep a file of their own under that name.
   outside the app, never from inside it.
 - On Windows, stopping a background test run leaves its children alive: kill the tree with
   `taskkill /T /PID <pid> /F` before starting another run.
+
+## Versions
+- The version strings (SKILL.md's metadata and date, `readpage.VERSION`, `mcp_server.SERVER_VERSION`, README) move only
+  when a version is pinned; until then CHANGELOG's "Unreleased" section gathers the changes, each in its own commit.
+- A version is pinned once: every suite and CI's whole matrix are green on the candidate; the acceptance bench has
+  run; the maintainer has tested the harnesses; and a stress round of a small model has run - several agents (Haiku),
+  each on a different research question made up for that round, finding sources by web search and reading them only
+  with the skill, each then answering a questionnaire on how the skill served it (what was missing, where it erred,
+  whether a text looked whole or cut, which advice it followed, what else would help). The round's questions and
+  procedure live outside the repository; its findings become KNOWN-ISSUES rows or changes, measured first.
+- A tag, a GitHub Release or an announcement only on the maintainer's word; the first release that is announced is
+  meant for 1.0.0.
