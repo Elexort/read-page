@@ -14,11 +14,16 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   threads the CPUs over the processes. The memory is the one guard: every read's processes on the machine together
   (a note in the cache) within 80 % of the free physical memory by a process's peak working set and, on Windows,
   80 % of the commit left by its private commit, and within a job's or a cgroup's room - `scripts/hostmem.py`, the
-  standard library alone. Two start at once when two fit by what one takes with `--setup`'s model (512 MB of each;
-  `tests/environment.py` fails when the lock moves the versions it was measured with); more once they say their
-  own figures, while the pages left outlast a new one's load, at most twice those that have laid a page out and
-  none while they wait for the CPU. Row 237's pace is the processes' together; one that runs out of memory gives
-  its page back.
+  standard library alone. A process counts as what one takes with `--setup`'s model (512 MB of each;
+  `tests/environment.py` fails when the lock moves the versions it was measured with), or its own figure where
+  larger: it grows over its pages (232-261 MB after its first, 300-371 at its last). Two start at once when two
+  fit; more once they say their figures, the room for each taken in the note under its lock, while the pages left
+  outlast a new one's load, at most twice those that have laid a page out and none while they wait for the CPU.
+  Row 237's pace is the processes' together, less the crowding they and the read make among themselves; one that
+  runs out of memory gives its page back. GPT-3's 33 table pages here 10.8-11.0 -> 7.0-7.3 s (8 processes), on 4
+  big cores 10.9-11.1 -> 7.6-7.7 s; on an emulated N100 12.6-12.8 -> 14.7-15.4 s with 43 tables on 29 pages
+  instead of 17 on 16; on two slow cores as before (12.8-12.9 s, 15 tables) or a little longer on a Celeron's
+  budget (15.7-16.4 s against 12.7-15.2, 16 tables against 13-14).
 - **A layout model process no longer commits memory it never touches** (KNOWN-ISSUES 270): numpy, which onnxruntime and
   pymupdf.layout import, started OpenBLAS with a thread a CPU, each committing a buffer of about 32 MB it never
   touched - 612 of a process's 731 MB of commit on 20 CPUs. The process runs OpenBLAS on one thread

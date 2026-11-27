@@ -772,6 +772,38 @@ try:
                   "that ended is dropped from the note", info.get("procs") == 1 and info.get("asked") == 6
                   and not any(x.get("pid") == dead.pid for x in left_note)
                   and sum(1 for x in left_note if x.get("pid") == os.getpid()) == 2, "%s %s" % (info, left_note))
+            # ... and processes that have laid a page out count as what one takes at most, not as what their first
+            # page took: they grow over their pages (GPT-3's from 0.25 to 0.45 GB), and a laptop's commit with them
+            os.environ["READ_PAGE_TEST_MEMORY"] = json.dumps({"phys": 2 << 30, "commit": 64 << 30})
+            small = dict(other, ram=256 << 20, commit=256 << 20, said=True)
+            note(lambda e: e.extend([dict(small), dict(small)]))
+            mod3.tables_reset()
+            info = mod3.pdf_tables(six_p, d6p, list(texts6))
+            mod3.tables_close(kill=True)
+            note(lambda e: e.__setitem__(slice(None), [x for x in e if x.get("pid") != os.getpid()]))
+            check("... and another read's two processes that said 256 MB after a page count as 512 each (80 % of "
+                  "2 GB holds one more): one process here", info.get("procs") == 1 and info.get("asked") == 6
+                  and not info.get("left"), str(info))
+
+            # row 237's pace with several processes: theirs together, less the crowding the read's own processes
+            # and its main thread make among themselves - two and the read on 2 CPUs are 1.5 times slower by that
+            # alone, and kept the step 15-20 s instead of 10 on two slow cores (2026-11-27)
+            class FakeProc:
+                def __init__(self, busy, work):
+                    self.busy, self.work = busy, work
+            keep_pool = list(mod3._TABLES["pool"])
+            os.environ["READ_PAGE_TEST_CPUS"] = "2"
+            try:
+                paces = []
+                for procs in ([FakeProc(3.0, 2.0)] * 2, [FakeProc(3.0, 2.0)], [FakeProc(6.0, 2.0)] * 2):
+                    mod3._TABLES["pool"][:] = procs
+                    paces.append(mod3.tables_pace())
+            finally:
+                mod3._TABLES["pool"][:] = keep_pool
+                os.environ.pop("READ_PAGE_TEST_CPUS", None)
+            check("242: two processes and the read on 2 CPUs crowd each other 1.5 times: they keep the 10 s; one "
+                  "process that slow gets 1.5 times them, two three times slower twice",
+                  paces[0] == 1.0 and abs(paces[1] - 1.5) < 0.01 and abs(paces[2] - 2.0) < 0.01, str(paces))
             for k in ("RP_STUB_SLEEP", "READ_PAGE_TEST_MEMORY", "READ_PAGE_TEST_CPUS"):
                 os.environ.pop(k, None)
             os.environ["RP_STUB_NOLOAD"] = "1"

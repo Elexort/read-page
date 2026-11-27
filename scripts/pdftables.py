@@ -103,8 +103,9 @@ def cpus():
 
 
 def calm_onnx(threads=0):
-    """onnxruntime as a small model needs it on a machine that does other things: four threads at
-    most, none spinning while it waits. As the library sets its sessions up (a thread a core, each
+    """onnxruntime as a small model needs it on a machine that does other things: the read's share of
+    the CPUs (`threads`), else four threads at most, none spinning while it waits. As the library sets
+    its sessions up (a thread a core, each
     spinning) a page of the layout model took 0.23 s and 2.4 s of CPU on 20 cores, but 4.5 s on
     four slow cores and 1.8 s (at most 2.5) on two; so set: 0.23, 0.51 and 0.32 s, a third of a
     CPU second (2026-11-19). The threads come from cpus(), or `threads` - the read's share of the

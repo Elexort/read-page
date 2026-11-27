@@ -6280,18 +6280,24 @@ def tables_cpu_share(cpus):
 def tables_pace(w=None):
     """How many times longer than on a CPU of its own the read's model processes take: their seconds at
     work over their CPU seconds, all of them together, as they last said - or as the read's last ones
-    did; 1 under PDF_TABLES_SLOW."""
+    did; 1 under PDF_TABLES_SLOW. Several processes are less the crowding they and the read's main
+    thread make among themselves - their number and one over the CPUs, 1 at least: that is no other
+    work's, and two of them on two slow cores, 1.5-2 times slower by it, kept the step 15-20 s instead
+    of 10 for the tables one process laid out in 10 (KNOWN-ISSUES 242)."""
     live = [x for x in ([w] if w is not None else _TABLES["pool"]) if x is not None and x.work]
     slow = (max(1.0, sum(x.busy for x in live) / max(sum(x.work for x in live), 0.05)) if live
             else _TABLES["slow"])
+    if w is None and len(live) > 1:
+        slow = max(1.0, slow / max(1.0, (len(live) + 1.0) / max(1, tables_cpus())))
     return slow if slow >= PDF_TABLES_SLOW else 1.0
 
 
 def tables_note(change=None):
     """The note of the model processes every read on this machine runs (the cache root's tables-procs.json),
     read and written under its lock; the processes that ended are dropped. change(entries) may alter the list
-    in place. Returns the entries: {"pid", "read", "ram", "commit", "said"} - said: it has laid a page out, so
-    its memory is taken already."""
+    in place, under the lock (False: it altered nothing). Returns the entries: {"pid", "read", "ram", "commit",
+    "said"} - said: it has laid a page out, so its memory is taken already; "hold": room a read has taken for a
+    process it is starting (its pid the read's until the process takes it)."""
     root = cache_root()
     path = os.path.join(root, TABLES_NOTE + ".json")
     entries = []
@@ -6307,9 +6313,8 @@ def tables_note(change=None):
             # (a model process ends with its read: an entry whose read has gone is gone, its pid maybe another's)
             entries = [e for e in entries if hostmem.alive(int(e.get("pid") or 0))
                        and hostmem.alive(int(e.get("read") or 0))]
-            if change is not None:
-                change(entries)
-            if change is not None or len(entries) != was:
+            changed = change is not None and change(entries) is not False
+            if changed or len(entries) != was:
                 tmp = path + ".%d.tmp" % os.getpid()
                 with open(tmp, "w", encoding="utf-8") as fh:
                     json.dump(entries, fh)
@@ -6319,22 +6324,57 @@ def tables_note(change=None):
     return entries
 
 
-def tables_fit(ram, commit):
+def tables_fit(ram, commit, hold=False):
     """How many more model processes of `ram` and `commit` bytes the memory holds now: 80 % of the free physical
     memory, and of the commit left where the OS charges it, and of a job's or a cgroup's room - less what the
-    processes of every read that have not laid a page out yet will still take (their figures as noted). None
-    when the OS does not say (then the read keeps to what it runs)."""
+    model processes of every read (the note) will still take: one that has not laid a page out yet, all a process
+    takes (the larger of its figure and TABLES_PROC_*); one that has, the rest of it - the free memory has what it
+    took so far, and a process grows over its pages (GPT-3's from 0.25 GB after a page to 0.45 at the end), so
+    its first page's figure would let the processes outgrow the share. None when the OS does not say (then the
+    read keeps to what it runs). hold: the room for one is taken in the note at once, under its lock, when one
+    fits - two reads deciding together both counted it free (2 GB faked, room for three: four ran) - and the
+    process the read starts takes it over (TablesWorker)."""
     m = hostmem.free_memory()
-    # (figures a test fakes do not fall as processes take memory: there every noted process still takes its own)
-    pending = [e for e in tables_note() if m.get("fake") or not e.get("said")]
-    still_ram = sum(int(e.get("ram") or 0) for e in pending)
-    still_commit = sum(int(e.get("commit") or 0) for e in pending)
-    counts = []
-    for free, each, still in ((m.get("phys"), ram, still_ram), (m.get("commit"), commit, still_commit),
-                              (m.get("room"), max(ram, commit), max(still_ram, still_commit))):
-        if free is not None and each > 0:
-            counts.append(int(max(0.0, PDF_TABLES_MEM_SHARE * free - still) // each))
-    return min(counts) if counts else None
+    got = {"n": None}
+
+    def count(entries):
+        still_ram = still_commit = 0
+        for e in entries:
+            r, c = int(e.get("ram") or 0), int(e.get("commit") or 0)
+            # (figures a test fakes do not fall as processes take memory: there each takes all of its own still)
+            took = bool(e.get("said")) and not m.get("fake")
+            still_ram += max(0, max(TABLES_PROC_RAM, r) - (r if took else 0))
+            still_commit += max(0, max(TABLES_PROC_COMMIT, c) - (c if took else 0))
+        counts = []
+        for free, each, still in ((m.get("phys"), ram, still_ram), (m.get("commit"), commit, still_commit),
+                                  (m.get("room"), max(ram, commit), max(still_ram, still_commit))):
+            if free is not None and each > 0:
+                counts.append(int(max(0.0, PDF_TABLES_MEM_SHARE * free - still) // each))
+        got["n"] = min(counts) if counts else None
+        if not hold or got["n"] == 0:
+            return False
+        entries.append({"pid": os.getpid(), "read": os.getpid(), "ram": ram, "commit": commit, "said": False,
+                        "hold": True})
+        _TABLES["held"] = True
+        return True
+    tables_note(count)
+    return got["n"]
+
+
+def tables_unhold():
+    """The room this read took and started no process in goes back to the note."""
+    if not _TABLES.get("held"):
+        return
+    _TABLES["held"] = False
+    me = os.getpid()
+
+    def drop(entries):
+        keep = [e for e in entries if not (e.get("hold") and e.get("read") == me)]
+        if len(keep) == len(entries):
+            return False
+        entries[:] = keep
+        return True
+    tables_note(drop)
 
 
 PDF_TABLE_CAPTION = pdftables.CAPTION
@@ -6382,6 +6422,7 @@ class TablesWorker:
 
     def __init__(self, threads=0):
         self.slow, self.busy, self.work, self.mem, self.page, self.ready = None, 0.0, 0.0, {}, None, False
+        self.noted_ram = 0
         popen_kw = {"start_new_session": True} if os.name != "nt" else {
             "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
         # -E: a caller's PYTHONPATH stays out of the model, as the hop keeps it out of the read (a
@@ -6396,11 +6437,20 @@ class TablesWorker:
         self.q = _TABLES["q"]                    # one queue for the read's processes: an answer names its own
         threading.Thread(target=self._pump, daemon=True).start()
         me = {"pid": self.p.pid, "read": os.getpid(), "ram": TABLES_PROC_RAM, "commit": TABLES_PROC_COMMIT, "said": False}
-        tables_note(lambda entries: entries.append(me))
+
+        def take(entries):
+            for k, e in enumerate(entries):
+                if e.get("hold") and e.get("read") == me["read"]:
+                    entries[k] = me              # the room its read held for it (tables_fit)
+                    return True
+            entries.append(me)
+            return True
+        tables_note(take)
 
     def noted(self):
         """What it says it takes, in the note: its memory is taken now, nothing more to come."""
         pid, ram, commit = self.p.pid, int(self.mem.get("ram") or 0), int(self.mem.get("commit") or 0)
+        self.noted_ram = ram
 
         def change(entries):
             for e in entries:
@@ -6522,6 +6572,7 @@ def tables_close(kill=False):
     """Every model process of the read goes (its end, or a step that killed them)."""
     for w in list(_TABLES["pool"]):
         tables_stop(w, kill)
+    tables_unhold()
 
 
 def pdf_table_page(page, text, drawings=True):
@@ -6614,7 +6665,7 @@ def pdf_tables(path, doc, pages):
         plan = max(1, min(top, max(1, sum(likely_at) - 1), 2 if fits is None else len(pool) + max(1, fits)))
         state = {"stop": "", "by_text": 0, "deaths": 0, "nomem": False, "most": len(pool),
                  "cap": min(top, 2 if fits is None or fits >= 2 else 1), "ram": 0, "commit": 0,
-                 "load": 0.0, "page_s": [], "fit_at": 0.0}
+                 "load": 0.0, "page_s": [], "fit_at": 0.0, "last": {}}
         todo, named, retried = [], [], set()
 
         def grow():
@@ -6714,13 +6765,17 @@ def pdf_tables(path, doc, pages):
                 info["tables"] += int(a["n"])
             for note in a.get("notes") or []:
                 trace("pdf.tables", page=p + 1, note=note)
-            if w.mem and not getattr(w, "said", False):
-                w.said = True
-                w.noted()
-                trace("pdf.tables", pid=w.p.pid, ram_mb=int(w.mem.get("ram") or 0) >> 20,
-                      commit_mb=int(w.mem.get("commit") or 0) >> 20, load_s=state["load"])
-                state["ram"] = max(state["ram"], int(w.mem.get("ram") or 0))
-                state["commit"] = max(state["commit"], int(w.mem.get("commit") or 0))
+            if w.mem:
+                ram, commit = int(w.mem.get("ram") or 0), int(w.mem.get("commit") or 0)
+                if not getattr(w, "said", False):
+                    w.said = True
+                    w.noted()
+                    trace("pdf.tables", pid=w.p.pid, ram_mb=ram >> 20, commit_mb=commit >> 20, load_s=state["load"])
+                elif ram > w.noted_ram + (32 << 20):
+                    w.noted()                      # it grew over its pages: the note has what it takes now
+                state["ram"] = max(state["ram"], ram)
+                state["commit"] = max(state["commit"], commit)
+                state["last"][w.p.pid] = [ram >> 20, commit >> 20]
 
         i = 0
         while True:
@@ -6745,6 +6800,12 @@ def pdf_tables(path, doc, pages):
                         break
             # one more process while pages wait and the CPUs and the memory hold one
             if todo and len(pool) < grow() and len(pool) < len(todo) + sum(len(w.pages) for w in pool):
+                # the room for one more is taken in the note at once, so two reads deciding together do not
+                # both count it free; a read's first process starts whatever the memory says, as one always did
+                if pool and tables_fit(max(state["ram"], TABLES_PROC_RAM), max(state["commit"], TABLES_PROC_COMMIT),
+                                       hold=True) == 0:
+                    state["cap"], state["fit_at"] = len(pool), now() + 0.25
+                    continue
                 threads = max(1, cpus // max(plan, len(pool) + 1))
                 w = tables_start(threads)
                 if w is None:
@@ -6789,6 +6850,7 @@ def pdf_tables(path, doc, pages):
             if pdf_table_page(None, pages[k], drawings=False):
                 named.append(k + 1)
         named += [p + 1 for p in todo]
+        tables_unhold()                            # (room held for a process that did not start)
         slow = tables_pace()
         for w in list(pool):
             if w.pages or state["stop"] == "error":
@@ -6807,7 +6869,9 @@ def pdf_tables(path, doc, pages):
         if not (info["asked"] or info["left"] or info.get("error")):
             return {}
         given = until() - t_start
-        trace("pdf.tables", slow=round(slow, 2), given=round(given, 2), procs=state["most"])
+        # (what each process took at its last page, RAM and commit in MB: they grow over their pages)
+        trace("pdf.tables", slow=round(slow, 2), given=round(given, 2), procs=state["most"],
+              last_mb=sorted(state["last"].values()))
         # its time ran out: its own (as many times over as it was slow), or the read's, which had less
         ended = "deadline" if given < max(0.0, PDF_TABLES_SECONDS * slow - spent) - 0.5 else "cap"
         budget.record("pdf-tables", t_start, "fail" if info.get("error") and not info["asked"] else
