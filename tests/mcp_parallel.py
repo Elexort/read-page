@@ -29,7 +29,7 @@ import zlib
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-from harness import PUBLIC, Checks, serve                    # noqa: E402
+from harness import PUBLIC, Checks, cline_form, mcp_dir, mcp_said, mcp_status, serve     # noqa: E402
 
 check = Checks()
 SERVER = os.path.join(os.path.dirname(HERE), "scripts", "mcp_server.py")
@@ -196,7 +196,7 @@ try:
             break
         got.append(r)
     dt = time.monotonic() - t0
-    ok_ids = sorted(r.get("id") for r in got if (r.get("result") or {}).get("structuredContent", {}).get("status") == "ok")
+    ok_ids = sorted(r.get("id") for r in got if mcp_status(r.get("result")) == "ok")
     check("four read_url calls run at once (each page takes 2.5 s)",
           ok_ids == [11, 12, 13, 14] and dt < 9.5,    # one after another they take 4 x 2.5 s = 10 s and more; 8.4 s on a macOS Intel runner
           "%.1f s, answered %s" % (dt, ok_ids))
@@ -322,15 +322,14 @@ try:
           "%d chars, %d bytes, %d lines" % (c_chars, c_bytes, c_lines))
     check("... and the text gave up no more than it had to (not more than two paragraphs of it)",
           c_chars > p_chars - 2 * 700, "%d chars against %d without the notes" % (c_chars, p_chars))
-    sc = busy.get("structuredContent") or {}
-    said = "".join(b.get("text") or "" for b in bb if b.get("type") == "text")
+    said = mcp_said(busy)
     nxt = re.search(r"── next: line (\d+) of \d+ → read\(dir, file=\"content.md\", from=(\d+)\) ──", said)
     last = re.search(r"── content\.md: lines 1-(\d+) of \d+ ──", said)
     check("... the pointer is the line after the block's last one",
-          nxt and last and int(nxt.group(1)) == int(last.group(1)) + 1 == (sc.get("mcp") or {}).get("next_from"),
-          "%s %s next_from=%s" % (nxt and nxt.group(1), last and last.group(1), (sc.get("mcp") or {}).get("next_from")))
-    more = mcp.tool_read({"dir": sc["dir"], "from": int(nxt.group(1))}) if nxt else {}
-    mt = "".join(b.get("text") or "" for b in more.get("content") or [] if b.get("type") == "text")
+          nxt and last and int(nxt.group(1)) == int(last.group(1)) + 1 == int(nxt.group(2)),
+          "%s %s" % (nxt and nxt.group(1), last and last.group(1)))
+    more = mcp.tool_read({"dir": mcp_dir(busy), "from": int(nxt.group(1))}) if nxt else {}
+    mt = mcp_said(more)
     check("... and read(dir, from=next) goes on from there",
           nxt and ("── content.md: lines %s-" % nxt.group(1)) in mt, mt[:120].replace("\n", " | "))
     again = mcp.tool_read_url({"url": s.url("/fill"), "inline_images": True})
@@ -338,6 +337,26 @@ try:
     check("inline_images alone: within the block as well",
           a_chars <= 7900 and a_bytes <= 9980 and a_lines <= 495,
           "%d chars, %d bytes, %d lines" % (a_chars, a_bytes, a_lines))
+
+    # ------------------------------------------------ the whole result as Cline's SDK runtime counts it
+    # (KNOWN-ISSUES 275): the model gets the result object as JSON.stringify writes it, every block and every
+    # escape of its text (a line's "\n" is two characters), an image as "[image attached]"; 8 000 is where it cuts.
+    # The manifest is the folder's file, never a part of the result: as structuredContent it came on top (3.6 KB on
+    # the 12-picture page, 10.8 KB on one of 60)
+    man = json.load(open(os.path.join(mcp_dir(res), "manifest.json"), encoding="utf-8"))
+    on_disk = [e["file"] for e in man.get("images") or [] if e.get("file")]
+    pic = mcp.tool_read({"dir": mcp_dir(res), "file": on_disk[0]}) if on_disk else {}
+    check("read(dir, file=\"img/...\"): the picture as an image block, its caption after it",
+          [b.get("type") for b in pic.get("content") or []] == ["text", "image", "text"], str(on_disk[:1]))
+    for name, r in (("a long page", plain), ("inline_images and screenshots", busy), ("inline_images", again),
+                    ("12 big pictures, inline_images", res2), ("the pictures page, inline_images", res)):
+        check("as Cline counts it (its JSON), %s: within 7 900 characters" % name, cline_form(r) <= 7900,
+              "%d characters, %d image blocks" % (cline_form(r), sum(1 for b in r.get("content") or []
+                                                                     if b.get("type") == "image")))
+    check("no result carries structuredContent: a page, its pictures, its screens, a picture read",
+          not [r for r in (plain, busy, again, res2, res, more, pic) if "structuredContent" in r]
+          and all(sorted(r) == ["content", "isError"] for r in (plain, busy, again, res2, res, more, pic)),
+          str(sorted({tuple(sorted(r)) for r in (plain, busy, again, res2, res, more, pic)}))[:120])
 finally:
     s.close()
 

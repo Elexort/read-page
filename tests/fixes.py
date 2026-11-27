@@ -599,12 +599,19 @@ def main():
     srv14, port14, _ = serve({"/p": (200, {"Content-Type": "text/html"}, pict),
                               "/one.png": (200, {"Content-Type": "image/png"}, b"\x89PNG\r\n\x1a\n" + b"\0" * 30)})
     res = mcp.tool_read_url({"url": f"http://127.0.0.1:{port14}/p", "deny_images": True})
-    sc = res.get("structuredContent") or {}
+    said = "".join(b.get("text", "") for b in res.get("content") or [] if b.get("type") == "text")
+    folder = next((ln[len("files: "):ln.rindex(" (")] for ln in said.split("\n") if ln.startswith("files: ")), "")
+    try:
+        with open(os.path.join(folder, "manifest.json"), encoding="utf-8") as fh:
+            sc = json.load(fh)          # the manifest is the folder's file: no structuredContent (KNOWN-ISSUES 275)
+    except (OSError, ValueError):
+        sc = {}
     # the picture is named (a marker that says not downloaded), nothing is fetched or attached
     check("MCP deny_images=true works",
-          not any(e.get("file") for e in sc.get("images") or []) and not (sc.get("mcp") or {}).get("images_attached")
-          and (sc.get("signals") or {}).get("images_denied") == 1,
-          str((sc.get("mcp") or {}).get("images_total")))
+          not any(e.get("file") for e in sc.get("images") or []) and not any(
+              b.get("type") == "image" for b in res.get("content") or [])
+          and (sc.get("signals") or {}).get("images_denied") == 1 and "not downloaded" in said,
+          str(len(sc.get("images") or [])))
 
     # unknown argument through the real protocol
     p = subprocess.run([sys.executable, "-X", "utf8", MCP], input=json.dumps(
@@ -625,10 +632,9 @@ def main():
          "params": {"name": "read", "arguments": {"dir": d2, "file": "note.md", "from": 99999}}}) + "\n",
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     out = json.loads(p.stdout.splitlines()[0])
-    sc = (out.get("result") or {}).get("structuredContent") or {}
     said = "".join(b.get("text", "") for b in (out.get("result") or {}).get("content") or [])
-    check("MCP from past the end says so, no next", "next_from" in sc and sc["next_from"] is None
-          and "past the end" in said, str({k: sc.get(k) for k in ("from", "next_from", "total_lines")}))
+    check("MCP from past the end says so, no next", "past the end" in said and "── next:" not in said
+          and "structuredContent" not in (out.get("result") or {}), said.split("\n")[-2][:80])
 
     # ------------------------------------------------ a wall is asked again, and says the same
     m1, _ = run([f"http://127.0.0.1:{port6}/challenge"])

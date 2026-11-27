@@ -15,6 +15,9 @@ for _name in ("READ_PAGE_DEBUG", "READ_PAGE_DEBUG_DIR"):    # the user's debug l
     os.environ.pop(_name, None)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from harness import cline_form, mcp_dir, mcp_said, mcp_status     # noqa: E402
+
 SERVER = os.path.join(os.path.dirname(HERE), "scripts", "mcp_server.py")
 URL = sys.argv[1] if len(sys.argv) > 1 else "https://en.wikipedia.org/wiki/Web_scraping"
 IMG_URL = "https://en.wikipedia.org/wiki/Cat"
@@ -51,10 +54,14 @@ def rpc(method, params=None):
     return json.loads(line)
 
 
+results = []                  # every tools/call result: none carries structuredContent (KNOWN-ISSUES 275)
+
+
 def call(name, args):
     r = rpc("tools/call", {"name": name, "arguments": args})
-    return r.get("result") or {"content": [], "structuredContent": {}, "isError": True,
-                               "error": r.get("error")}
+    res = r.get("result") or {"content": [], "isError": True, "error": r.get("error")}
+    results.append((name, res))
+    return res
 
 
 def notify(method, params=None):
@@ -88,50 +95,48 @@ check("read arguments", props["read"] == ["dir", "file", "from", "ocr", "to"], p
 # 3. ping
 check("ping", "result" in rpc("ping"))
 
-# 4. read_url: header, text, structured manifest
+# 4. read_url: header, text; the manifest is the folder's file, never a part of the result
 res = call("read_url", {"url": URL})
-sc = res["structuredContent"]
 head = res["content"][0]["text"] if res["content"] else ""
 lines = head.splitlines()
-check("read_url status", sc.get("status") == "ok", str(sc.get("status")))
+folder = mcp_dir(res)
+check("read_url status", mcp_status(res) == "ok", mcp_status(res))
 check("header is free text, not JSON", not head.lstrip().startswith("{"), head.splitlines()[0][:70])
 check("header first line", lines[0].startswith("read-page · ok") and "content.md" in lines[0],
       lines[0][:90])
 check("header names the files", any(ln.startswith("files: ") for ln in lines[:4]), lines[1][:70])
 check("header counts lines", " lines" in lines[0], "")
-check("full manifest in structuredContent",
-      all(k in sc for k in ("url", "content", "signals", "chain", "files")), sorted(sc)[:8])
+check("the manifest is the folder's file", os.path.isfile(os.path.join(folder, "manifest.json")), folder[-40:])
 check("the text follows the header", "── content.md" in head and len(head) > 300, "%d chars" % len(head))
-check("the next line is reported", "next_from" in sc["mcp"]
-      and (sc["mcp"]["next_from"] is None or isinstance(sc["mcp"]["next_from"], int)),
-      "next_from=%s" % sc["mcp"].get("next_from"))
+nxt_m = re.search(r"── next: line (\d+) of \d+", mcp_said(res))
+check("the next line is reported", nxt_m is not None or ": all " in mcp_said(res),
+      nxt_m.group(0) if nxt_m else "the whole text")
 check("the answer fits the budget", len(head.encode("utf-8")) <= 9980, "%d bytes" % len(head.encode("utf-8")))
+check("the whole result as Cline counts it (its JSON) fits too", cline_form(res) <= 7900, "%d characters" % cline_form(res))
 
 # 5. read: continue the text at the line the answer named
-nxt = sc["mcp"].get("next_from")
+nxt = int(nxt_m.group(1)) if nxt_m else None
 if nxt:
-    more = call("read", {"dir": sc["dir"], "file": "content.md", "from": nxt})
-    s2 = more["structuredContent"]
-    check("read continues at that line", s2.get("from") == nxt
-          and ("lines %d-" % nxt) in more["content"][0]["text"], "from=%s next=%s" % (s2.get("from"), s2.get("next_from")))
+    more = call("read", {"dir": folder, "file": "content.md", "from": nxt})
+    check("read continues at that line", ("── content.md: lines %d-" % nxt) in mcp_said(more),
+          mcp_said(more).split("\n")[0][:70])
     check("read header names the file", "content.md" in more["content"][0]["text"].splitlines()[0],
           more["content"][0]["text"].splitlines()[0][:70])
+    check("read: the whole result as Cline counts it fits", cline_form(more) <= 7900, "%d characters" % cline_form(more))
 else:
-    more = call("read", {"dir": sc["dir"]})
-    check("read from line 1", more["structuredContent"].get("total_lines", 0) > 0, "")
+    more = call("read", {"dir": folder})
+    check("read from line 1", "── content.md: " in mcp_said(more), mcp_said(more)[:70])
 
 # 6. read: the manifest is readable as a file
-man = call("read", {"dir": sc["dir"], "file": "manifest.json"})
+man = call("read", {"dir": folder, "file": "manifest.json"})
 check("read manifest.json", "\n{" in man["content"][-1]["text"], "")
 
 # 7. images=true: blocks interleaved with the text, caption after each
 res2 = call("read_url", {"url": IMG_URL, "inline_images": True})
-sc2 = res2["structuredContent"]
+folder2 = mcp_dir(res2)
 types = [b["type"] for b in res2["content"]]
-check("images: status ok", sc2.get("status") == "ok", str(sc2.get("status")))
+check("images: status ok", mcp_status(res2) == "ok", mcp_status(res2))
 check("images: blocks attached", types.count("image") > 0, "types=%s" % types[:8])
-check("images: attached count reported", sc2["mcp"]["images_attached"] == types.count("image"),
-      "attached=%s blocks=%s" % (sc2["mcp"]["images_attached"], types.count("image")))
 # each image block right after the line that holds its marker `[img #N · WxH ...] img/...`
 blocks2 = res2["content"]
 captions = [blocks2[i - 1]["text"].rstrip("\n").splitlines()[-1] for i, b in enumerate(blocks2)
@@ -156,14 +161,17 @@ check("images: each picture follows its own caption", order_ok,
       "%s types=%s" % ("captions" if captions else "manifest fallback", types[:8]))
 
 # 8. read: an image file comes back as an image block
-imgs = sc2.get("images") or []
+try:
+    with open(os.path.join(folder2, "manifest.json"), encoding="utf-8") as fh:
+        imgs = [e for e in json.load(fh).get("images") or [] if e.get("file")]
+except (OSError, ValueError):
+    imgs = []
 if imgs:
-    one = call("read", {"dir": sc2["dir"], "file": imgs[0]["file"]})
-    check("read image file", one["content"][1]["type"] == "image" and one["structuredContent"]["attached"],
-          imgs[0]["file"])
+    one = call("read", {"dir": folder2, "file": imgs[0]["file"]})
+    check("read image file", [b["type"] for b in one["content"]] == ["text", "image", "text"], imgs[0]["file"])
 
 # 9. path traversal is refused
-trav = call("read", {"dir": sc2["dir"], "file": "../../../etc/passwd"})
+trav = call("read", {"dir": folder2, "file": "../../../etc/passwd"})
 check("read refuses traversal", trav.get("isError") and "no such file" in trav["content"][0]["text"],
       trav["content"][0]["text"][:60] if trav["content"] else "")
 
@@ -172,8 +180,12 @@ bad_tool = rpc("tools/call", {"name": "nope", "arguments": {}})
 check("unknown tool", "error" in bad_tool, bad_tool.get("error", {}).get("message"))
 
 bad_url = call("read_url", {"url": "http://localhost:9/none"})
-check("bad url is an error", bad_url["isError"] and bad_url["structuredContent"].get("status") == "error",
-      str(bad_url["structuredContent"].get("status")))
+check("bad url is an error", bad_url["isError"] and mcp_status(bad_url) == "error", mcp_status(bad_url))
+
+# 11. no result carries structuredContent: Cline's SDK runtime counted it against its 8 000 characters, a client
+# may show it instead of the text (KNOWN-ISSUES 275)
+check("no result carries structuredContent", not [n for n, r in results if "structuredContent" in r],
+      "%d results: %s" % (len(results), sorted({tuple(sorted(r)) for _, r in results})))
 
 proc.stdin.close()
 proc.wait(timeout=10)

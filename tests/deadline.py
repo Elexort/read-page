@@ -383,7 +383,7 @@ try:
                  for a in answers]
         check("MCP: calls served by the warm process answer right (the arguments reach it)",
               all("PLAIN 3" in t for t in texts) and "page.md" in texts[1],
-              str([((a or {}).get("result") or {}).get("structuredContent", {}).get("status") for a in answers]))
+              str([t.split("\n")[0][:40] for t in texts]))
         if psutil is not None:
             check("MCP: one warm process waits, and a new one replaces each that is taken",
                   first and after and len(first) == 1 and len(after) == 1 and first != after,

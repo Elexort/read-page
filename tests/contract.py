@@ -19,7 +19,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "scripts"))
 
-from harness import PUBLIC, SCRIPT, Checks, run_read, serve     # noqa: E402
+from harness import PUBLIC, SCRIPT, Checks, cline_form, mcp_dir, mcp_said, run_read, serve     # noqa: E402
 
 check = Checks()
 BUDGET, LINES = 9980, 495
@@ -62,6 +62,9 @@ ROUTES = {
     # Prejudice's EPUB had only its title there, and its last page was 16 answers away)
     "/book": page("Book", "<h1>The Book</h1>" + sections(70, EN, "A chapter with a rather long title, as old books have, number")),
     "/plainlong": page("Plain long", "".join("<p>%s</p>" % " ".join(EN % (i, j) for j in range(9)) for i in range(400))),
+    # short lines: what JSON adds to an MCP result is most here, a line's "\n" two characters in it (KNOWN-ISSUES 275)
+    "/shortlines": page("Short lines", "<h1>Short lines</h1><ul>" + "".join("<li>Short item %04d</li>" % i
+                                                                            for i in range(3000)) + "</ul>"),
     # a short article between two long menus: the text is a small share of the page's words, maybe a fragment
     "/fragment": (200, {"Content-Type": "text/html; charset=utf-8"},
                   ("<!doctype html><html><head><meta charset='utf-8'><title>Fragment</title></head><body><header><nav>"
@@ -536,81 +539,108 @@ try:
     check("an indented long line: no empty piece, nothing lost",
           all(x.strip() for x in out) and "".join(out) == indent, str([len(x) for x in out]))
 
-    # MCP: the same answer, and the same continuation by line
+    # MCP: the same answer, and the same continuation by line. A result is its blocks alone, no structuredContent
+    # (KNOWN-ISSUES 275): Cline's SDK runtime hands the model the whole result object as JSON and counts it, so the
+    # manifest there cost a read about 3 000 characters of its text. The folder is on the answer's files: line, the
+    # manifest is the folder's file
     os.environ["READ_PAGE_TEST_PUBLIC_HOST"] = PUBLIC
     os.environ["READ_PAGE_CACHE"] = tempfile.mkdtemp(prefix="rp-mcp-")
     import mcp_server                                          # noqa: E402
-    res = mcp_server.tool_read_url({"url": srv.url("/long")})
-    said = "".join(b.get("text", "") for b in res["content"] if b["type"] == "text")
-    sc = res["structuredContent"]
-    n = sc["mcp"]["next_from"]
-    check("MCP read_url: within the budget, names the next line", len(said.encode("utf-8")) <= BUDGET
-          and u16(said) <= CHARS and isinstance(n, int) and ('from=%d' % n) in said,
-          "%d bytes, %d characters, next %s" % (len(said.encode("utf-8")), u16(said), n))
-    res2 = mcp_server.tool_read({"dir": sc["dir"], "from": n})
-    check("MCP read: the block at that line", res2["structuredContent"].get("from") == n
-          and ("lines %d-" % n) in res2["content"][0]["text"], str(res2["structuredContent"].get("from")))
-    res3 = mcp_server.tool_read_url({"url": srv.url("/long"), "from": n})
-    said3 = "".join(b.get("text", "") for b in res3["content"] if b["type"] == "text")
+    results = []                         # (what was asked, the result) of every call here
+
+    def mcp(args, tool="read_url"):
+        res = (mcp_server.tool_read if tool == "read" else mcp_server.tool_read_url)(args)
+        results.append(("%s %s" % (tool, json.dumps(args, ensure_ascii=False)[:60]), res))
+        return res
+
+    res = mcp({"url": srv.url("/long")})
+    said = mcp_said(res)
+    d = mcp_dir(res)
+    n = next_line(said)
+    check("MCP read_url: within the budget, names the next line and its folder (files:), whose manifest is there",
+          len(said.encode("utf-8")) <= BUDGET and u16(said) <= CHARS and isinstance(n, int) and ('from=%d' % n) in said
+          and os.path.isfile(os.path.join(d, "manifest.json")),
+          "%d bytes, %d characters, next %s, %s" % (len(said.encode("utf-8")), u16(said), n, d[-30:]))
+    res2 = mcp({"dir": d, "from": n}, "read")
+    check("MCP read: the block at that line", ("── content.md: lines %d-" % n) in mcp_said(res2), mcp_said(res2)[:70])
+    res3 = mcp({"url": srv.url("/long"), "from": n})
+    said3 = mcp_said(res3)
     check("MCP read_url from=N: the same block", ("lines %d-" % n) in said3, said3.split("\n")[0][:70])
-    long_lines = open(os.path.join(sc["dir"], "content.md"), encoding="utf-8").read().rstrip("\n").split("\n")
-    rt = mcp_server.tool_read_url({"url": srv.url("/long"), "from": 1, "to": 120})
-    top, got, tail = sent("".join(b.get("text", "") for b in rt["content"] if b["type"] == "text"))
+    long_lines = open(os.path.join(d, "content.md"), encoding="utf-8").read().rstrip("\n").split("\n")
+    rt = mcp({"url": srv.url("/long"), "from": 1, "to": 120})
+    top, got, tail = sent(mcp_said(rt))
     check("MCP read_url to=: the lines sent, the ways on in read()'s words",
           got == long_lines[:120] and 'go on from the last line before the cut: read(dir, file="content.md", '
           'from="<its words>") ──' in top
-          and 'read(dir, file="content.md", from=121, to=%d)' % min(240, len(long_lines)) in tail
-          and rt["structuredContent"]["mcp"].get("to") == 120, tail[:120])
-    rr = mcp_server.tool_read({"dir": sc["dir"], "from": 121, "to": 130})
-    top, got, tail = sent(rr["content"][0]["text"])
-    check("MCP read to=: lines 121-130 sent", got == long_lines[120:130] and "lines 121-130 of " in top
-          and rr["structuredContent"].get("to") == 130, top[:90])
+          and 'read(dir, file="content.md", from=121, to=%d)' % min(240, len(long_lines)) in tail, tail[:120])
+    rr = mcp({"dir": d, "from": 121, "to": 130}, "read")
+    top, got, tail = sent(mcp_said(rr))
+    check("MCP read to=: lines 121-130 sent", got == long_lines[120:130] and "lines 121-130 of " in top, top[:90])
     at = next(i for i, ln in enumerate(long_lines, 1) if "Sentence 20.4 explains" in ln)
-    rq = mcp_server.tool_read_url({"url": srv.url("/long"), "from": "sentence 20.4 EXPLAINS"})
-    said_q = "".join(b.get("text", "") for b in rq["content"] if b["type"] == "text")
-    check("MCP read_url from=\"text\": from the line holding it", ("── content.md: lines %d-" % at) in said_q
-          and rq["structuredContent"]["mcp"]["from"] == at, (re.findall(r"── content\.md: lines \S+", said_q) or [""])[0])
-    rq = mcp_server.tool_read({"dir": sc["dir"], "from": "20.4 explains one"})
-    check("MCP read from=\"text\": from the line holding it", ("── content.md: lines %d-" % at) in rq["content"][0]["text"]
-          and rq["structuredContent"]["from"] == at, rq["content"][0]["text"].split("\n")[-2][:80])
-    rq = mcp_server.tool_read({"dir": sc["dir"], "from": "words no line holds"})
+    rq = mcp({"url": srv.url("/long"), "from": "sentence 20.4 EXPLAINS"})
+    said_q = mcp_said(rq)
+    check("MCP read_url from=\"text\": from the line holding it", ("── content.md: lines %d-" % at) in said_q,
+          (re.findall(r"── content\.md: lines \S+", said_q) or [""])[0])
+    rq = mcp({"dir": d, "from": "20.4 explains one"}, "read")
+    check("MCP read from=\"text\": from the line holding it", ("── content.md: lines %d-" % at) in mcp_said(rq),
+          mcp_said(rq).split("\n")[-2][:80])
+    rq = mcp({"dir": d, "from": "words no line holds"}, "read")
     check("MCP read from=\"text\" not found: the outline", '── not in content.md: "words no line holds"'
-          in rq["content"][0]["text"] and "outline (line, heading):" in rq["content"][0]["text"]
-          and not rq.get("isError"), rq["content"][0]["text"][:90])
-    resf = mcp_server.tool_read_url({"url": srv.url("/fragment")})
-    saidf = resf["content"][0]["text"].split("\n")[0]
+          in mcp_said(rq) and "outline (line, heading):" in mcp_said(rq) and not rq.get("isError"), mcp_said(rq)[:90])
+    resf = mcp({"url": srv.url("/fragment")})
+    saidf = mcp_said(resf).split("\n")[0]
     check("MCP read_url: a suspected fragment's first line says what the CLI's does",
           re.search(frag_line, saidf) is not None, saidf[:120])
-    resw = mcp_server.tool_read_url({"url": srv.url("/short")})
-    saidw = resw["content"][0]["text"].split("\n")[0]
+    resw = mcp({"url": srv.url("/short")})
+    saidw = mcp_said(resw).split("\n")[0]
     check("MCP read_url: a whole text's first line names no share", not re.search(r"\d+%", saidw), saidw[:90])
-    odd = mcp_server.tool_read_url({"url": srv.url("/short"), "till": 407, "from": -3, "file": "notes"})
-    said = odd["content"][0]["text"]
+    odd = mcp({"url": srv.url("/short"), "till": 407, "from": -3, "file": "notes"})
+    said = mcp_said(odd)
     check("MCP read_url leaves out what it cannot use, says so and reads the page",
           not odd.get("isError") and said.startswith("read-page · ok")
           and "ignored: till (no such parameter) · file notes (content.md or page.md) · from -3 (a line number, 1 or "
               "more)" in said, next((ln for ln in said.split("\n") if ln.startswith("ignored")), said[:90]))
-    odd = mcp_server.tool_read_url({"url": srv.url("/short"), "from": "abc"})
-    said = odd["content"][0]["text"]
+    odd = mcp({"url": srv.url("/short"), "from": "abc"})
+    said = mcp_said(odd)
     check("MCP read_url from=\"abc\" is a quote: not found, it says so", not odd.get("isError")
           and '── not in content.md: "abc", spaces and case aside' in said and "ignored" not in said, said[:120])
-    typo = mcp_server.tool_read_url({"url": srv.url("/short"), "fiel": "page.md"})
-    said = typo["content"][0]["text"]
+    typo = mcp({"url": srv.url("/short"), "fiel": "page.md"})
+    said = mcp_said(typo)
     check("MCP: a misspelled argument is the one meant, with no note",
           "── page.md:" in said and "ignored" not in said, said.split("\n")[0][:90])
-    res4 = mcp_server.tool_read_url({"url": srv.url("/long"), "file": "page.md"})
-    sc4 = res4["structuredContent"]
-    n4 = sc4["mcp"]["next_from"]
-    res5 = mcp_server.tool_read({"dir": sc4["dir"], "from": n4})
-    check("MCP read without file goes on in the file read last",
-          res5["structuredContent"].get("file") == "page.md" and ("page.md: lines %d-" % n4) in res5["content"][0]["text"],
-          "%s from %s" % (res5["structuredContent"].get("file"), n4))
+    res4 = mcp({"url": srv.url("/long"), "file": "page.md"})
+    n4 = next_line(mcp_said(res4))
+    res5 = mcp({"dir": mcp_dir(res4), "from": n4}, "read")
+    check("MCP read without file goes on in the file read last", ("── page.md: lines %d-" % n4) in mcp_said(res5),
+          mcp_said(res5).split("\n")[0][:70])
     old = mcp_server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-                             "params": {"name": "read", "arguments": {"dir": sc["dir"], "offset": 5}}})
-    said = ((old.get("result") or {}).get("content") or [{}])[0].get("text") or ""
+                             "params": {"name": "read", "arguments": {"dir": d, "offset": 5}}})
+    results.append(("read offset=5 (handle)", old.get("result") or {}))
+    said = mcp_said(old.get("result"))
     check("MCP: an old offset argument is left out and named, the text still comes",
           not (old.get("result") or {}).get("isError") and "ignored: offset (no such parameter)" in said
           and "lines 1-" in said, said.split("\n")[0][:90])
+    for args, tool, why in (({"url": ""}, "read_url", "a call with no url"),
+                            ({"dir": os.path.join(tempfile.gettempdir(), "no-such-read-page-folder")}, "read", "no such folder"),
+                            ({"dir": d, "file": "img/none.png"}, "read", "no such file")):
+        bad = mcp(args, tool)
+        check("MCP, an error (%s): the answer says so, an error result" % why,
+              bad.get("isError") is True and mcp_said(bad).startswith("read-page · error · "), mcp_said(bad)[:80])
+
+    # the whole result as Cline's SDK runtime counts it - JSON.stringify of the result object, a line's "\n" two
+    # characters in it - stays within the block: 8 000 is where Cline cuts (KNOWN-ISSUES 275)
+    sl = mcp({"url": srv.url("/shortlines")})
+    sl2 = mcp({"dir": mcp_dir(sl), "from": next_line(mcp_said(sl)) or 1}, "read")
+    pr79 = mcp({"url": "probe:7900"})
+    for name, r in (("read_url, a long page", res), ("read, its next block", res2), ("read_url from=N", res3),
+                    ("read_url, a page of short lines", sl), ("read, its next block", sl2),
+                    ("read_url, page.md of a long page", res4), ("read_url(url=\"probe:7900\")", pr79)):
+        check("MCP %s: the whole result as Cline counts it (its JSON) within 7 900 characters" % name,
+              cline_form(r) <= CHARS and u16(mcp_said(r)) > 3000,
+              "%d characters as JSON, %d of text" % (cline_form(r), u16(mcp_said(r))))
+    check("... a page of short lines gives up no more of its block than JSON's escapes take",
+          u16(mcp_said(sl)) > CHARS - mcp_said(sl).count("\n") - 400, "%d characters of text, %d lines" % (
+              u16(mcp_said(sl)), mcp_said(sl).count("\n")))
 
     # a probe for measuring what a harness shows, no network (KNOWN-ISSUES 268): N characters of numbered lines,
     # outside the answer's block; probe:N read as an address is a page of them, for --from and --to
@@ -640,12 +670,12 @@ try:
     top, got, tail = sent(sent_r.text)
     check("probe:N with --from and --to shows what --to sends", got == answer.probe(20000).split("\n")[100:160]
           and "lines 101-160 of 200 sent" in top and "--from 161 --to 200 " in tail, top[:90])
-    raw = mcp_server.tool_read_url({"url": "probe", "probe": 8000})
+    raw = mcp({"url": "probe", "probe": 8000})
     check("MCP read_url(probe=N): the same N characters, nothing else",
           [b.get("text") for b in raw["content"]] == [answer.probe(8000)] and not raw.get("isError"),
-          str(raw.get("structuredContent"))[:90])
-    pr = mcp_server.tool_read_url({"url": "probe:20000", "from": 101, "to": 160})
-    top, got, tail = sent("".join(b.get("text", "") for b in pr["content"] if b["type"] == "text"))
+          str(sorted(raw))[:90])
+    pr = mcp({"url": "probe:20000", "from": 101, "to": 160})
+    top, got, tail = sent(mcp_said(pr))
     check("MCP read_url(url=\"probe:N\", from, to): the answer --to gives, in read()'s words",
           got == answer.probe(20000).split("\n")[100:160] and 'from=161, to=200)' in tail, tail[:120])
 
@@ -697,10 +727,17 @@ try:
                          env=e)
     check("--probe-units with no number: exit 2, the reason on stderr", bad.returncode == 2 and b"--probe-units" in bad.stderr,
           "rc %s %r" % (bad.returncode, bad.stderr[:80]))
-    ru = mcp_server.tool_read_url({"url": "probe", "probe_units": 8000})
+    ru = mcp({"url": "probe", "probe_units": 8000})
     check("MCP read_url(probe_units=N): the same N characters, nothing else",
           [b.get("text") for b in ru["content"]] == [answer.probe_units(8000)] and not ru.get("isError")
-          and out == answer.probe_units(8000), str(ru.get("structuredContent"))[:90])
+          and out == answer.probe_units(8000), str(sorted(ru))[:90])
+    # the manifest is a file, never a part of the result: a client that shows the model structuredContent counted it
+    # against its limit (Cline) or showed it instead of the text (KNOWN-ISSUES 275)
+    with_sc = [name for name, r in results if "structuredContent" in r]
+    check("MCP: no result carries structuredContent - read_url, read, from=N and text, to, a quote not found, page.md, "
+          "the probe, an error (%d results)" % len(results), results and not with_sc, str(with_sc[:3]))
+    check("... each is its blocks and isError, nothing else", all(sorted(r) == ["content", "isError"] for _, r in results),
+          str(sorted({tuple(sorted(r)) for _, r in results}))[:120])
     shutil.rmtree(e["READ_PAGE_CACHE"], ignore_errors=True)
 finally:
     srv.close()

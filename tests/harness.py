@@ -32,6 +32,38 @@ PUBLIC = "127.0.0.1"
 PRIVATE = "127.0.0.2"
 
 
+def mcp_said(res):
+    """The text of an MCP result's text blocks, one string: what its answer says."""
+    return "".join(b.get("text") or "" for b in (res or {}).get("content") or [] if b.get("type") == "text")
+
+
+def mcp_dir(res):
+    """The folder an MCP answer names on its `files:` line, "" when it names none. The result carries no
+    structuredContent (KNOWN-ISSUES 275): the header says what a caller needs, the manifest is the folder's file."""
+    for line in mcp_said(res).split("\n"):
+        if line.startswith("files: ") and " (" in line:
+            return line[len("files: "):line.rindex(" (")]
+    return ""
+
+
+def mcp_status(res):
+    """The status an MCP answer's first line says (`read-page · ok · ...`), "" when there is none."""
+    head = mcp_said(res).split("\n")[0]
+    parts = head.split(" · ")
+    return parts[1] if len(parts) > 1 and parts[0] == "read-page" else ""
+
+
+def cline_form(res):
+    """An MCP result as Cline's SDK runtime hands it to the model, the characters it counts (UTF-16 units): the
+    result object as JSON.stringify writes it - every block, the escapes of its text ("\\n" is two characters, a
+    quote too) and whatever else the object holds -, an image block as the "[image attached]" its preview puts
+    in its place (KNOWN-ISSUES 275; Cline cuts the middle past 8 000)."""
+    res = dict(res or {})
+    res["content"] = [b if b.get("type") == "text" else "[image attached]" for b in res.get("content") or []]
+    form = json.dumps(res, ensure_ascii=False, separators=(",", ":"))
+    return len(form.encode("utf-16-le", "surrogatepass")) // 2
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     """A route is (code, headers, body) or a callable that answers the request itself."""
     protocol_version = "HTTP/1.1"

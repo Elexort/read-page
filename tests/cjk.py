@@ -654,7 +654,9 @@ try:
     check("MCP: a Chinese URL on stdin reaches the reader as it is (the code page is not the locale's)",
           bool(seen) and seen[0]["path"] == "/%E9%A1%B5%E9%9D%A2" and "页面的正文" in said,
           (seen[0]["path"] if seen else (said[:80] or err[-160:])))
-    folder = (res.get("structuredContent") or {}).get("dir") or ""
+    # the folder the answer names on its files: line - the result carries no structuredContent (KNOWN-ISSUES 275)
+    folder = next((ln[len("files: "):ln.rindex(" (")] for ln in said.split("\n")
+                   if ln.startswith("files: ") and " (" in ln), "")
     out, err = mcp_session([
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}}},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "read", "arguments": {"dir": folder}}},

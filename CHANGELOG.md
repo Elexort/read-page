@@ -8,6 +8,18 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **MCP read results carry no structuredContent** (KNOWN-ISSUES 275): a result was its blocks and the whole manifest
+  as `structuredContent` (3 to 11 KB). Cline's SDK runtime gives the model a tool's result object as its JSON and
+  cuts the middle past 8 000 characters, so every MCP read there lost about as much from its text
+  (`read_url(url="probe:7900")` came with `...[truncated 764 chars]...`); Codex gives the model the structured part
+  alone, in place of the text. A result is its blocks and `isError` now; the manifest is the folder's file,
+  `read(dir, file="manifest.json")`, and the header says the status, the folder and the next line. The blocks are
+  counted as Cline counts them - their JSON, a line's `\n` two characters - and the text is rendered inside 7 900 of
+  them, `read`'s too. As Cline counts them: a long page 9 332 -> 7 878 characters, a page of short lines
+  9 784 -> 7 776, `probe:7900` 8 758 -> 7 711, 12 pictures with `inline_images` and screenshots 11 386 -> 7 656.
+  `references/mcp.md` has how Cline, its legacy bundle and Codex turn a result into the model's text, with the source
+  lines; in Cline's runtime an image block reaches the model as its base64 inside that text, cut, which no server
+  can change.
 - **An MCP result with pictures or screenshots stays within the block** (KNOWN-ISSUES 273): the notes the server
   adds after the text (pictures not attached, the screens and their captions) and the image blocks were not counted
   against the 7 900 characters, so a page near the limit with `inline_images` and `screenshots` came back over it, and

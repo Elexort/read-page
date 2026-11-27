@@ -7,6 +7,7 @@ reads a live page (the default, or the URL given).
 """
 import asyncio
 import os
+import re
 import sys
 
 from mcp import ClientSession, StdioServerParameters
@@ -39,25 +40,26 @@ async def main():
             tools = await session.list_tools()
             print("tools        %s" % [t.name for t in tools.tools])
             res = await session.call_tool("read_url", {"url": URL})
-            sc = get(res, "structured_content", "structuredContent", default={}) or {}
-            print("read_url     isError=%s status=%s engine=%s chars=%s next_from=%s" % (
-                get(res, "is_error", "isError"), sc.get("status"), (sc.get("content") or {}).get("engine"),
-                (sc.get("content") or {}).get("chars"), (sc.get("mcp") or {}).get("next_from")))
+            # the answer's text says what a caller needs - its status, its folder (files:), the next line; the
+            # result has no structured part (KNOWN-ISSUES 275)
+            text = "".join(getattr(b, "text", "") or "" for b in res.content)
+            folder = next((ln[len("files: "):ln.rindex(" (")] for ln in text.split("\n")
+                           if ln.startswith("files: ") and " (" in ln), "")
+            nxt = re.search(r"── next: line (\d+) of (\d+)", text)
+            print("read_url     isError=%s structured=%s first line %r" % (
+                get(res, "is_error", "isError"), get(res, "structured_content", "structuredContent"),
+                text.split("\n")[0][:80]))
             print("blocks       %s" % [get(b, "type") for b in res.content])
-            text = res.content[0].text if res.content else ""
-            print("first line   %r" % (text.splitlines()[0][:80] if text else ""))
-            nxt = (sc.get("mcp") or {}).get("next_from")
             if nxt:
-                more = await session.call_tool("read", {"dir": sc["dir"], "file": "content.md",
-                                                        "from": nxt})
-                s2 = get(more, "structured_content", "structuredContent", default={}) or {}
-                print("read         from=%s next=%s of %s lines" % (
-                    s2.get("from"), s2.get("next_from"), s2.get("total_lines")))
+                more = await session.call_tool("read", {"dir": folder, "file": "content.md",
+                                                        "from": int(nxt.group(1))})
+                said = "".join(getattr(b, "text", "") or "" for b in more.content)
+                print("read         %r" % (re.findall(r"── content\.md: lines \S+ of \d+", said) or [said[:60]])[0])
             else:
                 print("read         (the page fit in one answer; reading from line 1)")
-                more = await session.call_tool("read", {"dir": sc["dir"]})
-                s2 = get(more, "structured_content", "structuredContent", default={}) or {}
-                print("read         returned=%s" % s2.get("returned"))
+                more = await session.call_tool("read", {"dir": folder})
+                said = "".join(getattr(b, "text", "") or "" for b in more.content)
+                print("read         %r" % said.split("\n")[0][:80])
 
 
 asyncio.run(main())
