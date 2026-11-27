@@ -31,6 +31,10 @@ git-ignored, so a contributor may keep a file of their own under that name.
   MCP server as a process tests the environment's engines (they go under its Python by
   themselves); in-process checks use the Python the suite runs in. `READ_PAGE_SKIP=env` runs a
   suite without it; CI has none.
+- Agent tests under a harness's cut: `READ_PAGE_TEST_CUT` (`middle:8000` Cline, `head:16384` Zed, `tail:51200`
+  OpenCode, `file:30000` Claude Code) makes the skill cut its own answer, CLI and MCP alike, the way that harness
+  would (`references/answer.md`, For testing the skill). The contract suite runs an answer's `next:` command in
+  every shell the machine has (cmd, bash or sh, PowerShell 5.1 and 7): one check a shell.
 - `tests/cjk.py` is the Chinese, Japanese, Korean and Russian suite (encodings, raw non-ASCII addresses and file
   names, the MCP server's stdin, OCR packs, the languages sent, a Chinese home and cache). On Windows a copy of
   `python.exe` whose application manifest says `<activeCodePage>zh-CN</activeCodePage>` (UpdateResourceW,
