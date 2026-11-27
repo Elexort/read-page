@@ -11212,7 +11212,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         path = os.path.join(workdir, view)
         if ocr is not None:
             out, _ = answer.render(public, ocr.get("text") or "", "img #%d text" % ocr_n, 1, ocr_next, **size)
-            sys.stdout.write(out)
+            sys.stdout.write(answer.harness_cut(out))   # READ_PAGE_TEST_CUT, a test hook: as it is without it
             sys.stdout.flush()
             return 0
         if os.path.isfile(path):
@@ -11222,7 +11222,8 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
             out = answer.not_found(public, text, view, quote, **size)
         else:
             out, _ = answer.render(public, text, view, start, hint, **size)
-        sys.stdout.write(out)
+        # READ_PAGE_TEST_CUT, a hook for testing the skill: the answer cut the way a harness cuts it; as it is without
+        sys.stdout.write(answer.harness_cut(out))
     sys.stdout.flush()
     return 0                           # an answer was printed, whatever its status
 

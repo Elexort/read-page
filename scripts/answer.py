@@ -17,6 +17,7 @@ the bytes and the lines in the same ratio (limits).
 """
 import os
 import re
+import tempfile
 
 import pictures
 
@@ -118,6 +119,55 @@ def chars_asked(raw):
     if c > CHARS_MAX:
         return CHARS_MAX, "%d at the most: %d used" % (CHARS_MAX, CHARS_MAX)
     return c, ""
+
+
+def _u16_slice(s, start, end=None):
+    """s by UTF-16 units, as JavaScript slices a string: a pair a bound falls inside loses its half."""
+    data = s.encode("utf-16-le", "surrogatepass")
+    part = data[2 * start:] if end is None else data[2 * start:2 * end]
+    return part.decode("utf-16-le", "ignore")
+
+
+def harness_cut(out, spec=None):
+    """READ_PAGE_TEST_CUT, a hook for testing the skill (references/answer.md, For testing the skill): an answer cut
+    after it is built the way a harness cuts what a command printed, so that a model can be taught to go on under each
+    cut. `middle:N` Cline's SDK runtime: over N UTF-16 units, about half of N kept at each end and
+    `...[truncated K chars]...` between (its truncateMiddleByChars); `head:N` Zed: over N bytes, "Command output too
+    long. The first K bytes:" and those bytes, cut at a line's end; `tail:N` OpenCode: over N bytes, a
+    `...output truncated...` line and the last N bytes from a line's start; `file:N` Claude Code: over N bytes the
+    whole answer in a file of the temp folder, and a note naming it with its first 2 000 characters. An answer under
+    N, or a value that names no cut, is returned as it is. `spec` None: the environment's."""
+    spec = os.environ.get("READ_PAGE_TEST_CUT", "") if spec is None else spec
+    m = re.match(r"\s*(middle|head|tail|file)\s*:\s*(\d+)\s*$", spec or "")
+    if not m or not out:
+        return out
+    kind, n = m.group(1), int(m.group(2))
+    data = out.encode("utf-8")
+    if kind == "middle":
+        total = u16(out)
+        if total <= n:
+            return out
+        marker = "\n\n...[truncated %d chars]...\n\n"
+        keep = max(0, (n - len(marker % (total - n))) // 2)
+        removed = max(0, total - 2 * keep)
+        keep = max(0, (n - len(marker % removed)) // 2)
+        return _u16_slice(out, 0, keep) + marker % removed + (_u16_slice(out, total - keep) if keep else "")
+    if len(data) <= n:
+        return out
+    if kind == "head":
+        part = data[:n]
+        part = part[:part.rfind(b"\n") + 1] or part
+        return "Command output too long. The first %d bytes:\n\n%s" % (len(part), part.decode("utf-8", "ignore"))
+    if kind == "tail":
+        part = data[-n:]
+        nl = part.find(b"\n")
+        part = part[nl + 1:] if 0 <= nl < len(part) - 1 else part
+        return "...output truncated...\n\n" + part.decode("utf-8", "ignore")
+    fd, path = tempfile.mkstemp(prefix="read-page-cut-", suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(out)
+    return "Output too large (%.1fKB). Full output saved to: %s\n\nPreview (first 2KB):\n%s\n...\n" % (
+        len(data) / 1024.0, path, out[:2000])
 
 
 def _too_long(line):

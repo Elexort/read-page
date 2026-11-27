@@ -8,6 +8,13 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A harness's cut, simulated: `READ_PAGE_TEST_CUT`** (KNOWN-ISSUES 276), a hook for testing the skill, not for
+  reading: the skill cuts its own answer after it is built the way a harness cuts a command's output - `middle:8000`
+  (Cline: about half kept at each end, `...[truncated N chars]...` between, its own arithmetic), `head:16384` (Zed:
+  the first bytes at a line's end under "Command output too long. The first N bytes:"), `tail:51200` (OpenCode: the
+  last bytes under `...output truncated...`), `file:30000` (Claude Code: the answer in a file, a note with its first
+  2 000 characters) -, the CLI's answer and the MCP result's text alike, so that a model can be taught to go on under
+  each cut. `--json` and the probes are never cut. `references/answer.md` has a section For testing the skill.
 - **SKILL.md: read on with the command under `next:`, size it with `--chars`, go on from a cut** (KNOWN-ISSUES 276,
   277): the example answer ends as an answer does, the `next:` line and the command under it; the rest of a long text
   is that command (the saved copy, no network), `EOF` its end; for more at once `--chars` up to the tool's output limit

@@ -937,6 +937,16 @@ def tool_read(args):
 
 # ---------------------------------------------------------------- protocol
 
+def test_cut(res):
+    """READ_PAGE_TEST_CUT, a hook for testing the skill (answer.harness_cut): the result's text cut the way a harness
+    cuts it - its text blocks joined into one, its image blocks left out. Without it, the result as it is."""
+    if not os.environ.get("READ_PAGE_TEST_CUT") or not isinstance(res, dict):
+        return res
+    said = "".join(b.get("text") or "" for b in res.get("content") or [] if b.get("type") == "text")
+    cut = answer.harness_cut(said)
+    return res if cut == said else dict(res, content=[text(cut)])
+
+
 def handle(msg):
     method = msg.get("method")
     mid = msg.get("id")
@@ -966,9 +976,12 @@ def handle(msg):
             # an argument outside the schema no longer refuses the call: each tool
             # leaves it out and its answer names it, as the CLI does with a flag that is not ours
             if name == "read_url":
-                return {"jsonrpc": "2.0", "id": mid, "result": tool_read_url(a)}
+                res = tool_read_url(a)
+                if a.get("probe") in (None, False, "") and a.get("probe_units") in (None, False, ""):
+                    res = test_cut(res)
+                return {"jsonrpc": "2.0", "id": mid, "result": res}
             if name == "read":
-                return {"jsonrpc": "2.0", "id": mid, "result": tool_read(a)}
+                return {"jsonrpc": "2.0", "id": mid, "result": test_cut(tool_read(a))}
         except Exception as e:                   # noqa: BLE001
             return {"jsonrpc": "2.0", "id": mid, "result": err("%s: %s" % (type(e).__name__, e))}
         return {"jsonrpc": "2.0", "id": mid,

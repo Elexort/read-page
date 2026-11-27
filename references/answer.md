@@ -377,3 +377,23 @@ image blocks right after their markers, as PNG or JPEG up to 1 568 px, the whole
 JSON), stay inside the text's 7 900 characters: the text gives up the room the notes, the pictures and the JSON's
 escapes take. A result carries no `structuredContent`: the manifest is the folder's `manifest.json`. Calls run four
 at a time, and a cancelled call is killed. Details: [mcp.md](mcp.md).
+
+## For testing the skill
+
+Not for reading, and not in SKILL.md: tools for seeing what a harness does to an answer.
+
+- `readpage.py --probe N` and `--probe-units N`, and `probe:N` read as an address: numbered lines that show what a
+  harness shows of a command's output and which unit it counts (README's development notes, [mcp.md](mcp.md)).
+- `READ_PAGE_TEST_CUT` makes the skill cut its own answer the way a harness does, after the answer is built - the
+  CLI's printed answer and the MCP result's text alike (its text blocks joined into one, its image blocks left out) -,
+  so that a model can be taught to go on under each cut:
+
+  | Value | Harness | What is printed |
+  |---|---|---|
+  | `middle:8000` | Cline's SDK runtime | over N UTF-16 units, about half of N kept at each end, `...[truncated K chars]...` between (Cline's `truncateMiddleByChars`) |
+  | `head:16384` | Zed | over N bytes, `Command output too long. The first K bytes:` and those K bytes (K <= N), cut at a line's end |
+  | `tail:51200` | OpenCode | over N bytes, a `...output truncated...` line and the last N bytes, from a line's start |
+  | `file:30000` | Claude Code | over N bytes, the whole answer in a file of the temp folder, and `Output too large (37.6KB). Full output saved to: <path>` with its first 2 000 characters |
+
+  An answer under N, or a value that names no cut, is printed as it is; `--json`, `--probe`, `--probe-units` and
+  MCP's `probe` are never cut.

@@ -100,6 +100,10 @@ plus what the shown part adds are the three counts at the cut, and the one that 
 it counts: Cline's SDK counts UTF-16 units and keeps about 3 985 of them at each end, so the label of the last line
 before its gap says about 3 985 utf16, whatever it says of characters and bytes. The ASCII probe cannot tell them apart.
 
+`READ_PAGE_TEST_CUT` (in the server's environment) cuts a result's text the way a client would - `middle:8000` as Cline,
+`head:N`, `tail:N`, `file:N` - its text blocks joined into one: for teaching a model to go on under a cut
+([answer.md](answer.md#for-testing-the-skill)). The probes are never cut.
+
 ## The header
 
 Custom text, not JSON, so it survives any client and costs a few dozen tokens. The first line says

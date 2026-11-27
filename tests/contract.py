@@ -52,9 +52,11 @@ def shells():
         if os.path.isfile(git_bash):
             out.append(("bash", lambda line, env: subprocess.run([git_bash, "-c", line], capture_output=True,
                                                                   timeout=240, env=env)))
-    elif shutil.which("bash"):
-        out.append(("bash", lambda line, env: subprocess.run([shutil.which("bash"), "-c", line], capture_output=True,
-                                                              timeout=240, env=env)))
+    else:
+        posix = shutil.which("bash") or shutil.which("sh")       # Alpine's containers have sh alone
+        if posix:
+            out.append((os.path.basename(posix), lambda line, env: subprocess.run(
+                [posix, "-c", line], capture_output=True, timeout=240, env=env)))
     for ps in ("powershell", "pwsh"):
         exe = shutil.which(ps)
         if exe:
@@ -389,7 +391,8 @@ try:
         check("... run as printed in %s: the next block, from line %d" % (name, n),
               p.returncode == 0 and "── content.md: lines %d-" % n in said and body(said)[:1] == saved[n - 1:n],
               "rc %s %s" % (p.returncode, (said.split("\n")[0] or p.stderr.decode("utf-8", "replace")[-160:])[:100]))
-    check("... in two shells at least: %s" % ", ".join(ran), len(ran) >= 2, str(ran))
+    check("... in the shells this machine has (cmd and PowerShell on Windows at the least): %s" % ", ".join(ran),
+          len(ran) >= (2 if os.name == "nt" else 1), str(ran))
     kept = run_read(srv.url("/long"), "--allow-external", "--deny-images", "--download", "--refresh", "--clear-cookies",
                     "--screenshots", "0")
     k_argv = shlex.split(last_rows(kept.text, 1)[0])
@@ -469,6 +472,53 @@ try:
     alone = run_read(srv.url("/short"), "--to", "3")
     check("--to alone is gone too: the whole short text, the note", "--to 3 (gone: --chars sets the size)" in alone.text
           and body(alone.text) == lines_of(alone), first_line(alone)[:80])
+
+    # READ_PAGE_TEST_CUT, a test hook (references/answer.md, For testing the skill): the skill cuts its own answer the
+    # way a harness cuts what a command printed, after the answer is built - Cline's middle, Zed's head, OpenCode's
+    # tail, Claude Code's file - so that a model can be taught to go on under each cut
+    cut_of = getattr(answer, "harness_cut", None) or (lambda out, spec=None: out)        # 0b9253a had none
+    big_text = "".join("line %04d %s\n" % (i, "x" * 90) for i in range(1, 801))
+    mid = cut_of(big_text, "middle:8000")
+    m_gap = re.search(r"\n\n\.\.\.\[truncated (\d+) chars\]\.\.\.\n\n", mid)
+    check("READ_PAGE_TEST_CUT=middle:8000 (Cline): 8 000 characters, both ends kept, the gap named as Cline names it",
+          u16(mid) <= 8000 and m_gap is not None and mid.startswith(big_text[:3900]) and mid.endswith(big_text[-3900:])
+          and abs(int(m_gap.group(1)) - (u16(big_text) - (u16(mid) - len(m_gap.group(0))))) <= 2,
+          "%d characters; %s" % (u16(mid), m_gap.group(0).strip() if m_gap else "no gap"))
+    head_cut = cut_of(big_text, "head:16384")
+    h_note = re.match(r"Command output too long\. The first (\d+) bytes:\n\n", head_cut)
+    check("... head:16384 (Zed): the first 16 384 bytes at most, cut at a line's end, the note above",
+          h_note is not None and int(h_note.group(1)) <= 16384 and big_text.startswith(head_cut[h_note.end():])
+          and head_cut.endswith("\n") and len(head_cut[h_note.end():].encode("utf-8")) == int(h_note.group(1)),
+          head_cut[:60])
+    t_note = "...output truncated...\n\n"
+    tail_cut = cut_of(big_text, "tail:51200")
+    check("... tail:51200 (OpenCode): the last 51 200 bytes at most, from a line's start, `...output truncated...` above",
+          tail_cut.startswith(t_note) and big_text.endswith(tail_cut[len(t_note):])
+          and tail_cut[len(t_note):].startswith("line ") and len(tail_cut[len(t_note):].encode("utf-8")) <= 51200,
+          tail_cut[:60])
+    file_cut = cut_of(big_text, "file:30000")
+    f_path = re.match(r"Output too large \([\d.]+KB\)\. Full output saved to: (.+)\n", file_cut)
+    saved_whole = ""
+    if f_path and os.path.isfile(f_path.group(1)):
+        with open(f_path.group(1), encoding="utf-8") as fh_:
+            saved_whole = fh_.read()
+        os.unlink(f_path.group(1))
+    check("... file:30000 (Claude Code): over 30 000 bytes the whole answer goes to a file, its name and its first "
+          "2 000 characters are printed",
+          saved_whole == big_text and big_text[:2000] in file_cut and len(file_cut) < 2400, file_cut[:80])
+    check("... an answer under N, a value that names no cut, no value: the answer as it is",
+          cut_of("short\n", "middle:8000") == "short\n" and cut_of(big_text, "sideways:9") == big_text
+          and cut_of(big_text, "") == big_text and cut_of(big_text, "head:x") == big_text, "")
+    cli_cut = run_read(srv.url("/plainlong"), "--chars", "20000", env={"READ_PAGE_TEST_CUT": "middle:8000"})
+    check("... the CLI: its own answer, built at 20 000 characters, printed cut as Cline would, its command at the end",
+          cli_cut.rc == 0 and u16(cli_cut.text) <= 8000 and "...[truncated " in cli_cut.text
+          and cli_cut.text.startswith("read-page · ok")
+          and last_rows(cli_cut.text, 1)[0].endswith("--chars 20000 --file content.md"), "%d characters" % u16(cli_cut.text))
+    zed = run_read(srv.url("/plainlong"), "--chars", "20000", env={"READ_PAGE_TEST_CUT": "head:16384"})
+    check("... head:16384 on the CLI: the head alone, no next: line", zed.text.startswith("Command output too long. ")
+          and "── next:" not in zed.text and len(zed.out) <= 16384 + 60, "%d bytes" % len(zed.out))
+    js = run_read(srv.url("/plainlong"), "--json", env={"READ_PAGE_TEST_CUT": "middle:2000"})
+    check("... --json is never cut", js.text.lstrip().startswith("{") and "...[truncated" not in js.text, js.text[:40])
 
     # --from "text": the answer starts at the first line holding it - whitespace folded, then without case -,
     # the first at or after where the last answer started when several do; a marker by its type and name, a
@@ -749,6 +799,20 @@ try:
     rr = mcp({"dir": d, "from": 121, "to": 130}, "read")
     check("MCP read to= is gone too", "to 130 (gone: chars sets the size)" in mcp_said(rr)
           and "── content.md: lines 121-" in mcp_said(rr), mcp_said(rr)[:90])
+    # READ_PAGE_TEST_CUT over MCP: the result's text cut the same way, one text block
+    os.environ["READ_PAGE_TEST_CUT"] = "middle:8000"
+    try:
+        cut_r = (mcp_server.handle({"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {
+            "name": "read_url", "arguments": {"url": srv.url("/plainlong"), "chars": 20000}}}) or {}).get("result") or {}
+        probe_r = (mcp_server.handle({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {
+            "name": "read_url", "arguments": {"url": "probe", "probe": 9000}}}) or {}).get("result") or {}
+    finally:
+        os.environ.pop("READ_PAGE_TEST_CUT", None)
+    results.append(("read_url under READ_PAGE_TEST_CUT", cut_r))
+    check("MCP under READ_PAGE_TEST_CUT=middle:8000: the text cut as Cline would cut it, one block; the probe is not",
+          len(cut_r.get("content") or []) == 1 and u16(mcp_said(cut_r)) <= 8000 and "...[truncated " in mcp_said(cut_r)
+          and mcp_said(cut_r).startswith("read-page · ok") and mcp_said(probe_r) == answer.probe(9000),
+          "%d characters" % u16(mcp_said(cut_r)))
     at = next(i for i, ln in enumerate(long_lines, 1) if "Sentence 20.4 explains" in ln)
     rq = mcp({"url": srv.url("/long"), "from": "sentence 20.4 EXPLAINS"})
     said_q = mcp_said(rq)
