@@ -817,6 +817,71 @@ try:
             check("242: two processes and the read on 2 CPUs crowd each other 1.5 times: they keep the 10 s; one "
                   "process that slow gets 1.5 times them, two three times slower twice",
                   paces[0] == 1.0 and abs(paces[1] - 1.5) < 0.01 and abs(paces[2] - 2.0) < 0.01, str(paces))
+
+            # KNOWN-ISSUES 282, 283: a Linux cgroup's CPU quota bounds the CPUs a read counts (a container given two
+            # CPUs of 32 started 27 processes), and the memory rule's cgroup room is the smallest from the read's
+            # cgroup up to the root, found too in a container without its own cgroup namespace. READ_PAGE_TEST_CGROUP
+            # is a folder that stands for /, with proc/self/cgroup and sys/fs/cgroup in it, on any OS
+            def fake_cgroup(name, self_cgroup, files):
+                root = os.path.join(tmp, "cgroup-" + name)
+                for rel, text in dict(files, **{"proc/self/cgroup": self_cgroup}).items():
+                    p = os.path.join(root, *rel.split("/"))
+                    os.makedirs(os.path.dirname(p), exist_ok=True)
+                    with open(p, "w", encoding="ascii") as fh:
+                        fh.write(text)
+                return root
+            G = 1 << 30
+            fs = "sys/fs/cgroup/"
+            v2_parent = fake_cgroup("v2p", "0::/a/b\n", {
+                fs + "a/memory.max": str(3 * G), fs + "a/memory.current": str(G), fs + "a/b/memory.max": "max",
+                fs + "a/b/memory.current": str(G // 2), fs + "a/cpu.max": "150000 100000", fs + "a/b/cpu.max": "max 100000"})
+            v1_no_ns = fake_cgroup("v1n", "4:memory:/docker/abc\n3:cpu,cpuacct:/docker/abc\n", {
+                fs + "memory/memory.limit_in_bytes": str(2 * G), fs + "memory/memory.usage_in_bytes": str(G),
+                fs + "cpu,cpuacct/cpu.cfs_quota_us": "50000", fs + "cpu,cpuacct/cpu.cfs_period_us": "100000"})
+            v1_pod = fake_cgroup("v1p", "4:memory:/k/pod/c\n", {
+                fs + "memory/k/pod/memory.limit_in_bytes": str(2 * G), fs + "memory/k/pod/memory.usage_in_bytes": str(G + G // 2),
+                fs + "memory/k/pod/c/memory.limit_in_bytes": "9223372036854771712",
+                fs + "memory/k/pod/c/memory.usage_in_bytes": str(G)})
+            no_limit = fake_cgroup("none", "0::/\n", {fs + "cpu.max": "max 100000"})
+            cg_many = fake_cgroup("many", "0::/\n", {fs + "cpu.max": "6400000 100000"})
+            room = getattr(mod3.hostmem, "cgroup_room", None)
+            quota = getattr(mod3.hostmem, "cgroup_cpus", None)
+            got = ([room(r) for r in (v2_parent, v1_no_ns, v1_pod, no_limit)] if room else ["no cgroup_room"]) + (
+                [quota(r) for r in (v2_parent, v1_no_ns, no_limit)] if quota else ["no cgroup_cpus"])
+            check("282/283: a cgroup's room is the smallest up the tree (a parent's 3 GB less 1 used), found in a v1 "
+                  "container without a namespace of its own (the mount's root) and under a pod's limit; its CPU "
+                  "quota rounded up (1.5 -> 2, 0.5 -> 1), none where cpu.max says max",
+                  got == [2 * G, G, G // 2, None, 2, 1, None], str(got))
+            own_cpus = pt.cpus()
+            os.environ["READ_PAGE_TEST_CGROUP"] = v1_no_ns
+            under_quota = pt.cpus()
+            os.environ["READ_PAGE_TEST_CGROUP"] = cg_many
+            under_many = pt.cpus()
+            check("282: ... and the CPUs the read counts are within the quota, never more than its affinity",
+                  under_quota == 1 and under_many == own_cpus, "%s %s %s" % (under_quota, under_many, own_cpus))
+            # the read's processes under them: a quota of one CPU (half a CPU's), and 600 MB of room in a cgroup
+            # where the machine has more; the memory is the OS's own here (no READ_PAGE_TEST_MEMORY)
+            cpu_only = fake_cgroup("cpu1", "0::/c\n", {fs + "c/cpu.max": "50000 100000"})
+            mem_only = fake_cgroup("mem600", "0::/c\n", {fs + "c/memory.max": str(700 << 20),
+                                                         fs + "c/memory.current": str(100 << 20)})
+            got = []
+            for cg, cpus_env, mem_env in ((cpu_only, None, json.dumps({"phys": 64 << 30, "commit": 64 << 30})),
+                                          (mem_only, "4", None)):
+                for k, v in (("READ_PAGE_TEST_CGROUP", cg), ("READ_PAGE_TEST_CPUS", cpus_env),
+                             ("READ_PAGE_TEST_MEMORY", mem_env)):
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+                os.environ.update(RP_STUB_SLEEP="1.5", READ_PAGE_TEST_PACE="1")
+                mod3.tables_reset()
+                info = mod3.pdf_tables(six_p, d6p, list(texts6))
+                mod3.tables_close(kill=True)
+                got.append((info.get("procs"), info.get("asked"), bool(info.get("left"))))
+            for k in ("READ_PAGE_TEST_CGROUP", "READ_PAGE_TEST_PACE"):
+                os.environ.pop(k, None)
+            check("282/283: ... so a read in a cgroup of one CPU runs one process, and one in a cgroup of 600 MB "
+                  "room one (80 % of it holds no 512 MB more), every page laid out", got == [(1, 6, False)] * 2, str(got))
             for k in ("RP_STUB_SLEEP", "READ_PAGE_TEST_MEMORY", "READ_PAGE_TEST_CPUS"):
                 os.environ.pop(k, None)
             os.environ["RP_STUB_NOLOAD"] = "1"
@@ -873,7 +938,7 @@ try:
             for k in ("RP_STUB_NOLOAD", "RP_STUB_FAIL", "RP_STUB_CRASH", "READ_PAGE_TEST_MODEL_PATH",
                       "RP_STUB_LOAD_SLEEP", "RP_STUB_SLEEP", "RP_STUB_BUSY", "RP_STUB_HANG", "READ_PAGE_TEST_CPUS",
                       "READ_PAGE_TEST_PACE", "READ_PAGE_TEST_MEMORY", "RP_STUB_NOMEM", "RP_STUB_PAGE_SLEEP",
-                      "RP_STUB_TABLE"):
+                      "RP_STUB_TABLE", "READ_PAGE_TEST_CGROUP"):
                 os.environ.pop(k, None)
             mod3.tables_close(kill=True)
         zp = os.path.join(tmp, "three.zip")

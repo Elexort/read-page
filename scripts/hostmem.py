@@ -7,6 +7,10 @@ bytes left under a limit of the read's own or None (a Windows job's memory limit
 READ_PAGE_TEST_MEMORY (a JSON object of those keys, in bytes) stands in for them, with "fake": true - figures that
 do not fall as processes take memory, so the caller subtracts its processes itself: the suites and the measurements
 never squeeze a machine's memory to see the rule work. alive(pid) tells whether a process still runs.
+
+cgroup_room() and cgroup_cpus(): a Linux cgroup's memory room and CPU quota, each the smallest from the read's cgroup
+up to the root (KNOWN-ISSUES 282, 283). READ_PAGE_TEST_CGROUP names a folder that stands for / (proc/self/cgroup and
+sys/fs/cgroup in it): the suites point both at a faked cgroup on any OS, and free_memory() takes its room there too.
 """
 import json
 import os
@@ -32,10 +36,16 @@ def free_memory():
         return fake
     try:
         if os.name == "nt":
-            return _windows()
-        if sys.platform == "darwin":
-            return _macos()
-        return _linux()
+            got = _windows()
+        elif sys.platform == "darwin":
+            got = _macos()
+        else:
+            return _linux()
+        if os.environ.get("READ_PAGE_TEST_CGROUP"):            # (a faked cgroup counts on any OS: the suites)
+            room = cgroup_room()
+            if room is not None:
+                got["room"] = room if got.get("room") is None else min(got["room"], room)
+        return got
     except Exception:                                          # noqa: BLE001 - no figure is no rule: one process
         return {"phys": None, "commit": None, "room": None}
 
@@ -122,7 +132,7 @@ def _linux():
                 commit = max(0, mi["CommitLimit"] - mi["Committed_AS"])
     except OSError:
         pass
-    return {"phys": phys, "commit": commit, "room": _cgroup_room()}
+    return {"phys": phys, "commit": commit, "room": cgroup_room()}
 
 
 def _read_int(path):
@@ -134,28 +144,93 @@ def _read_int(path):
         return None
 
 
-def _cgroup_room():
-    """The room under the memory limit of the cgroup the read runs in (v2, else v1), None without one: a
-    container's /proc/meminfo shows the host's memory."""
+def cgroup_root():
+    """The folder that stands for / in a cgroup's files: READ_PAGE_TEST_CGROUP (the suites, any OS), else / on
+    Linux, None elsewhere."""
+    fake = os.environ.get("READ_PAGE_TEST_CGROUP")
+    if fake:
+        return fake
+    return "/" if sys.platform.startswith("linux") else None
+
+
+def _cgroup_dirs(root, controller):
+    """The folders of the read's cgroup and of every cgroup above it, its own first, where `controller`'s files
+    may be: v2's hierarchy (a line 0::PATH) and v1's mount of the controller (N:CONTROLLERS:PATH). A container
+    without a cgroup namespace of its own names its cgroup by the host's path (/docker/<id>), which is not under
+    the container's mount - that mount is its cgroup -: the folders that are not there are passed over, and the
+    mount's root is the last. A limit set on a parent (a pod's) is in a folder above."""
     try:
-        with open("/proc/self/cgroup", encoding="utf-8", errors="replace") as fh:
+        with open(os.path.join(root, "proc", "self", "cgroup"), encoding="utf-8", errors="replace") as fh:
             lines = [ln.strip().split(":", 2) for ln in fh if ln.strip()]
     except OSError:
+        return []
+    base = os.path.join(root, "sys", "fs", "cgroup")
+    dirs = []
+    for parts in lines:
+        if len(parts) != 3:
+            continue
+        names = [n for n in parts[1].split(",") if n]
+        if parts[0] == "0" and not names:                                            # v2
+            mount = base
+        elif controller in names:                                                    # v1
+            mount = next((m for m in (os.path.join(base, parts[1]), os.path.join(base, controller))
+                          if os.path.isdir(m)), None)
+            if mount is None:
+                continue
+        else:
+            continue
+        steps = [s for s in parts[2].split("/") if s and s not in (".", "..")]
+        for k in range(len(steps), -1, -1):
+            d = os.path.join(mount, *steps[:k])
+            if os.path.isdir(d) and d not in dirs:
+                dirs.append(d)
+    return dirs
+
+
+def cgroup_room(root=None):
+    """The room under the memory limits of the read's cgroup and every cgroup above it - v2 memory.max less
+    memory.current, v1 memory.limit_in_bytes less memory.usage_in_bytes -, the smallest; None without a limit:
+    a container's /proc/meminfo shows the host's memory. It read the read's own cgroup's file alone, at the path
+    /proc/self/cgroup names: a v1 container without its own cgroup namespace, or a pod's limit, was not seen
+    (KNOWN-ISSUES 283)."""
+    root = root or cgroup_root()
+    if not root:
         return None
-    for parts in lines:
-        if len(parts) == 3 and parts[0] == "0" and parts[1] == "":                  # v2
-            base = os.path.join("/sys/fs/cgroup", parts[2].lstrip("/"))
-            limit, used = _read_int(os.path.join(base, "memory.max")), _read_int(os.path.join(base, "memory.current"))
-            if limit is not None and used is not None:
-                return max(0, limit - used)
-    for parts in lines:
-        if len(parts) == 3 and "memory" in parts[1].split(","):                      # v1
-            base = os.path.join("/sys/fs/cgroup/memory", parts[2].lstrip("/"))
-            limit = _read_int(os.path.join(base, "memory.limit_in_bytes"))
-            used = _read_int(os.path.join(base, "memory.usage_in_bytes"))
-            if limit is not None and used is not None and limit < (1 << 60):       # v1 has no "max": a huge number
-                return max(0, limit - used)
-    return None
+    best = None
+    for d in _cgroup_dirs(root, "memory"):
+        for limit_name, used_name in (("memory.max", "memory.current"),
+                                      ("memory.limit_in_bytes", "memory.usage_in_bytes")):
+            limit, used = _read_int(os.path.join(d, limit_name)), _read_int(os.path.join(d, used_name))
+            if limit is not None and used is not None and limit < (1 << 60):     # v1 has no "max": a huge number
+                room = max(0, limit - used)
+                best = room if best is None else min(best, room)
+    return best
+
+
+def cgroup_cpus(root=None):
+    """The CPUs the CPU quotas of the read's cgroup and every cgroup above it give - v2 cpu.max "QUOTA PERIOD",
+    v1 cpu.cfs_quota_us over cpu.cfs_period_us -, rounded up, the smallest; None without a quota: the affinity
+    of a container given two CPUs of 32 shows 32 (KNOWN-ISSUES 282)."""
+    root = root or cgroup_root()
+    if not root:
+        return None
+    best = None
+    for d in _cgroup_dirs(root, "cpu"):
+        quota = period = None
+        try:
+            with open(os.path.join(d, "cpu.max"), encoding="ascii") as fh:
+                f = fh.read().split()
+            if f and f[0] != "max":
+                quota, period = int(f[0]), int(f[1]) if len(f) > 1 else 100000
+        except (OSError, ValueError):
+            pass
+        if quota is None:
+            quota = _read_int(os.path.join(d, "cpu.cfs_quota_us"))
+            period = _read_int(os.path.join(d, "cpu.cfs_period_us"))
+        if quota and period and quota > 0 and period > 0:
+            n = max(1, -(-quota // period))                     # rounded up
+            best = n if best is None else min(best, n)
+    return best
 
 
 def _macos():

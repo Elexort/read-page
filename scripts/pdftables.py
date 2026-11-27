@@ -77,10 +77,32 @@ TICK = 0.5             # seconds between the words of the process's pace while n
 THREADS_CAP = 8
 
 
+_QUOTA = {}                    # a cgroup's CPU quota, by the root it was read under: (when, CPUs or None)
+
+
 def cpus():
-    """The CPUs this process may use: its affinity (Linux: a container's share, taskset; Windows: its
+    """The CPUs this process may use: its affinity (Linux: a container's cpuset, taskset; Windows: its
     mask, which a job's affinity sets - `os.process_cpu_count()` ignores it there, 20 under a mask of
-    4, 2026-11-21), else the machine's count."""
+    4, 2026-11-21), else the machine's count - within a Linux cgroup's CPU quota, rounded up, which
+    the affinity does not show (hostmem.cgroup_cpus: a container given two CPUs of 32 counted 32,
+    KNOWN-ISSUES 282)."""
+    n = _affinity_cpus()
+    try:
+        import hostmem
+        root = hostmem.cgroup_root()
+        if root:
+            when, q = _QUOTA.get(root, (0.0, None))
+            if time.time() - when > 30:                           # (read again after 30 s: an MCP server lasts)
+                q = hostmem.cgroup_cpus(root)
+                _QUOTA[root] = (time.time(), q)
+            if q:
+                n = min(n, q)
+    except Exception:                                           # noqa: BLE001 - no quota said: the affinity
+        pass
+    return max(1, n)
+
+
+def _affinity_cpus():
     try:
         return len(os.sched_getaffinity(0)) or 1
     except (AttributeError, OSError):

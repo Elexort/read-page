@@ -8,6 +8,13 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A Linux container's CPU quota bounds the read's model processes, and its memory limit is found up the cgroup tree**
+  (KNOWN-ISSUES 282, 283): the CPUs a read counts were its affinity's, which a container's quota does not show (two CPUs
+  of a 32-CPU host counted 32: 27 processes); they are within `cpu.max` (v1 `cfs_quota_us` over `cfs_period_us`),
+  rounded up. The memory rule's cgroup room read the read's own cgroup alone, at the path `/proc/self/cgroup` names,
+  which a v1 container without its own cgroup namespace does not have under its mount, and missed a parent's (a
+  pod's) limit: both take the smallest from the read's cgroup up to the root. `READ_PAGE_TEST_CGROUP` fakes a cgroup
+  root for the suites on any OS.
 - **A layout model process runs 8 onnxruntime threads at most** (KNOWN-ISSUES 279): a process alone (a short PDF, a
   read the memory keeps to one) had a thread for every CPU, and twenty took GPT-3's pages no faster than eight for
   25 % more CPU; pdftables' own default (`--alternate`) is the CPUs, 8 at most, where it was 4. The processes stay
