@@ -5,9 +5,9 @@
 
 Tools (the same names as the CLI flags):
   read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?,
-           screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?)
+           screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, chars?)
       -> the answer the CLI prints (header, outline, text block, next line) + image blocks
-  read(dir, file="content.md", from=1)
+  read(dir, file="content.md", from=1, chars?)
       -> the block of a saved file that starts at that line; images are shown, binaries described
 
 The answer budget lives in answer.py, the download cap and the timeouts in readpage.py; this
@@ -15,7 +15,8 @@ file never repeats them, so the CLI and the MCP server cannot drift apart.
 
 Stdlib only: no SDK. Logic lives in readpage.py; this file is a thin adapter. Each read_url runs
 readpage.py in a child process, four at a time; notifications/cancelled kills that process tree.
-Which pictures become image blocks is decided in content_blocks.
+Which pictures become image blocks is decided in content_blocks. A result is its blocks alone, no
+structuredContent; the blocks of one result fit the text's limits as a client counts them (counted, fitted).
 Never prints anything to stdout except JSON-RPC messages.
 """
 import base64
@@ -91,8 +92,8 @@ TOOLS = [
         "description": (
             "Read the actual content of a URL or online document (web page, PDF, DOCX, PPTX, XLSX, "
             "EPUB, audio, video, image). Returns a header (status, engine, size, where the files are, "
-            "what to do), then the text: whole when it fits in ~7 900 characters, otherwise an outline with line "
-            "numbers, the first block and the line to continue from (read with that dir and from=N). "
+            "what to do), then the text: whole when it fits in `chars` characters (7 900 by default), otherwise an "
+            "outline with line numbers, the first block and, under `next:`, the read call that goes on. "
             "Pictures stand in the text as markers [img #3 · 600x400 4K · alt] img/03-alt.png; with "
             "inline_images=true the content pictures also come back as image blocks right after their "
             "markers. A URL that serves a single image returns that image at once. Never returns a "
@@ -132,10 +133,9 @@ TOOLS = [
                          "description": "start the text at this line of the saved copy (no network), or at the line "
                                         "that holds this piece of text (a quote, a heading, a marker such as "
                                         "\"[tab · Plans]\" or \"[img #3]\"); the answer names the next line"},
-                "to": {"type": "integer", "minimum": 1,
-                       "description": "with from: the lines up to this one, more than one block if need be, for a "
-                                      "client that shows that much; the answer says they were sent and how to go on "
-                                      "if they were cut"},
+                "chars": {"type": "integer",
+                          "description": "how much one answer holds, in characters, whole lines; 7 900, the default, "
+                                         "fits every client"},
                 "ocr": {"type": "integer", "minimum": 1,
                         "description": "answer with the text drawn in picture N (the number on its marker) instead "
                                        "of the page's text: for a model that cannot see pictures"},
@@ -159,9 +159,12 @@ TOOLS = [
         "description": (
             "Read a file left on disk by read_url: content.md, page.md (the full page text, a "
             "superset of content.md), manifest.json (the machine-readable result) or a media file "
-            "(img/..., raw.jpg, ...); with no file, the text read last. Text comes in "
-            "blocks of ~7 900 characters starting at line `from`, each naming the next line; an image is "
-            "returned as an image block; audio and video only get their metadata."),
+            "(img/..., raw.jpg, ...); with no file, the text read last. Text comes in blocks of `chars` "
+            "characters (7 900, the default, fits every client) from line `from`, each ending with the call that "
+            "goes on, the last with EOF. For more at once raise `chars` to your client's output limit if you know "
+            "it, else to about 20 000; if an answer comes back cut, go on where it breaks off (`from` takes the "
+            "words of the last line before the gap) with about half the `chars`, and keep the size that comes "
+            "whole. An image is returned as an image block; audio and video only get their metadata."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -172,8 +175,9 @@ TOOLS = [
                 "from": {"type": ["integer", "string"], "minimum": 1, "default": 1,
                          "description": "the line to start at (the answer names the next one), or a piece of "
                                         "text: the first line holding it"},
-                "to": {"type": "integer", "minimum": 1,
-                       "description": "the last line: the lines from `from` up to it, more than one block if need be"},
+                "chars": {"type": "integer",
+                          "description": "how much one answer holds, in characters, whole lines; 7 900, the default, "
+                                         "fits every client"},
                 "ocr": {"type": "boolean", "default": False,
                         "description": "for a picture (img/...): its text instead of the image, for a model "
                                        "that cannot see pictures"},
@@ -340,8 +344,12 @@ def answer_call(msg):
             _CALLS.pop(mid, None)
 
 
-def result(blocks, structured, is_error=False):
-    return {"content": blocks, "structuredContent": structured, "isError": is_error}
+def result(blocks, is_error=False):
+    """A tool's result: its blocks alone. No structuredContent - our tools declare no outputSchema, so the protocol
+    does not ask for one, and a client that shows the model the structured part counts it against its limit (Cline's
+    SDK runtime: the whole result object as JSON, the manifest's 3 to 11 KB on top of the text) or shows it in place
+    of the text. The manifest is the folder's file, read(dir, file="manifest.json") (KNOWN-ISSUES 275)."""
+    return {"content": blocks, "isError": is_error}
 
 
 def text(t):
@@ -349,7 +357,7 @@ def text(t):
 
 
 def err(msg):
-    return result([text("read-page · error · " + msg)], {"status": "error", "error": msg}, True)
+    return result([text("read-page · error · " + msg)], True)
 
 
 def picture_tokens(w, h):
@@ -594,29 +602,69 @@ def result_blocks(manifest, said, workdir, inline, images, tiles, uses, shots, c
     return blocks, state
 
 
-def counted(blocks):
-    """What a client that counts a result's characters sees of its blocks. Cline's SDK, which cuts a tool
-    result's middle past 8 000 characters, MCP results too, counts the text of all the blocks together and an
-    image block as `[image attached]` (session/services/tool-result-cache.ts, read 2026-11-27): so the text of
-    every block, an image as that, one to a line - a little more than the client counts. As answer.render's
-    keywords: UTF-16 units, bytes, lines."""
+def counted(blocks, is_error=False):
+    """What a client that counts a result's characters sees of its blocks, as answer.render's keywords: UTF-16
+    units, bytes, lines. Cline's SDK runtime (its CLI, and the VS Code windows on that bundle; cline/cline cbc7d14,
+    read 2026-11-27) hands the model a tool's result object as JSON.stringify writes it - MCP tools return the result
+    as the server sent it (extensions/mcp/tools.ts), an object becomes its JSON (session/
+    persisted-tool-result-content.ts) - and cuts its middle past 8 000 (session/services/message-builder.ts): every
+    block, and the escapes of their text, a line's "\\n" two characters, a quote two. So the characters and the bytes
+    are counted on that form, an image block as the "[image attached]" its preview puts in its place
+    (tool-result-cache.ts); the lines on the text of the blocks joined."""
+    form = json.dumps({"content": [b if b.get("type") == "text" else IMAGE_STANDIN for b in blocks],
+                       "isError": bool(is_error)}, ensure_ascii=False, separators=(",", ":"))
     joined = "\n".join(b.get("text", "") if b.get("type") == "text" else IMAGE_STANDIN for b in blocks)
-    return {"chars": answer.u16(joined), "budget": len(joined.encode("utf-8")), "max_lines": joined.count("\n")}
+    return {"chars": answer.u16(form), "budget": len(form.encode("utf-8")), "max_lines": joined.count("\n")}
 
 
-def mcp_next(n, total, view):
-    return '── next: line %d of %d → read(dir, file="%s", from=%d) ──' % (n, total, view, n)
+def fitted(render, blocks_of, shrink=True, is_error=False, limits=None):
+    """(the text, the next line, the result's blocks, their state): the text rendered inside the room the blocks of
+    one result leave it. `render(room)` renders it inside `room` (answer.render's keywords), `blocks_of(text)` makes
+    the result's blocks of it. A client counts the blocks together, in the form it is given them (counted): the
+    notes after the text, the stand-ins of the pictures and what JSON's escapes add come on top of the text, so the
+    text gives up that room and is rendered again inside what is left - counted from the size it has, since a block
+    ends at a paragraph; at least half its block stays, four passes at most (a picture is converted once). `limits`:
+    the answer's size (answer.limits, `chars`). `shrink` False: one pass (an outline, a single image)."""
+    limits = limits or LIMITS
+    room = dict(limits)
+    for _ in range(4):
+        said, nxt = render(room)
+        blocks, state = blocks_of(said)
+        used = counted(blocks, is_error)
+        over = {k: used[k] - limits[k] for k in limits if used[k] > limits[k]}
+        if not shrink or not over:
+            break
+        own = {"chars": answer.u16(said), "budget": len(said.encode("utf-8")), "max_lines": said.count("\n")}
+        shrunk = {k: max(min(room[k], own[k]) - over[k], limits[k] // 2) if k in over else room[k] for k in room}
+        if shrunk == room:
+            break
+        room = shrunk
+    return said, nxt, blocks, state
 
 
-def mcp_call(frm, view, to=None):
-    # a `to` answer's ways on: the next range, or a quote of the last line seen before a cut
-    return 'read(dir, file="%s", from=%s%s)' % (view, frm, ", to=%d" % to if to else "")
+def mcp_next_for(d, chars):
+    """How an MCP answer ends while text remains (answer.render's next_hint): where it goes on, and on a line of its
+    own the read call that goes on - its folder as the answer names it, in forward slashes on Windows (a client's JSON
+    takes them unescaped), the size this answer was asked with (KNOWN-ISSUES 276)."""
+    folder = ownenv.shown(d)
+    folder = json.dumps(folder.replace("\\", "/") if os.name == "nt" else folder, ensure_ascii=False)
+
+    def hint(n, total, view):
+        return '── next: line %d of %d ──\nread(dir=%s, file="%s", from=%d, chars=%d)' % (n, total, folder, view, n, chars)
+    return hint
+
+
+def not_ours(args, known):
+    """What a call has that the tool cannot use, as notes for `ignored:`; the call goes on without it (a model once
+    invented --to from --from and lost the whole call). `to`, a range in lines until 2026-11-27, is gone."""
+    return ["%s %s (gone: chars sets the size)" % (k, args[k]) if k == "to" else "%s (no such parameter)" % k
+            for k in args if k not in known]
 
 
 def line_args(args, ignored):
-    """`from` and `to` as the CLI takes them: (start, to, quote). `from` is a line number or words of a
-    line - the quote, which the text resolves (readpage.start_of); a value it cannot use is left out and
-    named."""
+    """`from` and `chars` as the CLI takes them: (start, quote, chars). `from` is a line number or words of a
+    line - the quote, which the text resolves (readpage.start_of); `chars` the answer's size (answer.chars_asked).
+    A value it cannot use is left out and named."""
     raw, quote = args.get("from"), ""
     try:
         start = int(raw or 1)
@@ -629,36 +677,18 @@ def line_args(args, ignored):
     if start < 1:
         ignored.append("from %d (a line number, 1 or more)" % start)
         start = 1
-    to = None
-    if args.get("to") not in (None, "", 0, False):
-        try:
-            to = int(args.get("to"))
-        except (TypeError, ValueError):
-            ignored.append("to %s (a line number)" % args.get("to"))
-        if to is not None and to < start:
-            ignored.append("to %d (before from %d)" % (to, start))
-            to = None
-    return start, to, quote
-
-
-def quote_start(workdir, manifest, view, quote, to):
-    """A quote's line in the text (None: no line holds it), and `to` left out when it comes before that line
-    (the CLI, given the same, names it on its `ignored:` line)."""
-    start = readpage.start_of(workdir, manifest, view, quote)
-    return start, (None if start is not None and to is not None and to < start else to)
-
-
-def line_count(body):
-    return len(body.split("\n")) - (1 if body.endswith("\n") else 0) if body else 0
+    chars, why = answer.chars_asked(args.get("chars"))
+    if why:
+        ignored.append("chars %s (%s)" % (args.get("chars"), why))
+    return start, quote, chars
 
 
 def tool_read_url(args):
     # what this call has that read_url cannot use is left out, and the answer says so: the read goes
-    # on, as the CLI's does (a model once invented --to from --from and lost the whole call); a
-    # misspelled argument (allow_externl) is the one meant
+    # on, as the CLI's does; a misspelled argument (allow_externl) is the one meant
     known = TOOLS[0]["inputSchema"]["properties"]
     args = {readpage.typo_fixed(k, list(known)): v for k, v in args.items()}
-    ignored = ["%s (no such parameter)" % k for k in args if k not in known]
+    ignored = not_ours(args, known)
     for key, make in (("probe", answer.probe), ("probe_units", answer.probe_units)):
         if args.get(key) not in (None, False, ""):
             # numbered lines and nothing else, as `readpage.py --probe N` and `--probe-units N` print them: what the
@@ -667,7 +697,7 @@ def tool_read_url(args):
                 n = int(args.get(key))
             except (TypeError, ValueError):
                 return err("%s takes a number of characters, such as %s=8000" % (key, key))
-            return result([text(make(n))], {key: max(0, min(n, answer.PROBE_MAX))})
+            return result([text(make(n))])
     url = (args.get("url") or "").strip()
     if not url:
         return err("url is required")
@@ -683,7 +713,7 @@ def tool_read_url(args):
     if view and view not in readpage.VIEWS:
         ignored.append("file %s (content.md or page.md)" % args.get("file"))
         view = ""
-    start, to, quote = line_args(args, ignored)
+    start, quote, chars = line_args(args, ignored)
     argv = [url, "--json"]
     for flag in ("allow_external", "force_external", "alternate", "refresh", "clear_cookies", "download"):
         if args.get(flag):
@@ -705,8 +735,8 @@ def tool_read_url(args):
         argv.append("--from=" + quote)          # the saved copy, from the line holding the quote
     elif start > 1:
         argv += ["--from", str(start)]          # a continuation reads the saved copy: no network
-    if to:
-        argv += ["--to", str(to)]               # the window's pictures are the range's
+    if chars != answer.BUDGET_CHARS:
+        argv += ["--chars", str(chars)]         # the window's pictures are the block's of that size
     if view:
         argv += ["--file", view]                # page.md printed: its pictures come
     ocr_n = 0
@@ -729,11 +759,13 @@ def tool_read_url(args):
         return err("no manifest: " + (out[-300:] or "empty output"))
     if ignored:
         manifest["ignored"] = ignored + list(manifest.get("ignored") or [])
+    size = answer.limits(chars)
     if ocr_n and isinstance(manifest.get("ocr"), dict):
         found = manifest["ocr"].pop("text", "") or ""
-        said, _ = answer.render(manifest, found, "img #%d text" % ocr_n, 1, readpage.ocr_next)
-        return result([text(said)], {"dir": manifest.get("dir") or "", "status": manifest.get("status"),
-                                     "ocr": manifest["ocr"]})
+        _, _, blocks, _ = fitted(lambda room: answer.render(manifest, found, "img #%d text" % ocr_n, 1,
+                                                            readpage.ocr_next, **room),
+                                 lambda said: ([text(said)], None), limits=size)
+        return result(blocks)
 
     status = manifest.get("status") or "error"
     # the folder as the answer names it - in the user's locale's letters, which under a POSIX locale that is not
@@ -748,7 +780,7 @@ def tool_read_url(args):
     view = readpage.answer_view(saved or manifest, workdir, view, continuing)
     lost = False                                # a quote no line holds: the answer is the outline
     if quote and workdir:
-        found, to = quote_start(workdir, saved or {}, view, quote, to)
+        found = readpage.start_of(workdir, saved or {}, view, quote)
         lost, start = found is None, found or 1
     if workdir:
         readpage.remember_view(workdir, view, None if lost else start)
@@ -760,34 +792,19 @@ def tool_read_url(args):
     for n, _rel in ANY_MARKER.findall(body):
         uses[int(n)] = uses.get(int(n), 0) + 1
     tiles = manifest.get("screenshots") or []
-    # The text is rendered inside its block; the notes after it and the stand-ins of the pictures come on top, and a
-    # client counts the blocks together (counted). So the text gives up the room they take: it is rendered again
-    # inside what is left, until the blocks fit (a picture is converted once, whatever the number of passes). A
-    # quote no line holds (the outline) and a range (`to`, sent whatever the block) have no block to give up.
+    # The text is rendered inside the room the result's other blocks and its JSON leave it (fitted), in an answer of
+    # `chars` characters. A quote no line holds (the outline) has no block to give up.
     converted = {}
-    room = dict(LIMITS)
-    for _ in range(4):
-        if lost:
-            said, nxt = answer.not_found(manifest, body, view, quote), None
-        else:
-            said, nxt = answer.render(manifest, body, view, start, mcp_next, to=to, call=mcp_call, **room)
-        blocks, state = result_blocks(manifest, said, workdir, inline, images, tiles, uses, shots, converted)
-        used, own = counted(blocks), counted([text(said)])
-        over = {k: used[k] - LIMITS[k] for k in LIMITS if used[k] > LIMITS[k]}
-        # the text ends at a paragraph, short of its room: what it must lose is counted from what it has
-        shrunk = {k: max(min(room[k], own[k]) - over[k], LIMITS[k] // 2) if k in over else room[k] for k in room}
-        if lost or to or status == "media_only" or shrunk == room:
-            break
-        room = shrunk
 
-    structured = {k: v for k, v in manifest.items() if not k.startswith("_")}
-    structured["mcp"] = {"file": view, "from": start, "to": to, "next_from": nxt,
-                         "total_lines": line_count(body),
-                         "images_attached": state["attached"], "images_total": len(images),
-                         "images_skipped": state.get("skipped", 0),
-                         "images_inline": inline, "images_denied": deny,
-                         "tokens": int(state["tokens"])}
-    return result(blocks, structured, status == "error")
+    def render(room):
+        if lost:
+            return answer.not_found(manifest, body, view, quote, **size), None
+        return answer.render(manifest, body, view, start, mcp_next_for(workdir, chars), **room)
+
+    _, _, blocks, _ = fitted(
+        render, lambda said: result_blocks(manifest, said, workdir, inline, images, tiles, uses, shots, converted),
+        shrink=not (lost or status == "media_only"), is_error=status == "error", limits=size)
+    return result(blocks, status == "error")
 
 
 # ---------------------------------------------------------------- read
@@ -817,7 +834,7 @@ def tool_read(args):
     # left out and named, as read_url does: an old `offset`, a word for `from`; a typo is the one meant
     known = TOOLS[1]["inputSchema"]["properties"]
     args = {readpage.typo_fixed(k, list(known)): v for k, v in args.items()}
-    ignored = ["%s (no such parameter)" % k for k in args if k not in known]
+    ignored = not_ours(args, known)
     d = ownenv.fs_path((args.get("dir") or "").strip())       # the folder as an answer named it (shown_paths)
     if not d or not os.path.isdir(d):
         return err("dir is not a directory: %r" % d)
@@ -826,7 +843,8 @@ def tool_read(args):
                    "line of a read_url answer, or a folder written with --dir)" % d)
     # no file named: the text read last; a text named here becomes the one read last
     rel = (args.get("file") or "").strip() or readpage.answer_view(readpage.load_manifest(d), d, "", True)
-    start, to, quote = line_args(args, ignored)
+    start, quote, chars = line_args(args, ignored)
+    answer_size = answer.limits(chars)
     if rel in readpage.VIEWS and not quote:
         readpage.remember_view(d, rel, start)
     path = inside(d, rel)
@@ -851,20 +869,18 @@ def tool_read(args):
         manifest = dict(readpage.load_manifest(d) or {"status": "ok"}, dir=shown_d, cache="hit", ocr=info)
         if ignored:
             manifest["ignored"] = ignored
-        said, _ = answer.render(manifest, found, "%s text" % os.path.basename(path), 1, readpage.ocr_next)
-        return result([text(said)], {"dir": shown_d, "file": rel, "kind": "text in a picture", "ocr": info})
+        _, _, blocks, _ = fitted(lambda room: answer.render(manifest, found, "%s text" % os.path.basename(path), 1,
+                                                            readpage.ocr_next, **room),
+                                 lambda said: ([text(said)], None), limits=answer_size)
+        return result(blocks)
     if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif", ".ico"):
         block, caption = image_block(path)
         if block:
             blocks = [text("read-page · image · %s · %s" % (readpage.human_bytes(size), os.path.basename(path))),
                       block, text(caption)]
-            structured = {"dir": shown_d, "file": rel, "kind": "image", "bytes": size,
-                          "attached": True, "caption": caption}
         else:
             blocks = [text("read-page · image · %s · not attached: %s" % (os.path.basename(path), caption))]
-            structured = {"dir": shown_d, "file": rel, "kind": "image", "bytes": size, "attached": False,
-                          "reason": caption}
-        return result(blocks, structured)
+        return result(blocks)
 
     kind = ""
     if ext in readpage.AUDIO_EXT | readpage.VIDEO_EXT:
@@ -879,7 +895,7 @@ def tool_read(args):
         blocks.append(text("read-page · %s · %s · %s%s" % (
             kind, os.path.basename(path), readpage.human_bytes(size),
             "" if attached else " · attached only with READ_PAGE_MCP_MEDIA=audio (and a client that renders audio)")))
-        return result(blocks, {"dir": shown_d, "file": rel, "kind": kind, "bytes": size, "attached": attached})
+        return result(blocks)
 
     try:
         data = open(path, "rb").read()
@@ -888,13 +904,11 @@ def tool_read(args):
     if readpage.media_kind(data, "", path) == "image":
         block, caption = image_block(path)
         blocks = [text("read-page · image · %s" % os.path.basename(path))] + ([block] if block else []) + [text(caption)]
-        return result(blocks, {"dir": shown_d, "file": rel, "kind": "image", "bytes": size,
-                               "attached": bool(block)})
+        return result(blocks)
     if readpage.media_kind(data, "", path):
         note = "read-page · binary · %s · %s · no text in this file" % (os.path.basename(path),
                                                                        readpage.human_bytes(size))
-        return result([text(note)], {"dir": shown_d, "file": rel, "kind": "binary", "bytes": size,
-                                     "attached": False})
+        return result([text(note)])
 
     body = data.decode("utf-8", "replace")
     if rel.endswith(".json"):
@@ -909,24 +923,29 @@ def tool_read(args):
         last = saved.get("_from") or {}
         found = answer.find(body.split("\n"), quote, last.get("line") if last.get("view") == rel else 1)
         lost, start = found is None, found or 1
-        if not lost and to is not None and to < start:
-            ignored.append("to %d (before line %d, where the quote is)" % (to, start))
-            to = None
         if rel in readpage.VIEWS:
             readpage.remember_view(d, rel, None if lost else start)
     manifest = dict(saved or {"status": "ok"}, dir=shown_d, cache="hit")
     if ignored:
         manifest["ignored"] = ignored
     if lost:
-        return result([text(answer.not_found(manifest, body, rel, quote))],
-                      {"dir": shown_d, "file": rel, "kind": "text", "from": None, "to": to, "next_from": None,
-                       "total_lines": line_count(body), "not_found": quote})
-    said, nxt = answer.render(manifest, body, rel, start, mcp_next, to=to, call=mcp_call)
-    return result([text(said)], {"dir": shown_d, "file": rel, "kind": "text", "from": start, "to": to,
-                                 "next_from": nxt, "total_lines": line_count(body)})
+        return result([text(answer.not_found(manifest, body, rel, quote, **answer_size))])
+    _, _, blocks, _ = fitted(lambda room: answer.render(manifest, body, rel, start, mcp_next_for(d, chars), **room),
+                             lambda said: ([text(said)], None), limits=answer_size)
+    return result(blocks)
 
 
 # ---------------------------------------------------------------- protocol
+
+def test_cut(res):
+    """READ_PAGE_TEST_CUT, a hook for testing the skill (answer.harness_cut): the result's text cut the way a harness
+    cuts it - its text blocks joined into one, its image blocks left out. Without it, the result as it is."""
+    if not os.environ.get("READ_PAGE_TEST_CUT") or not isinstance(res, dict):
+        return res
+    said = "".join(b.get("text") or "" for b in res.get("content") or [] if b.get("type") == "text")
+    cut = answer.harness_cut(said)
+    return res if cut == said else dict(res, content=[text(cut)])
+
 
 def handle(msg):
     method = msg.get("method")
@@ -957,9 +976,12 @@ def handle(msg):
             # an argument outside the schema no longer refuses the call: each tool
             # leaves it out and its answer names it, as the CLI does with a flag that is not ours
             if name == "read_url":
-                return {"jsonrpc": "2.0", "id": mid, "result": tool_read_url(a)}
+                res = tool_read_url(a)
+                if a.get("probe") in (None, False, "") and a.get("probe_units") in (None, False, ""):
+                    res = test_cut(res)
+                return {"jsonrpc": "2.0", "id": mid, "result": res}
             if name == "read":
-                return {"jsonrpc": "2.0", "id": mid, "result": tool_read(a)}
+                return {"jsonrpc": "2.0", "id": mid, "result": test_cut(tool_read(a))}
         except Exception as e:                   # noqa: BLE001
             return {"jsonrpc": "2.0", "id": mid, "result": err("%s: %s" % (type(e).__name__, e))}
         return {"jsonrpc": "2.0", "id": mid,

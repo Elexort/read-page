@@ -288,15 +288,22 @@ def arg_text(s):
 
 def fs_path(s):
     """The other way: a path given as text - the `dir` of an answer, an MCP client's argument - as this process
-    names it. It is taken only when it is there (a path that is there already, or none, comes back as it is)."""
+    names it. It is taken only when it is there (a path that is there already, or none, comes back as it is): the
+    text written in the locale's code set, then in UTF-8. A folder a process in UTF-8 mode made - the reader's child,
+    which the MCP server always starts with -X utf8; a --dir - has its name's UTF-8 bytes, and `shown` names it by them
+    when the code set does not read them: a server with no UTF-8 mode under zh_CN.GBK took that name back in GBK, a
+    folder that is not there, and answered an empty text, then "dir is not a directory" (KNOWN-ISSUES 278)."""
     cs = fs_codeset()
     if not cs or not isinstance(s, str) or s.isascii() or os.path.exists(s):
         return s
-    try:
-        t = os.fsdecode(s.encode(cs))
-    except (UnicodeError, LookupError):
-        return s
-    return t if os.path.exists(t) else s
+    for code in (cs, "utf-8"):
+        try:
+            t = os.fsdecode(s.encode(code))
+        except (UnicodeError, LookupError):
+            continue
+        if os.path.exists(t):
+            return t
+    return s
 
 
 def ascii_path(p):
@@ -464,6 +471,18 @@ def status():
     return dict(_STATUS)
 
 
+def python_name(exe):
+    """A Python as a command line names it - the interpreter of an answer's next: line (readpage.agent_python): the
+    file's name without .exe (python, python3, python3.12, py, pypy3), pythonw as python (it has no console to print
+    to); "python" for anything else - no name, a host program's, a name a shell would split."""
+    name = os.path.basename(str(exe or "").replace("\\", "/"))
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    if re.match(r"(?i)pythonw", name):
+        name = name[:6] + name[7:]
+    return name if re.match(r"(?i)py[A-Za-z0-9._+-]*$", name) else "python"
+
+
 def use(script, argv):
     """Go on under the environment's Python when there is one and this is not it (POSIX: exec;
     Windows: a child with the same arguments, our console and exit code, which ends with us).
@@ -502,6 +521,8 @@ def use(script, argv):
     cmd = [py, "-E"] + (["-B"] if sys.dont_write_bytecode or os.environ.get("PYTHONDONTWRITEBYTECODE") else []) \
         + ["-X", "utf8", os.path.abspath(script)] + [str(a) for a in argv]
     os.environ["READ_PAGE_ENV_CHILD"] = "1"
+    # the name the agent started the skill with: the answer's next: line repeats it, not the environment's Python
+    os.environ.setdefault("READ_PAGE_PYTHON_NAME", python_name(sys.executable))
     for f in (sys.stdout, sys.stderr):
         try:
             f.flush()

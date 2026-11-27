@@ -7,7 +7,7 @@ flag, the privacy and network rules, the limits, cookies, pictures, tabs and vid
 
 `readpage.py URL` prints a header - status, engine, size, the work folder, `reason:`, `ignored:`, `document:`,
 `screenshots:`, `advice:`, `missing:`/`improve:` - then the text: whole when it fits, otherwise an outline with line numbers,
-the first block and the line to go on from. `document:` is what a document's reader says of what it
+the first block and the command that goes on. `document:` is what a document's reader says of what it
 left out or could not read (parts that do not unpack, a table cut at its caps, pictures past its limit or in
 a format no browser shows, its time run out, its own error: `signals.document_note`); `screenshots:` is there
 only when `--screenshots` took no picture (`none taken`) or stopped early (`stopped early`, beside the screens that
@@ -16,15 +16,32 @@ what this machine lacks, never that.
 
 ```
 read-page · ok · defuddle · content.md 24.7 KB, 389 lines · 1.9 s
-files: /tmp/read-page/pages/9c1f… (content.md, page.md, manifest.json)
+files: /tmp/read-page-1000/pages/example.com-9c1f… (content.md, page.md, manifest.json)
 outline (line, heading):
       1 ## Installation
      27 ## Configuration
       …
 ── content.md: lines 1-126 of 389 ──
 (the text)
-── next: line 127 of 389 → the same command with --from 127 --file content.md ──
+── next: line 127 of 389 ──
+python3 -X utf8 "/home/me/.agents/skills/read-page/scripts/readpage.py" "https://example.com/a" --allow-external --from 127 --chars 7900 --file content.md
 ```
+
+The lines around the text are dry (KNOWN-ISSUES 276): above it `── content.md: lines 1-126 of 389 ──`, every block
+alike (a text that fits too: `lines 1-12 of 12`); below it, while text remains, `── next: line 127 of 389 ──` and
+on a line of its own the command that reads on, literal, so that a model copies it whole - the interpreter by the
+name the agent started the skill with (the first process's, which the environment's child is handed), `-X utf8`,
+the script by its absolute path in forward slashes, the address and `--dir` in double quotes, the flags that matter
+if the saved copy is gone and the page is read again (`--allow-external`, `--force-external`, `--alternate`,
+`--deny-images`, `--download`, `--dir`; never `--refresh`, whose every step would fetch again and could move the
+lines, `--clear-cookies`, `--screenshots`, `--ocr` or `--json`), then `--from N --chars C --file F`, C the size this
+answer was asked with. It runs as printed in bash, PowerShell 5.1 and 7 and cmd; its paths are in the locale's letters,
+as the `files:` line names them (under zh_CN.GBK the GBK reading of their bytes). An address, a folder or a script
+path holding `"`, `$`, a backtick, `%` or a backslash - what a shell reads inside double quotes -, or one a shell of the
+locale could not write back to its bytes, gets the words instead: `the same command with --from 127 --chars 7900
+--file content.md`. When the text ends in an answer, a short
+page's too, the answer's last line says so: `── EOF content.md: lines 352-389 of 389 ──`. A stray `──` on the command
+line (a model copied the decoration) is left out and named on the `ignored:` line.
 
 The outline takes at most 2.5 KB: every heading when they fit, else the deepest levels that fit.
 When those give fewer than 12 rows and there are finer headings (a book's title over its chapters),
@@ -57,21 +74,19 @@ line holds it, the answer says
 so and shows the outline (its line numbers are what `--from N` takes), and no text. It works on `content.md` and
 `page.md` alike.
 
-`--from N --to M` prints lines N to M whatever the block, for a harness that shows more than one (Codex with an
-OpenAI model shows about 40 000 bytes, Claude Code 30 000, goose and OpenCode 50 000), at most 150 KB a call; `--to`
-alone reads from line 1, and one before `--from` is left out and named on the `ignored:` line. The skill cannot see
-what the harness shows, so such an answer never says its lines were shown: it says they were sent, and carries the
-way on at its top and at its bottom, as most harnesses keep both ends of what they cut:
+`--chars C` sets how much one answer holds, for a harness that shows more (Codex with an OpenAI model about 40 000
+bytes, Claude Code 30 000, goose and OpenCode 50 000) or less: at most C characters (UTF-16 units, as Cline counts
+them), whole lines, at most C x 9 980 / 7 900 bytes and C x 495 / 7 900 lines - the header, the outline and the lines
+above and below the text included. Without it an answer is `--chars 7900`: the 7 900 characters, 9 980 bytes and
+495 lines that fit every harness. It works on a first read, `--from N` and `--from "text"` alike, and the next line
+carries it on; C is 1 000 to 150 000 (the most a harness shows: Claude Code with its limit raised), and a value
+outside, or not a number, is named on the `ignored:` line with what was used (`--chars 500 (1000 at the least: 1000
+used)`). The skill cannot see what the harness shows: SKILL.md says when to raise the size and how to go on from a
+cut. `--to` is gone (it named a range in lines until 2026-11-27): `--to M` is left out and named, `--to 120 (gone:
+--chars sets the size)`, and the read goes on.
 
-```
-── content.md: lines 1-300 of 812 sent; cut by your tool? go on from the last line before the cut: the same command with --from "<its words>" --file content.md ──
-(lines 1-300)
-── next: line 301 of 812 → the same command with --from 301 --to 600 --file content.md; cut by your tool? go on from the last line before the cut: the same command with --from "<its words>" --file content.md ──
-```
-
-The text's own lines carry no numbers, as an editor would show them; the range sent, the pointers and the
-outline (an answer from line 1 has it) keep theirs. The next range is as long as this one; at the end of the file
-the bottom line says so.
+The text's own lines carry no numbers, as an editor would show them; the block's line above it, the pointers and the
+outline (an answer from line 1 has it) keep theirs.
 
 | File | What it is |
 |---|---|
@@ -148,7 +163,7 @@ A PDF's tables come as Markdown tables where the layout model is installed (`--s
 | Flag | Meaning |
 |---|---|
 | `--from N` | print the block that starts at line N of the saved copy, no network; without `--file` it goes on in the file read last (`--file` switches it). `--from "text"`: from the first line that holds it, a marker by its type and name (see The answer) |
-| `--to M` | with `--from N`: lines N to M at once, past one block, for a harness that shows more; said to be sent, with the way on at both ends (see The answer) |
+| `--chars C` | how much one answer holds: C characters (UTF-16 units), whole lines, the bytes and lines in the same ratio; 7 900 by default, which fits every harness; 1 000 to 150 000 (see The answer) |
 | `--file page.md` | answer with the whole page (default: `content.md`, or `page.md` for a fragment) |
 | `--json` | print the manifest instead of the answer |
 | `--ocr N` | answer with the text drawn in picture N, the number on its marker, instead of the page's text: for a model that cannot see pictures (see Pictures) |
@@ -354,12 +369,33 @@ recognition, no frame analysis - [video.md](video.md) prices both.
 ## MCP
 
 `read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?, screenshots?,
-inline_images?, refresh?, clear_cookies?, file?, from?)` and `read(dir, file?, from=1)`.
-`read_url` answers with the text the CLI prints; its last line names the call that goes on:
-`read(dir, file="content.md", from=127)`, with `dir` from the `files:` line. Without `file`, `read`
-goes on in the text read last. `read` also opens `manifest.json`, and a picture as an image block.
+inline_images?, refresh?, clear_cookies?, file?, from?, chars?)` and `read(dir, file?, from=1, chars?)`.
+`read_url` answers with the text the CLI prints; under its `next:` line stands the call that goes on, with the
+answer's folder: `read(dir="C:/.../pages/example.com-9c1f…", file="content.md", from=127, chars=7900)`. Without
+`file`, `read` goes on in the text read last. `read` also opens `manifest.json`, and a picture as an image block.
 `inline_images=true` attaches the text's content pictures (not icons, logos or decorations) as
 image blocks right after their markers, as PNG or JPEG up to 1 568 px, the whole answer inside
-25 000 tokens, and the blocks of the result together inside the text's 7 900 characters (the text gives up the room
-the notes and the pictures take); leave it off below a 1M context. Calls run four at a time, and a cancelled call is
-killed. Details: [mcp.md](mcp.md).
+25 000 tokens; leave it off below a 1M context. The blocks of a result together, as Cline counts them (the result's
+JSON), stay inside the text's 7 900 characters: the text gives up the room the notes, the pictures and the JSON's
+escapes take. A result carries no `structuredContent`: the manifest is the folder's `manifest.json`. Calls run four
+at a time, and a cancelled call is killed. Details: [mcp.md](mcp.md).
+
+## For testing the skill
+
+Not for reading, and not in SKILL.md: tools for seeing what a harness does to an answer.
+
+- `readpage.py --probe N` and `--probe-units N`, and `probe:N` read as an address: numbered lines that show what a
+  harness shows of a command's output and which unit it counts (README's development notes, [mcp.md](mcp.md)).
+- `READ_PAGE_TEST_CUT` makes the skill cut its own answer the way a harness does, after the answer is built - the
+  CLI's printed answer and the MCP result's text alike (its text blocks joined into one, its image blocks left out) -,
+  so that a model can be taught to go on under each cut:
+
+  | Value | Harness | What is printed |
+  |---|---|---|
+  | `middle:8000` | Cline's SDK runtime | over N UTF-16 units, about half of N kept at each end, `...[truncated K chars]...` between (Cline's `truncateMiddleByChars`) |
+  | `head:16384` | Zed | over N bytes, `Command output too long. The first K bytes:` and those K bytes (K <= N), cut at a line's end |
+  | `tail:51200` | OpenCode | over N bytes, a `...output truncated...` line and the last N bytes, from a line's start |
+  | `file:30000` | Claude Code | over N bytes, the whole answer in a file of the temp folder, and `Output too large (37.6KB). Full output saved to: <path>` with its first 2 000 characters |
+
+  An answer under N, or a value that names no cut, is printed as it is; `--json`, `--probe`, `--probe-units` and
+  MCP's `probe` are never cut.

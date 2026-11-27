@@ -12,10 +12,12 @@ its own. English text meets the characters first (a 9 980-byte block lost about 
 from its middle in Cline), Cyrillic and CJK text the bytes. A text that fits is printed whole. A
 longer one gets an outline with line numbers first, then its beginning up to the limit, cut at a
 paragraph, and the exact line where it goes on; continuing from that line prints the next block of
-the same size.
+the same size. `--chars C` (MCP's chars) sets the size for a tool that shows more or less: C characters,
+the bytes and the lines in the same ratio (limits).
 """
 import os
 import re
+import tempfile
 
 import pictures
 
@@ -28,7 +30,8 @@ LINE_CHARS = 1998      # the Read tools of OpenCode, Kilo Code, Cline, Crush, Ge
                        # a line at 2 000 characters; "\r\n" fits too
 LINE_BYTES = 6000      # keeps every line inside one block even with the outline above it
 POINTER_BYTES = 200    # the separator above the text and the pointer below it (characters too)
-RANGE_BYTES = 150000   # a --to answer at most: the most a harness shows (Claude Code with its limit raised)
+CHARS_MIN = 1000       # --chars C: the least an answer holds,
+CHARS_MAX = 150000     # and the most - the most a harness shows (Claude Code with its limit raised)
 OUTSIDE_SHOWN = 1024   # less than this outside the text (a footer line) is not worth a header row
 PROBE_LINE = 100       # characters a probe line takes, its "\n" too
 PROBE_MAX = 10000000   # characters a probe prints at most
@@ -93,6 +96,78 @@ def probe_units(n):
         units += u16(line)
         size += len(line.encode("utf-8"))
     return "".join(out)
+
+
+def limits(chars=None):
+    """answer.render's keywords for an answer of `chars` characters (--chars C, MCP's chars): the bytes and the lines
+    in the default's ratio, so that none asked is BUDGET_CHARS, BUDGET_BYTES and BUDGET_LINES exactly."""
+    c = BUDGET_CHARS if chars is None else int(chars)
+    return {"chars": c, "budget": c * BUDGET_BYTES // BUDGET_CHARS, "max_lines": c * BUDGET_LINES // BUDGET_CHARS}
+
+
+def chars_asked(raw):
+    """(the characters an answer holds, why that is not the value asked for - "" when it is): --chars C or MCP's
+    chars, clamped to CHARS_MIN .. CHARS_MAX; a value that is no number is the default."""
+    if raw is None or isinstance(raw, bool) or str(raw).strip() == "":
+        return BUDGET_CHARS, ""
+    try:
+        c = int(raw) if isinstance(raw, (int, float)) else int(str(raw).strip())
+    except (ValueError, OverflowError):
+        return BUDGET_CHARS, "a number of characters: %d used" % BUDGET_CHARS
+    if c < CHARS_MIN:
+        return CHARS_MIN, "%d at the least: %d used" % (CHARS_MIN, CHARS_MIN)
+    if c > CHARS_MAX:
+        return CHARS_MAX, "%d at the most: %d used" % (CHARS_MAX, CHARS_MAX)
+    return c, ""
+
+
+def _u16_slice(s, start, end=None):
+    """s by UTF-16 units, as JavaScript slices a string: a pair a bound falls inside loses its half."""
+    data = s.encode("utf-16-le", "surrogatepass")
+    part = data[2 * start:] if end is None else data[2 * start:2 * end]
+    return part.decode("utf-16-le", "ignore")
+
+
+def harness_cut(out, spec=None):
+    """READ_PAGE_TEST_CUT, a hook for testing the skill (references/answer.md, For testing the skill): an answer cut
+    after it is built the way a harness cuts what a command printed, so that a model can be taught to go on under each
+    cut. `middle:N` Cline's SDK runtime: over N UTF-16 units, about half of N kept at each end and
+    `...[truncated K chars]...` between (its truncateMiddleByChars); `head:N` Zed: over N bytes, "Command output too
+    long. The first K bytes:" and those bytes, cut at a line's end; `tail:N` OpenCode: over N bytes, a
+    `...output truncated...` line and the last N bytes from a line's start; `file:N` Claude Code: over N bytes the
+    whole answer in a file of the temp folder, and a note naming it with its first 2 000 characters. An answer under
+    N, or a value that names no cut, is returned as it is. `spec` None: the environment's."""
+    spec = os.environ.get("READ_PAGE_TEST_CUT", "") if spec is None else spec
+    m = re.match(r"\s*(middle|head|tail|file)\s*:\s*(\d+)\s*$", spec or "")
+    if not m or not out:
+        return out
+    kind, n = m.group(1), int(m.group(2))
+    data = out.encode("utf-8")
+    if kind == "middle":
+        total = u16(out)
+        if total <= n:
+            return out
+        marker = "\n\n...[truncated %d chars]...\n\n"
+        keep = max(0, (n - len(marker % (total - n))) // 2)
+        removed = max(0, total - 2 * keep)
+        keep = max(0, (n - len(marker % removed)) // 2)
+        return _u16_slice(out, 0, keep) + marker % removed + (_u16_slice(out, total - keep) if keep else "")
+    if len(data) <= n:
+        return out
+    if kind == "head":
+        part = data[:n]
+        part = part[:part.rfind(b"\n") + 1] or part
+        return "Command output too long. The first %d bytes:\n\n%s" % (len(part), part.decode("utf-8", "ignore"))
+    if kind == "tail":
+        part = data[-n:]
+        nl = part.find(b"\n")
+        part = part[nl + 1:] if 0 <= nl < len(part) - 1 else part
+        return "...output truncated...\n\n" + part.decode("utf-8", "ignore")
+    fd, path = tempfile.mkstemp(prefix="read-page-cut-", suffix=".txt")
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(out)
+    return "Output too large (%.1fKB). Full output saved to: %s\n\nPreview (first 2KB):\n%s\n...\n" % (
+        len(data) / 1024.0, path, out[:2000])
 
 
 def _too_long(line):
@@ -357,37 +432,6 @@ def header(manifest, view, total_lines, text_bytes):
     return rows
 
 
-def _sent(head, rows, lines, view, start, to, total, call):
-    """--from N --to M: lines N to M, past one block, for a harness that shows more (Codex with an
-    OpenAI model passes about 40 000 bytes). The skill cannot see what the harness shows, so the
-    answer says the lines were sent, not shown, and carries the way back at its top and its bottom -
-    most harnesses keep both ends of what they cut: the next range, and a quote of the last line seen
-    before a cut (`--from "text"`). RANGE_BYTES at most, past what any harness shows."""
-    way = "cut by your tool? go on from the last line before the cut: %s" % call('"<its words>"', view)
-    room = RANGE_BYTES - _bytes(head + rows) - 2 * POINTER_BYTES - 2 * len(way.encode("utf-8"))
-    end, used = start, 0
-    while end <= to:
-        size = len(lines[end - 1].encode("utf-8")) + 1
-        if used + size > room and end > start:
-            break
-        used += size
-        end += 1
-    capped = " (%d KB at most a call)" % (RANGE_BYTES // 1000) if end <= to else ""
-    top = "── %s: lines %d-%d of %d sent%s; %s ──" % (view, start, end - 1, total, capped, way)
-    if end <= total:
-        nxt = min(total, end + (end - start) - 1)
-        tail = "── next: line %d of %d → %s; %s ──" % (end, total, call(end, view, nxt), way)
-    else:
-        tail = "── the end of %s; %s ──" % (view, way)
-    out = "\n".join(head + rows + [top] + pictures.compact(lines[start - 1:end - 1]) + [tail]) + "\n"
-    return out, (end if end <= total else None)
-
-
-def _call(frm, view, to=None):
-    """How a caller that names none goes on: the command line's flags."""
-    return "the same command with --from %s%s --file %s" % (frm, " --to %d" % to if to else "", view)
-
-
 # an element's marker, `[tab · hidden, but extracted · 6.0 KB, ... · Go]`: its type, then its state, what more
 # there is to say, its name last (tabs.py, and a cut workbook's rows and sheets)
 ELEMENT = re.compile(r"\[(tab|section|select|rows|sheet) · ([^\]\n]*)\]")
@@ -458,9 +502,9 @@ def find(lines, quote, after=1):
     return None
 
 
-def not_found(manifest, text, view, quote):
+def not_found(manifest, text, view, quote, budget=BUDGET_BYTES, max_lines=BUDGET_LINES, chars=BUDGET_CHARS):
     """`--from "text"` that no line holds: the answer says so and shows the outline, whose line numbers
-    `--from N` takes."""
+    `--from N` takes; inside the answer's size (render's keywords)."""
     lines = (text or "").split("\n")
     if lines and lines[-1] == "":
         lines.pop()
@@ -472,24 +516,34 @@ def not_found(manifest, text, view, quote):
         q = q.encode("utf-8", "replace").decode("utf-8")
     q = q if len(q) <= 80 else q[:79] + "…"
     say = ['── not in %s: "%s", spaces and case aside; the outline below names its lines for --from N ──' % (view, q)]
-    room = min(OUTLINE_BYTES * 2, (BUDGET_BYTES - _bytes(head + say)) // 2, (BUDGET_CHARS - _chars(head + say)) // 2)
+    room = max(0, min(OUTLINE_BYTES * 2, (budget - _bytes(head + say)) // 2, (chars - _chars(head + say)) // 2))
     starts, n = [], 1
     while n <= len(lines):
         starts.append(n)
-        n = window(lines, n, BUDGET_BYTES - _bytes(head) - POINTER_BYTES, BUDGET_LINES - len(head) - 3,
-                   BUDGET_CHARS - _chars(head) - POINTER_BYTES)
+        n = window(lines, n, budget - _bytes(head) - POINTER_BYTES, max(1, max_lines - len(head) - 3),
+                   chars - _chars(head) - POINTER_BYTES)
     rows = outline(lines, room, starts) if lines else []
     return "\n".join(head + say + (["outline (line, heading):"] + rows if rows else [])) + "\n"
 
 
-def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_lines=BUDGET_LINES, chars=BUDGET_CHARS,
-           to=None, call=None):
+def _lines(view, first, last, total):
+    """The line above an answer's text: which lines of which file it holds."""
+    return "── %s: lines %d-%d of %d ──" % (view, first, last, total)
+
+
+def _eof(view, first, last, total):
+    """The last line of the answer the text ends in: the end, and the lines this answer held."""
+    return "── EOF %s: lines %d-%d of %d ──" % (view, first, last, total)
+
+
+def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_lines=BUDGET_LINES, chars=BUDGET_CHARS):
     """The whole answer as one string, and the line the next block starts at (None at the end).
 
-    `next_hint(n, total, view)` words the pointer for the caller: a flag on the command line, an
-    argument of an MCP tool. `to`: the last line asked for (--to M), the lines up to it sent
-    whatever the block (_sent); `call(frm, view, to=None)` words a call of the caller's that starts at
-    `frm` - a line number, or a quote.
+    `next_hint(n, total, view)` words the pointer for the caller while text remains: `── next: line N of T ──` and
+    on a line of its own the command or the MCP call that reads on. `budget`, `max_lines` and `chars` are the
+    answer's size in bytes, lines and characters (limits: --chars C sets all three). The lines around the text are
+    dry: above it `── content.md: lines A-B of T ──`, every block alike; the last block's last line
+    `── EOF content.md: lines A-T of T ──` (KNOWN-ISSUES 276).
     """
     lines = (text or "").split("\n")
     if lines and lines[-1] == "":
@@ -511,9 +565,9 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
         return "\n".join(head + ["── %s has %d lines: line %d is past the end ──" % (view, total, start)]) + "\n", None
     whole = (start == 1 and _bytes(lines) + POINTER_BYTES <= room_b and _chars(lines) + POINTER_BYTES <= room_c
              and total + 2 <= room_l)
-    to = int(to) if to and int(to) >= start else None
-    if whole and to is None:
-        return "\n".join(head + ["── %s: all %d lines ──" % (view, total)] + pictures.compact(lines)) + "\n", None
+    if whole:
+        return "\n".join(head + [_lines(view, 1, total, total)] + pictures.compact(lines)
+                         + [_eof(view, 1, total, total)]) + "\n", None
 
     block, block_c = room_b - POINTER_BYTES, room_c - POINTER_BYTES
     rows = []
@@ -535,14 +589,11 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
         rows = outline(lines, room_o, starts_after(first_end))
         if rows:
             rows = ["outline (line, heading):"] + rows
-    if to is not None:
-        return _sent(head, rows, lines, view, start, min(to, total), total, call or _call)
     end = window(lines, start, block - _bytes(rows), room_l - len(rows) - 3, block_c - _chars(rows))
     while True:
         # a picture's first marker in this answer is full, a repeat short
-        body = (["── %s: lines %d-%d of %d ──" % (view, start, end - 1, total)]
-                + pictures.compact(lines[start - 1:end - 1]))
-        tail = [next_hint(end, total, view)] if end <= total else []
+        body = [_lines(view, start, end - 1, total)] + pictures.compact(lines[start - 1:end - 1])
+        tail = [next_hint(end, total, view) if end <= total else _eof(view, start, end - 1, total)]
         out = "\n".join(head + rows + body + tail) + "\n"
         if _fits(out, budget, chars, max_lines):
             return out, (end if end <= total else None)

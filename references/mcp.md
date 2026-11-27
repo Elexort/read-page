@@ -23,8 +23,8 @@ error, so a prompt-injected model cannot turn the tool into a general file reade
 
 ```
 read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?,
-         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, to?, probe?, probe_units?)
-read(dir, file?, from=1, to?)
+         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, chars?, probe?, probe_units?)
+read(dir, file?, from=1, chars?)
 ```
 
 Arguments are the CLI flags without dashes: `--allow-external` -> `allow_external`, `--from` ->
@@ -36,39 +36,43 @@ meant. `read_url(..., ocr=N)` answers with the text drawn in picture N, as `--oc
 `read(dir, file="img/...", ocr=true)` with a picture's text instead of the picture.
 
 `read_url` answers with the text the CLI prints - a header, then the text whole, or an outline,
-the first block and the next line. Only the pointer differs, since there is no command to repeat:
+the first block and the call that goes on. Only the line under `next:` differs: the read call, not a command:
 
 ```
 read-page · ok · defuddle · content.md 24.7 KB, 389 lines · 1.9 s
-files: C:\Users\me\AppData\Local\Temp\read-page\pages\9c1f… (content.md, page.md, manifest.json)
+files: C:\Users\me\AppData\Local\Temp\read-page\pages\example.com-9c1f… (content.md, page.md, manifest.json)
 outline (line, heading):
       1 ## Installation
       …
 ── content.md: lines 1-126 of 389 ──
 (the text)
-── next: line 127 of 389 → read(dir, file="content.md", from=127) ──
+── next: line 127 of 389 ──
+read(dir="C:/Users/me/AppData/Local/Temp/read-page/pages/example.com-9c1f…", file="content.md", from=127, chars=7900)
 ```
 
+The call names its folder, in forward slashes on Windows (a client's JSON takes them unescaped), and the size the
+answer was asked with; the last block ends with `── EOF content.md: lines 352-389 of 389 ──`, as on the CLI.
 `dir` is the folder on the `files:` line. `read_url(url, from=127)` gives the same block, also from
 the saved copy, with no network. A call that names no `file` goes on in the text read last
 (a named one becomes the text being read; `read_url` without `from` starts at `content.md`, or
 `page.md` for a fragment), so a model that drops `file` still reads the same text under the
-same line numbers. The full manifest is in `structuredContent` and in
-`dir/manifest.json`; `structuredContent.mcp` adds `file`, `from`, `to`, `next_from`, `total_lines` and
-the picture counts.
+same line numbers. A result is its blocks and `isError`, nothing else: no `structuredContent` (the tools declare
+no `outputSchema`, so the protocol asks for none). The manifest is the folder's file, `read(dir,
+file="manifest.json")`; the header says what a model needs of it - the status, the folder, the advice, the next line
+(see How a client counts a result).
 
 `from` takes a piece of text as well as a line number (both tools, as the CLI's `--from "text"`): the
 answer starts at the first line that holds it - whitespace folded, then without case; when several do,
 the first at or after where the last answer of that file started - and a marker is found by its type
 and name, a picture by its number: `from="[tab · Developer Plan Limits]"`, `from="[img #3]"`; the line is
 matched as it stands too, so a quote that ends inside a marker (a client cut the result there) is found. No line
-holds it: the answer says so and shows the outline, `structuredContent` names no `next_from`.
+holds it: the answer says so and shows the outline, and names no next line.
 
-`to` (both tools) is the CLI's `--to`: the lines from `from` up to it at once, past one block, for a
-client that shows more - said to be sent, not shown, with the way on at the top and at the bottom in
-`read()`'s words: `read(dir, file="content.md", from=301, to=600)` for the next range, and
-`read(dir, file="content.md", from="<its words>")` for a tool that cut the answer. One before `from` is
-left out and named on the `ignored:` line.
+`chars` (both tools) is the CLI's `--chars`: how much one answer holds, in characters, whole lines - 7 900 by
+default, which fits every client; 1 000 to 150 000, a value outside or not a number named on the `ignored:` line with
+what was used. The result as Cline counts it, its JSON (see How a client counts a result), stays within it, and the
+next line carries it on. `to`, a range in lines until 2026-11-27, is gone: left out and named, `to 120 (gone: chars
+sets the size)`, and the call goes on.
 
 `read` behaves by file type:
 
@@ -85,7 +89,7 @@ left out and named on the `ignored:` line.
 before it, a head and a tail sentinel, ASCII - so what a client shows of a tool's result, and where it cut,
 can be read off what reaches the model (Cline's SDK runtime keeps about 3 985 characters at each end of
 8 000). `read_url(url="probe:N")` is a page of the same lines answered the normal way, and with `from` and
-`to` it shows what a range sends. It is for testing the skill, not for reading; SKILL.md does not name it.
+`chars` it shows what an answer of that size sends. It is for testing the skill, not for reading; SKILL.md does not name it.
 
 `read_url(url="probe", probe_units=N)` is the probe that tells the units apart (`readpage.py --probe-units N`): the
 same N characters in lines of 100, but each line's label says its number and how many characters, UTF-16 units and
@@ -95,6 +99,10 @@ the three counts drift apart line by line. Take the last line the client shows a
 plus what the shown part adds are the three counts at the cut, and the one that comes to the client's limit is the one
 it counts: Cline's SDK counts UTF-16 units and keeps about 3 985 of them at each end, so the label of the last line
 before its gap says about 3 985 utf16, whatever it says of characters and bytes. The ASCII probe cannot tell them apart.
+
+`READ_PAGE_TEST_CUT` (in the server's environment) cuts a result's text the way a client would - `middle:8000` as Cline,
+`head:N`, `tail:N`, `file:N` - its text blocks joined into one: for teaching a model to go on under a cut
+([answer.md](answer.md#for-testing-the-skill)). The probes are never cut.
 
 ## The header
 
@@ -129,7 +137,7 @@ context; three groups, the first one reached cuts:
 
 | Limit | Value | Who enforces it |
 |---|---|---|
-| the text | 7 900 characters, 9 980 bytes and 495 lines, as on the CLI - the blocks of one result together: its text, the notes after it and a stand-in of 16 characters for each image | Cline (8 000 characters a tool result, MCP too), Codex, Roo Code (`answer.py`) |
+| the text | 7 900 characters, 9 980 bytes and 495 lines, as on the CLI - the blocks of one result together, as Cline counts them: their JSON, with the notes after the text and `[image attached]` for each image | Cline (8 000 characters a tool result, MCP too), Codex, Roo Code (`answer.py`) |
 | one picture | PNG or JPEG; a long side over 1 568 px is scaled down, proportions kept; at most 3.75 MB, a heavier PNG becomes one JPEG at q95 | xAI takes only PNG and JPEG; Claude on Bedrock 5 MB of base64; 8 000 px, and ~2 000 px when a request has more than 20 pictures |
 | the whole answer | 25 000 tokens: the text plus `ceil(w/28)*ceil(h/28)` and ~150 for the path line a picture costs | Claude Code (measured: going over keeps the pictures but tells the model "OUTPUT TRUNCATED") |
 | | 256 pictures | Qwen 3.6-plus, for the whole request |
@@ -138,15 +146,46 @@ context; three groups, the first one reached cuts:
 Only the content pictures go in: not a decoration (the same picture 3+ times in the text, 48 px or
 less, 1 KB or less) and not a logo, icon, avatar or badge of 100 px or less, by its name, `alt`
 or address. Screenshots asked for go first, then the biggest pictures; each stands right after its
-marker. A picture that did not fit keeps its marker, and a note counts it (`images_skipped`,
-`structuredContent.mcp.tokens` is the estimate). Converting needs Pillow (GIF, WebP, AVIF, BMP,
-scaling) and PyMuPDF (SVG); without them only a PNG or JPEG that already fits goes in, the rest
-stays a marker - the setup report names both. The text gives up the room the pictures and the notes take: the
-server counts the blocks of one result together - the text of every block, and for each image block the 16
-characters of `[image attached]`, which is what Cline's SDK counts for it - and when `inline_images` or
-`screenshots` would push them past the three limits of the text, the text is rendered again inside what is left
-(a block ends at a paragraph, so it loses a paragraph at most more than it must); the pointer to the next line
-names where the shorter block ends. A range (`to`) and a quote that no line holds are not shortened.
+marker. A picture that did not fit keeps its marker, and a note counts it. Converting needs Pillow (GIF, WebP, AVIF,
+BMP, scaling) and PyMuPDF (SVG); without them only a PNG or JPEG that already fits goes in, the rest
+stays a marker - the setup report names both. The text gives up the room the pictures, the notes and JSON take: the
+server counts the blocks of one result together as Cline's SDK counts them - the result's JSON, so the escapes of the
+text too (a line's `\n` is two characters, a quote two), and for each image block the `[image attached]` that Cline
+puts in its place - and when they would pass the three limits of the text, the text is rendered again inside what
+is left (a block ends at a paragraph, so it loses a paragraph at most more than it must); `read`'s blocks the same.
+The pointer to the next line names where the shorter block ends. A range (`to`) and a quote that no line holds are
+not shortened.
+
+## How a client counts a result
+
+What a client gives the model of a tool's result decides what must fit, so the clients' code was read (2026-11-27):
+
+- **Cline's SDK runtime** - its CLI, and the VS Code windows on that bundle (cline/cline cbc7d14): an MCP tool
+  returns the result object as the server sent it (`sdk/packages/core/src/extensions/mcp/tools.ts:29-46`,
+  `extensions/mcp/client.ts:929-946`; the VS Code bundle's `apps/vscode/src/services/mcp/McpHub.ts:1721-1741` the
+  same), the runtime keeps it as the call's output (`sdk/packages/agents/src/agent-runtime.ts:2601-2621`,
+  `2676-2682`), and the message to the model takes `toPersistedToolResultContent(output)`
+  (`sdk/packages/core/src/runtime/config/agent-message-codec.ts:296-302`), which makes an object its JSON,
+  `JSON.stringify(output)` with no spaces (`sdk/packages/core/src/session/persisted-tool-result-content.ts:9-24`).
+  That string is measured in UTF-16 units against 8 000 (`DEFAULT_MAX_TOOL_RESULT_CHARS`,
+  `sdk/packages/core/src/session/services/message-builder.ts:29`) and past it cut in the middle, about 3 984 kept
+  at each end, `...[truncated N chars]...` between and the cache notice after
+  (`message-builder.ts:273-298`, `1619-1641`). So everything in the object counts: the JSON's own characters
+  (35 before the first block's text), every escape of the text (`\n`, `\"`, `\\` two characters each; a block of 495
+  short lines gains 495), and `structuredContent` - which is why a result carries none. The preview that would put
+  `[image attached]` in an image's place (`tool-result-cache.ts:101-148`) is given that string, not the object, so
+  an image block reaches the model as its base64 inside the text, cut, and no picture is seen: with Cline leave
+  `inline_images` and `screenshots` off, and read a picture's words with `ocr`. The server counts an image as
+  `[image attached]` all the same, the most it can do.
+- **Cline's legacy VS Code bundle** (the `legacy-extension` branch, 3.89.x,
+  `apps/vscode/src/core/task/tools/handlers/UseMcpToolHandler.ts:176-213`): the text blocks joined by a blank
+  line, an image passed as an image when the model takes them, `structuredContent` not read; cut at 400 KB.
+- **Codex** (openai/codex bee5dc5, `codex-rs/protocol/src/models.rs:2488-2525`): with `structuredContent` the
+  model gets that alone, serialised, in place of the text; without it the blocks.
+
+`read_url(url="probe", probe=N)` in Cline's runtime shows that form: of the 3 984 units Cline keeps at the head, the
+JSON's start takes 35 and each line's `\n` one more, so the last line seen before the gap says that many characters
+fewer than 3 984 stand before it.
 
 ## Degradation
 
@@ -193,7 +232,9 @@ The server reads and writes UTF-8 whatever the machine's code page is: it reconf
 input and output at the start, so a client config without `-X utf8` (a Chinese Windows, code page 936) still
 delivers `https://例子.测试/页面` and a folder under `C:\Users\张三` intact, and a UTF-8 BOM before the first line
 (a file saved with one, piped in) is dropped: the first message was a parse error. The flag stays in the
-example: it makes the children and everything else UTF-8 too.
+example: it makes the children and everything else UTF-8 too. Under a POSIX locale that is not UTF-8 (zh_CN.GBK) a
+folder the answer names is found again when a model sends it back, with or without the flag, whether its name's bytes
+are the locale's or UTF-8 - the reader's child, always in UTF-8 mode, makes the latter.
 
 ## Why not a third tool
 
