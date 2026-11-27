@@ -79,7 +79,11 @@ def dims_of(b64, mime):
     return 0, 0
 
 
+in_flight = {}                    # a slow page's first request: [when it came, when it was answered] (monotonic)
+
+
 def slow(h):
+    span = in_flight.setdefault(h.path, [time.monotonic(), None])
     time.sleep(2.5)
     body = ("<html><head><title>Slow</title></head><body><article><h1>Slow</h1><p>SLOW-PAGE " + EN * 6
             + "</p></article></body></html>").encode()
@@ -88,7 +92,19 @@ def slow(h):
     h.send_header("Content-Length", str(len(body)))
     h.end_headers()
     h.wfile.write(body)
+    if span[1] is None:
+        span[1] = time.monotonic()
     h.close_connection = True
+
+
+def most_at_once(spans):
+    """How many of the requests were in flight together at the most (one answered as another comes counts apart)."""
+    events = sorted([(a, 1) for a, _ in spans] + [(b, -1) for _, b in spans])
+    most = now = 0
+    for _, d in events:
+        now += d
+        most = max(most, now)
+    return most
 
 
 gone = {}
@@ -197,9 +213,14 @@ try:
         got.append(r)
     dt = time.monotonic() - t0
     ok_ids = sorted(r.get("id") for r in got if mcp_status(r.get("result")) == "ok")
-    check("four read_url calls run at once (each page takes 2.5 s)",
-          ok_ids == [11, 12, 13, 14] and dt < 9.5,    # one after another they take 4 x 2.5 s = 10 s and more; 8.4 s on a macOS Intel runner
-          "%.1f s, answered %s" % (dt, ok_ids))
+    # asked of the pages, not of the clock: a server that takes calls one after another has one page in flight at a
+    # time, whatever the machine. The four calls' time against 9.5 s failed on a macOS Intel runner (10.7 s, 8.4 s as
+    # a rule there: the spare's page comes first and the three cold processes' pages seconds later; KNOWN-ISSUES 289)
+    spans = [v for k, v in sorted(in_flight.items()) if v[1] is not None]
+    most = most_at_once(spans)
+    check("four read_url calls run at once: their pages are in flight together, not one after another (each takes 2.5 s)",
+          ok_ids == [11, 12, 13, 14] and len(spans) == 4 and most >= 2,
+          "%d of the 4 pages in flight together at the most, %.1f s, answered %s" % (most, dt, ok_ids))
 
     # ------------------------------------------------ a cancelled call is killed and gets no answer
     send({"jsonrpc": "2.0", "id": 21, "method": "tools/call",

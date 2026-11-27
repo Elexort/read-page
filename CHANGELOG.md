@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **`tests/mcp_parallel.py`: four calls at once are told by their pages, not by the clock** (KNOWN-ISSUES 289):
+  the check held the four calls' time under 9.5 s, and a macOS Intel runner, where three of them start cold
+  processes, took 10.7 s once (8.4 s as a rule). The test server now notes when each page is asked for and
+  answered; a server that takes calls one after another has one in flight at a time, whatever the machine.
 - **The wait for one model process's answer ends at its time** (KNOWN-ISSUES 286): `--alternate`'s wait put another
   process's answer back on the read's queue at once, took it again at once, and never looked at its time while one
   was there - a read held past its deadline. Another's answer now waits aside until the wait ends.
