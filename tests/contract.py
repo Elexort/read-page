@@ -4,12 +4,15 @@
 
 One call answers with a header and the text, inside 7 900 characters (UTF-16 units, as Cline counts
 them), 9 980 bytes and 495 lines counted on what is written (UTF-8, LF), stderr included. A text that
-fits comes whole; a longer one comes with an outline and the exact line to go on from, and the blocks
-put together are the saved file.
+fits comes whole; a longer one comes with an outline, the exact line to go on from and the command that
+reads on - run as printed in each shell the machine has -, and the blocks put together are the saved file.
 """
+import argparse
+import base64
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -28,6 +31,56 @@ CHARS = 7900      # Cline's SDK runtime cuts every tool result at 8 000 characte
 
 def u16(s):
     return len(s.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def slashed(path):
+    """A path as an answer's command names it: absolute, forward slashes on Windows."""
+    path = os.path.abspath(path)
+    return path.replace("\\", "/") if os.name == "nt" else path
+
+
+def shells():
+    """The shells on this machine that a printed command is run in, as (name, run one line with an environment):
+    cmd, bash, PowerShell 5.1 and 7. Each is given the line as typed: cmd /s /c with it in quotes, bash -c,
+    PowerShell as an encoded command (its own words, no quoting between). Not WSL's bash: its paths are another
+    machine's."""
+    out = []
+    if os.name == "nt":
+        out.append(("cmd", lambda line, env: subprocess.run('cmd /d /s /c "%s"' % line, capture_output=True,
+                                                             timeout=240, env=env)))
+        git_bash = os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Git", "bin", "bash.exe")
+        if os.path.isfile(git_bash):
+            out.append(("bash", lambda line, env: subprocess.run([git_bash, "-c", line], capture_output=True,
+                                                                  timeout=240, env=env)))
+    elif shutil.which("bash"):
+        out.append(("bash", lambda line, env: subprocess.run([shutil.which("bash"), "-c", line], capture_output=True,
+                                                              timeout=240, env=env)))
+    for ps in ("powershell", "pwsh"):
+        exe = shutil.which(ps)
+        if exe:
+            out.append((ps, lambda line, env, exe=exe: subprocess.run(
+                [exe, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                 base64.b64encode(line.encode("utf-16-le")).decode("ascii")], capture_output=True, timeout=240,
+                env=env)))
+    return out
+
+
+def split_windows(line):
+    """argv as a Windows program gets it from a command line with no backslash before a quote (CommandLineToArgvW):
+    double quotes group and are dropped."""
+    out, cur, quoted, any_ = [], [], False, False
+    for ch in line:
+        if ch == '"':
+            quoted, any_ = not quoted, True
+        elif ch in " \t" and not quoted:
+            if cur or any_:
+                out.append("".join(cur))
+            cur, any_ = [], False
+        else:
+            cur.append(ch)
+    if cur or any_:
+        out.append("".join(cur))
+    return out
 
 
 def page(title, body):
@@ -118,6 +171,7 @@ class Versioned:
 
 VERSIONED = Versioned()
 ROUTES["/v"] = VERSIONED
+ROUTES["/dollar$sign"] = ROUTES["/long"]      # an address a shell would read inside double quotes (KNOWN-ISSUES 276)
 srv = serve(ROUTES)
 
 
@@ -136,17 +190,25 @@ def fits(name, r):
 
 
 def body(text):
-    """The text lines of one answer: after the `── file: ...` separator, before the pointer."""
+    """The text lines of one answer: after the `── file: lines ...` line, before the pointer - `── next: ...` and
+    the command under it - or the end, `── EOF ...`."""
     lines = text.split("\n")
-    i = next((k for k, ln in enumerate(lines) if ln.startswith("── ") and (": lines " in ln or ": all " in ln)), None)
+    i = next((k for k, ln in enumerate(lines) if ln.startswith("── ") and not ln.startswith("── EOF ")
+              and (": lines " in ln or ": all " in ln)), None)
     if i is None:
         return []
     rest = lines[i + 1:]
     if rest and rest[-1] == "":
         rest.pop()
-    if rest and rest[-1].startswith("── next: "):
-        rest.pop()
+    for k in range(len(rest) - 1, max(-1, len(rest) - 3), -1):
+        if rest[k].startswith("── next: ") or rest[k].startswith("── EOF "):
+            return rest[:k]
     return rest
+
+
+def last_rows(text, n=2):
+    """The last n lines of an answer."""
+    return text.rstrip("\n").split("\n")[-n:]
 
 
 def next_line(text):
@@ -165,9 +227,12 @@ try:
     # a short page comes whole
     r = run_read(srv.url("/short"))
     fits("short", r)
-    check("short: the whole text, no outline, no pointer",
-          ": all " in r.text and "outline" not in r.text and next_line(r.text) is None
-          and body(r.text) == lines_of(r), r.text.split("\n")[0][:80])
+    n_short = len(lines_of(r))
+    check("short: the whole text, no outline, no pointer, its lines above it and EOF its last line (KNOWN-ISSUES 276)",
+          "── content.md: lines 1-%d of %d ──" % (n_short, n_short) in r.text and "outline" not in r.text
+          and next_line(r.text) is None and body(r.text) == lines_of(r)
+          and last_rows(r.text, 1) == ["── EOF content.md: lines 1-%d of %d ──" % (n_short, n_short)],
+          str(last_rows(r.text, 1))[:90])
     check("short: the header names status, engine and the files",
           r.text.startswith("read-page · ok · ") and "files: " + r.dir in r.text, r.text.split("\n")[0][:80])
     # an agent read "49% of the page" on a whole text as "I got half the content" and kept re-reading
@@ -198,10 +263,10 @@ try:
         fits(path, first)
         check(path + ": an outline and the next line", "outline (line, heading):" in first.text
               and next_line(first.text) is not None, "")
-        check(path + ": the pointer names the file it continues", "--file content.md ──" in first.text,
-              (re.findall(r"── next: .*", first.text) or ["no pointer"])[0][:90])
+        check(path + ": the command under next: names the file it continues",
+              last_rows(first.text, 1)[0].endswith(" --file content.md"), last_rows(first.text, 1)[0][-90:])
         saved = lines_of(first)
-        got, n, hops, over = body(first.text), next_line(first.text), 0, []
+        got, n, hops, over, more = body(first.text), next_line(first.text), 0, [], first
         while n and hops < 60:
             more = run_read(srv.url(path), "--from", str(n), reuse=first)
             if (len(more.out) > BUDGET or more.out.count(b"\n") > LINES or more.err or more.rc
@@ -215,6 +280,10 @@ try:
         check(path + ": every block fits and starts at its line", not over, str(over[:3]))
         check(path + ": the blocks put together are content.md", got == saved,
               "%d of %d lines, %d answers" % (len(got), len(saved), hops + 1))
+        top = re.findall(r"── content\.md: lines (\d+)-(\d+) of (\d+) ──", more.text)
+        check(path + ": the last block's last line is EOF, with the lines it holds (KNOWN-ISSUES 276)",
+              top and last_rows(more.text, 1) == ["── EOF content.md: lines %s-%s of %s ──" % top[-1]]
+              and top[-1][1] == top[-1][2] == str(len(saved)), str(last_rows(more.text, 1))[:90])
 
     # the outline points at real headings
     first = run_read(srv.url("/long"))
@@ -264,7 +333,8 @@ try:
     n = next_line(whole.text)
     on = run_read(srv.url("/long"), "--from", str(n or 1), "--file", "page.md", reuse=whole)
     check("--file page.md: the pointer says page.md and the next block is page.md's",
-          "--file page.md ──" in whole.text and body(on.text)[:1] == lines_of(whole, "page.md")[(n or 1) - 1:(n or 1)],
+          last_rows(whole.text, 1)[0].endswith(" --file page.md")
+          and body(on.text)[:1] == lines_of(whole, "page.md")[(n or 1) - 1:(n or 1)],
           first_line(on)[:80])
 
     # a forgotten --file goes on in the file read last; --file switches it
@@ -286,6 +356,64 @@ try:
     anew = run_read(srv.url("/long"), reuse=plain)
     check("a new reading (no --from) starts at content.md again", "── content.md: lines 1-" in anew.text,
           first_line(anew)[:80])
+
+    # the answer's lines (KNOWN-ISSUES 276): above the text `── content.md: lines A-B of T ──`, every block alike;
+    # below it, while text remains, `── next: line N of T ──` and on a line of its own the command that reads on,
+    # literal - run here as printed in each shell the machine has; the end is `── EOF content.md: lines A-T of T ──`
+    import ownenv                                              # noqa: E402
+    first = run_read(srv.url("/long"))
+    saved = lines_of(first)
+    n = next_line(first.text)
+    line = last_rows(first.text, 1)[0]
+    python_name = getattr(ownenv, "python_name", None) or (lambda exe: "python")   # 2a87981 had none
+    me = python_name(sys.executable)
+    argv_want = [me, "-X", "utf8", slashed(SCRIPT), srv.url("/long"), "--dir", slashed(first.dir), "--from", str(n),
+                 "--chars", "7900", "--file", "content.md"]
+    check("next: two lines - where it goes on, then the command that reads on, alone and literal",
+          last_rows(first.text, 2) == ["── next: line %d of %d ──" % (n, len(saved)),
+                                       '%s -X utf8 "%s" "%s" --dir "%s" --from %d --chars 7900 --file content.md' % (
+                                           me, slashed(SCRIPT), srv.url("/long"), slashed(first.dir), n)],
+          str(last_rows(first.text, 2))[:200])
+    for name, argv in (("as bash splits it", shlex.split(line)), ("as Windows splits it", split_windows(line))):
+        check("... split %s: the interpreter, -X utf8, the script, the address, the flags" % name, argv == argv_want,
+              str(argv[3:])[:160])
+    e_sh = dict(os.environ, READ_PAGE_CACHE=os.path.join(first.root, "cache"), READ_PAGE_TEST_PUBLIC_HOST=PUBLIC,
+                PATH=os.path.dirname(sys.executable) + os.pathsep + os.environ.get("PATH", ""))
+    for k in ("FIRECRAWL_API_KEY", "EXA_API_KEY", "TAVILY_API_KEY", "JINA_API_KEY", "READ_PAGE_PYTHON_NAME"):
+        e_sh.pop(k, None)
+    ran = []
+    for name, run in shells():
+        p = run(line, e_sh)
+        said = p.stdout.decode("utf-8", "replace")
+        ran.append(name)
+        check("... run as printed in %s: the next block, from line %d" % (name, n),
+              p.returncode == 0 and "── content.md: lines %d-" % n in said and body(said)[:1] == saved[n - 1:n],
+              "rc %s %s" % (p.returncode, (said.split("\n")[0] or p.stderr.decode("utf-8", "replace")[-160:])[:100]))
+    check("... in two shells at least: %s" % ", ".join(ran), len(ran) >= 2, str(ran))
+    kept = run_read(srv.url("/long"), "--allow-external", "--deny-images", "--download", "--refresh", "--clear-cookies",
+                    "--screenshots", "0")
+    k_argv = shlex.split(last_rows(kept.text, 1)[0])
+    check("... it keeps the flags that matter if the page is read again, and drops --refresh and the rest",
+          [a for a in k_argv if a.startswith("--") and a not in ("--dir", "--from", "--chars", "--file")]
+          == ["--allow-external", "--deny-images", "--download"], str(k_argv[5:])[:140])
+    named = run_read(srv.url("/long"), env={"READ_PAGE_PYTHON_NAME": "python3.99"})
+    check("... the interpreter by the name the agent started the skill with, which the first process hands on",
+          last_rows(named.text, 1)[0].startswith("python3.99 -X utf8 "), last_rows(named.text, 1)[0][:60])
+    check("ownenv.python_name: a Python as a command names it, \"python\" for anything else",
+          [python_name(x) for x in ("C:\\Python313\\python.exe", "/usr/bin/python3.12", "", "C:\\x\\pythonw.exe",
+                                           "/opt/app/host", "C:\\a b\\my python.exe", "pypy3")]
+          == ["python", "python3.12", "python", "python", "python", "python", "pypy3"], "")
+    dollar = run_read(srv.url("/dollar$sign"))
+    n_d = next_line(dollar.text)
+    check("an address a shell reads inside double quotes ($): the words instead of the command",
+          n_d and last_rows(dollar.text, 2) == ["── next: line %d of %d ──" % (n_d, len(lines_of(dollar))),
+                                                "the same command with --from %d --chars 7900 --file content.md" % n_d],
+          str(last_rows(dollar.text, 1))[:120])
+    stray = run_read(srv.url("/long"), "--from", "5", "--file", "content.md", "──", reuse=first)
+    ign = next((ln for ln in stray.text.split("\n") if ln.startswith("ignored: ")), "")
+    check("a stray ── (a model copied the decoration): left out and named, the read goes on",
+          stray.rc == 0 and ign == "ignored: ── (the answer's decoration, not part of the command)"
+          and "── content.md: lines 5-" in stray.text, ign or first_line(stray)[:80])
 
     # --chars C, one knob in characters (KNOWN-ISSUES 277): the whole answer - header, outline, the lines above and
     # below the text - within C characters (UTF-16 units), C x 9 980 / 7 900 bytes and C x 495 / 7 900 lines, whole
@@ -574,6 +702,27 @@ try:
           len(said.encode("utf-8")) <= BUDGET and u16(said) <= CHARS and isinstance(n, int) and ('from=%d' % n) in said
           and os.path.isfile(os.path.join(d, "manifest.json")),
           "%d bytes, %d characters, next %s, %s" % (len(said.encode("utf-8")), u16(said), n, d[-30:]))
+    rows_m = last_rows(said, 2)
+    call_m = re.match(r'read\(dir="([^"]+)", file="content\.md", from=(\d+), chars=7900\)$', rows_m[-1])
+    check("MCP next: two lines, the read call under it with its folder (KNOWN-ISSUES 276)",
+          rows_m[0].startswith("── next: line %d of " % n) and rows_m[0].endswith(" ──") and call_m
+          and int(call_m.group(2)) == n
+          and os.path.normcase(os.path.abspath(call_m.group(1))) == os.path.normcase(os.path.abspath(d)),
+          rows_m[-1][:140])
+    on_m = mcp({"dir": call_m.group(1), "file": "content.md", "from": int(call_m.group(2)), "chars": 7900},
+               "read") if call_m else {}
+    check("... that call, as printed, gives the next block", ("── content.md: lines %d-" % n) in mcp_said(on_m),
+          mcp_said(on_m)[:80])
+    rp = mcp_server.readpage
+    ns = argparse.Namespace(url="https://example.com/a", target="https://example.com/a", dir="", allow_external=True,
+                            force_external=True, alternate=True, deny_images=True, download=True, refresh=True,
+                            clear_cookies=True, screenshots="2", ocr=3, json=True)
+    cmd = rp.cli_command(ns, 12, 20000, "page.md") if hasattr(rp, "cli_command") else ""
+    check("the CLI's command carries --allow-external, --force-external, --alternate, --deny-images and --download; "
+          "never --refresh, --clear-cookies, --screenshots, --ocr or --json",
+          cmd == '%s -X utf8 "%s" "https://example.com/a" --allow-external --force-external --alternate --deny-images '
+          '--download --from 12 --chars 20000 --file page.md' % (me, slashed(SCRIPT)),
+          cmd[:160])
     res2 = mcp({"dir": d, "from": n}, "read")
     check("MCP read: the block at that line", ("── content.md: lines %d-" % n) in mcp_said(res2), mcp_said(res2)[:70])
     res3 = mcp({"url": srv.url("/long"), "from": n})
@@ -618,6 +767,9 @@ try:
     resw = mcp({"url": srv.url("/short")})
     saidw = mcp_said(resw).split("\n")[0]
     check("MCP read_url: a whole text's first line names no share", not re.search(r"\d+%", saidw), saidw[:90])
+    check("MCP read_url: a text that fits ends with EOF, its lines named",
+          re.match(r"── EOF content\.md: lines 1-(\d+) of \1 ──$", last_rows(mcp_said(resw), 1)[0]) is not None,
+          last_rows(mcp_said(resw), 1)[0][:80])
     odd = mcp({"url": srv.url("/short"), "till": 407, "from": -3, "file": "notes"})
     said = mcp_said(odd)
     check("MCP read_url leaves out what it cannot use, says so and reads the page",

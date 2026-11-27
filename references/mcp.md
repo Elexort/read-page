@@ -36,19 +36,22 @@ meant. `read_url(..., ocr=N)` answers with the text drawn in picture N, as `--oc
 `read(dir, file="img/...", ocr=true)` with a picture's text instead of the picture.
 
 `read_url` answers with the text the CLI prints - a header, then the text whole, or an outline,
-the first block and the next line. Only the pointer differs, since there is no command to repeat:
+the first block and the call that goes on. Only the line under `next:` differs: the read call, not a command:
 
 ```
 read-page · ok · defuddle · content.md 24.7 KB, 389 lines · 1.9 s
-files: C:\Users\me\AppData\Local\Temp\read-page\pages\9c1f… (content.md, page.md, manifest.json)
+files: C:\Users\me\AppData\Local\Temp\read-page\pages\example.com-9c1f… (content.md, page.md, manifest.json)
 outline (line, heading):
       1 ## Installation
       …
 ── content.md: lines 1-126 of 389 ──
 (the text)
-── next: line 127 of 389 → read(dir, file="content.md", from=127, chars=7900) ──
+── next: line 127 of 389 ──
+read(dir="C:/Users/me/AppData/Local/Temp/read-page/pages/example.com-9c1f…", file="content.md", from=127, chars=7900)
 ```
 
+The call names its folder, in forward slashes on Windows (a client's JSON takes them unescaped), and the size the
+answer was asked with; the last block ends with `── EOF content.md: lines 352-389 of 389 ──`, as on the CLI.
 `dir` is the folder on the `files:` line. `read_url(url, from=127)` gives the same block, also from
 the saved copy, with no network. A call that names no `file` goes on in the text read last
 (a named one becomes the text being read; `read_url` without `from` starts at `content.md`, or

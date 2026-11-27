@@ -166,6 +166,7 @@ def run_read(url, *flags, env=None, timeout=240, public=True, reuse=None, own_di
     e.pop("READ_PAGE_TEST_PUBLIC_HOST", None)
     for k in ("FIRECRAWL_API_KEY", "EXA_API_KEY", "TAVILY_API_KEY", "JINA_API_KEY"):
         e.pop(k, None)                     # a test never spends the user's credits; `env` may set a fake one
+    e.pop("READ_PAGE_PYTHON_NAME", None)   # the interpreter's name the next: line gives is this run's (KNOWN-ISSUES 276)
     if public:
         e["READ_PAGE_TEST_PUBLIC_HOST"] = PUBLIC
     e.update(env or {})

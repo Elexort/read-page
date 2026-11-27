@@ -92,8 +92,8 @@ TOOLS = [
         "description": (
             "Read the actual content of a URL or online document (web page, PDF, DOCX, PPTX, XLSX, "
             "EPUB, audio, video, image). Returns a header (status, engine, size, where the files are, "
-            "what to do), then the text: whole when it fits in ~7 900 characters, otherwise an outline with line "
-            "numbers, the first block and the line to continue from (read with that dir and from=N). "
+            "what to do), then the text: whole when it fits in `chars` characters (7 900 by default), otherwise an "
+            "outline with line numbers, the first block and, under `next:`, the read call that goes on. "
             "Pictures stand in the text as markers [img #3 · 600x400 4K · alt] img/03-alt.png; with "
             "inline_images=true the content pictures also come back as image blocks right after their "
             "markers. A URL that serves a single image returns that image at once. Never returns a "
@@ -159,9 +159,12 @@ TOOLS = [
         "description": (
             "Read a file left on disk by read_url: content.md, page.md (the full page text, a "
             "superset of content.md), manifest.json (the machine-readable result) or a media file "
-            "(img/..., raw.jpg, ...); with no file, the text read last. Text comes in "
-            "blocks of ~7 900 characters starting at line `from`, each naming the next line; an image is "
-            "returned as an image block; audio and video only get their metadata."),
+            "(img/..., raw.jpg, ...); with no file, the text read last. Text comes in blocks of `chars` "
+            "characters (7 900, the default, fits every client) from line `from`, each ending with the call that "
+            "goes on, the last with EOF. For more at once raise `chars` to your client's output limit if you know "
+            "it, else to about 20 000; if an answer comes back cut, go on where it breaks off (`from` takes the "
+            "words of the last line before the gap) with about half the `chars`, and keep the size that comes "
+            "whole. An image is returned as an image block; audio and video only get their metadata."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -639,11 +642,15 @@ def fitted(render, blocks_of, shrink=True, is_error=False, limits=None):
     return said, nxt, blocks, state
 
 
-def mcp_next_for(chars):
-    """How an MCP answer ends while text remains (answer.render's next_hint): the line it goes on from and the
-    size this answer was asked with."""
+def mcp_next_for(d, chars):
+    """How an MCP answer ends while text remains (answer.render's next_hint): where it goes on, and on a line of its
+    own the read call that goes on - its folder as the answer names it, in forward slashes on Windows (a client's JSON
+    takes them unescaped), the size this answer was asked with (KNOWN-ISSUES 276)."""
+    folder = ownenv.shown(d)
+    folder = json.dumps(folder.replace("\\", "/") if os.name == "nt" else folder, ensure_ascii=False)
+
     def hint(n, total, view):
-        return '── next: line %d of %d → read(dir, file="%s", from=%d, chars=%d) ──' % (n, total, view, n, chars)
+        return '── next: line %d of %d ──\nread(dir=%s, file="%s", from=%d, chars=%d)' % (n, total, folder, view, n, chars)
     return hint
 
 
@@ -792,7 +799,7 @@ def tool_read_url(args):
     def render(room):
         if lost:
             return answer.not_found(manifest, body, view, quote, **size), None
-        return answer.render(manifest, body, view, start, mcp_next_for(chars), **room)
+        return answer.render(manifest, body, view, start, mcp_next_for(workdir, chars), **room)
 
     _, _, blocks, _ = fitted(
         render, lambda said: result_blocks(manifest, said, workdir, inline, images, tiles, uses, shots, converted),
@@ -923,7 +930,7 @@ def tool_read(args):
         manifest["ignored"] = ignored
     if lost:
         return result([text(answer.not_found(manifest, body, rel, quote, **answer_size))])
-    _, _, blocks, _ = fitted(lambda room: answer.render(manifest, body, rel, start, mcp_next_for(chars), **room),
+    _, _, blocks, _ = fitted(lambda room: answer.render(manifest, body, rel, start, mcp_next_for(d, chars), **room),
                              lambda said: ([text(said)], None), limits=answer_size)
     return result(blocks)
 

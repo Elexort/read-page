@@ -109,7 +109,7 @@ check("header counts lines", " lines" in lines[0], "")
 check("the manifest is the folder's file", os.path.isfile(os.path.join(folder, "manifest.json")), folder[-40:])
 check("the text follows the header", "── content.md" in head and len(head) > 300, "%d chars" % len(head))
 nxt_m = re.search(r"── next: line (\d+) of \d+", mcp_said(res))
-check("the next line is reported", nxt_m is not None or ": all " in mcp_said(res),
+check("the next line is reported, or the end", nxt_m is not None or "── EOF content.md: " in mcp_said(res),
       nxt_m.group(0) if nxt_m else "the whole text")
 check("the answer fits the budget", len(head.encode("utf-8")) <= 9980, "%d bytes" % len(head.encode("utf-8")))
 check("the whole result as Cline counts it (its JSON) fits too", cline_form(res) <= 7900, "%d characters" % cline_form(res))

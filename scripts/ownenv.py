@@ -464,6 +464,18 @@ def status():
     return dict(_STATUS)
 
 
+def python_name(exe):
+    """A Python as a command line names it - the interpreter of an answer's next: line (readpage.agent_python): the
+    file's name without .exe (python, python3, python3.12, py, pypy3), pythonw as python (it has no console to print
+    to); "python" for anything else - no name, a host program's, a name a shell would split."""
+    name = os.path.basename(str(exe or "").replace("\\", "/"))
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    if re.match(r"(?i)pythonw", name):
+        name = name[:6] + name[7:]
+    return name if re.match(r"(?i)py[A-Za-z0-9._+-]*$", name) else "python"
+
+
 def use(script, argv):
     """Go on under the environment's Python when there is one and this is not it (POSIX: exec;
     Windows: a child with the same arguments, our console and exit code, which ends with us).
@@ -502,6 +514,8 @@ def use(script, argv):
     cmd = [py, "-E"] + (["-B"] if sys.dont_write_bytecode or os.environ.get("PYTHONDONTWRITEBYTECODE") else []) \
         + ["-X", "utf8", os.path.abspath(script)] + [str(a) for a in argv]
     os.environ["READ_PAGE_ENV_CHILD"] = "1"
+    # the name the agent started the skill with: the answer's next: line repeats it, not the environment's Python
+    os.environ.setdefault("READ_PAGE_PYTHON_NAME", python_name(sys.executable))
     for f in (sys.stdout, sys.stderr):
         try:
             f.flush()

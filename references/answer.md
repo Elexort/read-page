@@ -7,7 +7,7 @@ flag, the privacy and network rules, the limits, cookies, pictures, tabs and vid
 
 `readpage.py URL` prints a header - status, engine, size, the work folder, `reason:`, `ignored:`, `document:`,
 `screenshots:`, `advice:`, `missing:`/`improve:` - then the text: whole when it fits, otherwise an outline with line numbers,
-the first block and the line to go on from. `document:` is what a document's reader says of what it
+the first block and the command that goes on. `document:` is what a document's reader says of what it
 left out or could not read (parts that do not unpack, a table cut at its caps, pictures past its limit or in
 a format no browser shows, its time run out, its own error: `signals.document_note`); `screenshots:` is there
 only when `--screenshots` took no picture (`none taken`) or stopped early (`stopped early`, beside the screens that
@@ -16,15 +16,30 @@ what this machine lacks, never that.
 
 ```
 read-page · ok · defuddle · content.md 24.7 KB, 389 lines · 1.9 s
-files: /tmp/read-page/pages/9c1f… (content.md, page.md, manifest.json)
+files: /tmp/read-page-1000/pages/example.com-9c1f… (content.md, page.md, manifest.json)
 outline (line, heading):
       1 ## Installation
      27 ## Configuration
       …
 ── content.md: lines 1-126 of 389 ──
 (the text)
-── next: line 127 of 389 → the same command with --from 127 --chars 7900 --file content.md ──
+── next: line 127 of 389 ──
+python3 -X utf8 "/home/me/.agents/skills/read-page/scripts/readpage.py" "https://example.com/a" --allow-external --from 127 --chars 7900 --file content.md
 ```
+
+The lines around the text are dry (KNOWN-ISSUES 276): above it `── content.md: lines 1-126 of 389 ──`, every block
+alike (a text that fits too: `lines 1-12 of 12`); below it, while text remains, `── next: line 127 of 389 ──` and
+on a line of its own the command that reads on, literal, so that a model copies it whole - the interpreter by the
+name the agent started the skill with (the first process's, which the environment's child is handed), `-X utf8`,
+the script by its absolute path in forward slashes, the address and `--dir` in double quotes, the flags that matter
+if the saved copy is gone and the page is read again (`--allow-external`, `--force-external`, `--alternate`,
+`--deny-images`, `--download`, `--dir`; never `--refresh`, whose every step would fetch again and could move the
+lines, `--clear-cookies`, `--screenshots`, `--ocr` or `--json`), then `--from N --chars C --file F`, C the size this
+answer was asked with. It runs as printed in bash, PowerShell 5.1 and 7 and cmd. An address, a folder or a script
+path holding `"`, `$`, a backtick, `%` or a backslash - what a shell reads inside double quotes - gets the words
+instead: `the same command with --from 127 --chars 7900 --file content.md`. When the text ends in an answer, a short
+page's too, the answer's last line says so: `── EOF content.md: lines 352-389 of 389 ──`. A stray `──` on the command
+line (a model copied the decoration) is left out and named on the `ignored:` line.
 
 The outline takes at most 2.5 KB: every heading when they fit, else the deepest levels that fit.
 When those give fewer than 12 rows and there are finer headings (a book's title over its chapters),
@@ -353,9 +368,9 @@ recognition, no frame analysis - [video.md](video.md) prices both.
 
 `read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?, screenshots?,
 inline_images?, refresh?, clear_cookies?, file?, from?, chars?)` and `read(dir, file?, from=1, chars?)`.
-`read_url` answers with the text the CLI prints; its last line names the call that goes on:
-`read(dir, file="content.md", from=127, chars=7900)`, with `dir` from the `files:` line. Without `file`, `read`
-goes on in the text read last. `read` also opens `manifest.json`, and a picture as an image block.
+`read_url` answers with the text the CLI prints; under its `next:` line stands the call that goes on, with the
+answer's folder: `read(dir="C:/.../pages/example.com-9c1f…", file="content.md", from=127, chars=7900)`. Without
+`file`, `read` goes on in the text read last. `read` also opens `manifest.json`, and a picture as an image block.
 `inline_images=true` attaches the text's content pictures (not icons, logos or decorations) as
 image blocks right after their markers, as PNG or JPEG up to 1 568 px, the whole answer inside
 25 000 tokens; leave it off below a 1M context. The blocks of a result together, as Cline counts them (the result's

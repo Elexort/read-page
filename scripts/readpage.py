@@ -9079,8 +9079,9 @@ def picture_lines(entries, text, page_text):
             e["line"] = ln
 
 
-def window_pictures(workdir, manifest, url, view, start, public, chars=None):
-    """A call downloads the pictures of the lines it prints (from `start`, as many as `chars` - --chars C - hold) that
+def window_pictures(workdir, manifest, url, view, start, public, chars=None, hint=None):
+    """A call downloads the pictures of the lines it prints (from `start`, as many as `chars` - --chars C - hold, with
+    the answer's own next line, `hint`) that
     have no file yet - never printed, cut by the 6 s phase, lost to the network, or named by a
     --deny-images run - and rewrites their markers in place; no line moves. A picture outside
     every printed window stays a numbered address. Moscow's first read took 8.6 s with its 146
@@ -9095,8 +9096,8 @@ def window_pictures(workdir, manifest, url, view, start, public, chars=None):
         # pictures are in: look again, while there is time
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
-        _, nxt = answer.render(public, text, view, start or 1, cli_next_for(chars or answer.BUDGET_CHARS),
-                               **answer.limits(chars))
+        _, nxt = answer.render(public, text, view, start or 1, hint or cli_next_for(
+            argparse.Namespace(url=url, dir=""), chars or answer.BUDGET_CHARS), **answer.limits(chars))
         lines = text.split("\n")
         shown = "\n".join(lines[(start or 1) - 1:(nxt or len(lines) + 1) - 1])
         nums = {int(x) for x in re.findall(r"\[img #(\d+)", shown)} - asked
@@ -9571,6 +9572,9 @@ def typo_fixed(name, known):
     return near[0] if len(near) == 1 else name
 
 
+DECORATION = re.compile("^[─━→←—–]+$")     # ──, →: an answer's lines, not a word
+
+
 def ignored_flags(extra, args, known):
     """What the call had that is not a flag of ours, as notes for the answer's header; the read goes
     on without it (a model invented `--to 407` from `--from`, and the whole call failed).
@@ -9583,9 +9587,17 @@ def ignored_flags(extra, args, known):
             extra[extra.index(real[0])] = args.url
             args.url = real[0]
     notes, i = [], 0
+    # words of the locale's code set that UTF-8 mode held as lone surrogates are read in it (KNOWN-ISSUES 274)
+    extra = [ownenv.arg_text(x) for x in extra]
     while i < len(extra):
         tok = extra[i]
-        if tok.startswith("-") and "=" not in tok and i + 1 < len(extra) and not extra[i + 1].startswith("-"):
+        if DECORATION.match(tok):
+            # the answer's ── (a model copied it with the command): never a part of the call
+            notes.append("%s (the answer's decoration, not part of the command)" % tok)
+            i += 1
+            continue
+        if tok.startswith("-") and "=" not in tok and i + 1 < len(extra) and not extra[i + 1].startswith("-") \
+                and not DECORATION.match(extra[i + 1]):
             item, i = "%s %s" % (tok, extra[i + 1]), i + 2
         else:
             item, i = tok, i + 1
@@ -9801,6 +9813,7 @@ def read(args):
     if not args.url:
         print(setup_report(caps(fresh=True)))  # no URL: the "what is missing" report, asked now
         return 0
+    args.target = args.url.strip()             # the address the answer's command repeats (cli_command)
     probe = PROBE_URL.match(args.url.strip())
     if probe:
         return probe_page(args, int(probe.group(1)), t0)
@@ -9822,13 +9835,15 @@ def read(args):
             ("a %s: address" % scheme) if len(scheme) > 1 else repr(args.url[:120])))
     if scheme == "file" and not local:
         return usage_error("no such file: %s" % args.url[:200])
+    # what the command under next: repeats: the address as read, a file by its absolute path
+    args.target = slashed(local) if local else url
     # one read of a page at a time: a second call for the same page (MCP runs four at once) waits
     # and then gets the cached answer, instead of writing the same folder and deleting the
     # other's .part files
     if debuglog.enabled():
         debuglog.log("run", version=VERSION, schema=SCHEMA, build=BUILD, url=debuglog.mask_url(url),
                      local=bool(local), deadline=None if args.download else budget.SECONDS,
-                     flags={k: (debuglog.mask_url(v) if k == "url" else v) for k, v in vars(args).items()
+                     flags={k: (debuglog.mask_url(v) if k in ("url", "target") else v) for k, v in vars(args).items()
                             if v not in (None, False, "", 0, [])},
                      cache=cache_root(), machine=debuglog.environment())
     try:
@@ -11130,9 +11145,11 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         start = start_of(workdir, manifest, view, quote)
         lost = start is None
         start = start or 1
-    # the answer's size: --chars C, the bytes and the lines in the default's ratio (answer.limits)
+    # the answer's size: --chars C, the bytes and the lines in the default's ratio (answer.limits); the command that
+    # reads on carries it
     chars = (getattr(args, "chars", 0) or answer.BUDGET_CHARS) if args is not None else answer.BUDGET_CHARS
     size = answer.limits(chars)
+    hint = cli_next_for(args if args is not None else argparse.Namespace(url="", dir=""), chars)
     if ocr_n:
         # --ocr N answers with picture N's text: the window's other pictures are not wanted
         manifest, ocr = ocr_answer(workdir, manifest, ocr_n)
@@ -11146,7 +11163,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         try:
             manifest = window_pictures(workdir, manifest, url, view, start,
                                        shown_paths(_prune({k: v for k, v in manifest.items() if not k.startswith("_")})),
-                                       chars)
+                                       chars, hint)
         except Exception as e:                                 # noqa: BLE001
             debuglog.exc("pictures: window", e)
             trace("images.window", error=str(e)[:120])
@@ -11204,7 +11221,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         if lost:
             out = answer.not_found(public, text, view, quote, **size)
         else:
-            out, _ = answer.render(public, text, view, start, cli_next_for(chars), **size)
+            out, _ = answer.render(public, text, view, start, hint, **size)
         sys.stdout.write(out)
     sys.stdout.flush()
     return 0                           # an answer was printed, whatever its status
@@ -11254,13 +11271,51 @@ def remember_view(workdir, view, start=None):
         pass
 
 
-def cli_next_for(chars):
-    """How a CLI answer ends while text remains (answer.render's next_hint): the line it goes on from and the size
-    this answer was asked with. The file is named even when it is the default: a continuation never depends on a
-    guess."""
+# What a shell reads inside double quotes - $ and a backtick (bash, PowerShell), % (cmd) -, the quote that ends them,
+# a backslash bash may take for an escape, and what no command line holds: an address, a folder or a script path
+# with one gets the command in words (cli_command)
+UNQUOTABLE = re.compile(r'["$`%\\\x00-\x1f\x7f]')
+# the flags that matter if the saved copy is gone and the page is read again; never --refresh (each step would fetch
+# again and the lines could move), --clear-cookies, --screenshots, --ocr or --json
+CARRIED = (("allow_external", "--allow-external"), ("force_external", "--force-external"), ("alternate", "--alternate"),
+           ("deny_images", "--deny-images"), ("download", "--download"))
+
+
+def agent_python():
+    """The interpreter's name the agent started the skill with: the first process's sys.executable, which the
+    environment's child is handed (READ_PAGE_PYTHON_NAME, ownenv.use), else this one's; "python" when none."""
+    return ownenv.python_name(os.environ.get("READ_PAGE_PYTHON_NAME") or sys.executable)
+
+
+def slashed(path):
+    """A path as the command names it: absolute, with forward slashes on Windows (every shell takes them)."""
+    path = os.path.abspath(path)
+    return path.replace("\\", "/") if os.name == "nt" else path
+
+
+def cli_command(args, frm, chars, view):
+    """The command that reads on, to run as it is printed in bash, PowerShell 5.1 and 7 and cmd: the interpreter by
+    its name, -X utf8, the script by its absolute path and the address in double quotes, the flags that matter if
+    the page is read again (CARRIED, --dir), then --from N --chars C --file F. An address, a folder or a script path
+    that a shell would read inside double quotes gets the words: the same command with --from N --chars C --file F."""
+    tail = "--from %d --chars %d --file %s" % (frm, chars, view)
+    target = getattr(args, "target", "") or str(getattr(args, "url", "") or "").strip()
+    folder = slashed(args.dir) if getattr(args, "dir", "") else ""
+    script = slashed(__file__)
+    if not target or any(UNQUOTABLE.search(x) for x in (script, target, folder)):
+        return "the same command with " + tail
+    flags = [flag for key, flag in CARRIED if getattr(args, key, False)]
+    if folder:
+        flags.append('--dir "%s"' % folder)
+    return '%s -X utf8 "%s" "%s" %s' % (agent_python(), script, target, " ".join(flags + [tail]))
+
+
+def cli_next_for(args, chars):
+    """How a CLI answer ends while text remains (answer.render's next_hint): where it goes on, and on a line of its
+    own the command that reads on, so that a model copies it whole (KNOWN-ISSUES 276). The file is named even when
+    it is the default: a continuation never depends on a guess."""
     def hint(n, total, view):
-        return "── next: line %d of %d → the same command with --from %d --chars %d --file %s ──" % (n, total, n, chars,
-                                                                                                      view)
+        return "── next: line %d of %d ──\n%s" % (n, total, cli_command(args, n, chars, view))
     return hint
 
 

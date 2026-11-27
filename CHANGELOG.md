@@ -8,6 +8,19 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The answer's `next:` is the command that reads on; dry lines and EOF** (KNOWN-ISSUES 276): the answer said how to
+  go on in words (`── next: line 127 of 389 → the same command with --from 127 --file content.md ──`), and agents
+  copy what an answer names. Now, above the text, every block alike: `── content.md: lines 53-190 of 474 ──`; below
+  it, while text remains, `── next: line 191 of 474 ──` and on a line of its own the command, literal - the
+  interpreter by the name the agent started the skill with (handed from the first process to the environment's),
+  `-X utf8`, the script by its absolute path in forward slashes, the address and `--dir` in double quotes, the flags
+  that matter if the page is read again (`--allow-external`, `--force-external`, `--alternate`, `--deny-images`,
+  `--download`, `--dir`; never `--refresh`, `--clear-cookies`, `--screenshots`, `--ocr`, `--json`), `--from N --chars
+  C --file F`. It runs as printed in bash, PowerShell 5.1 and 7 and cmd (the contract suite runs it in each); an
+  address or a path holding `"`, `$`, a backtick, `%` or a backslash gets the words instead. The text's end is the
+  answer's last line, `── EOF content.md: lines 439-474 of 474 ──`, a short page's too. A stray `──` copied onto the
+  command line is named on `ignored:`. Over MCP the same lines, the call under `next:`:
+  `read(dir="C:/...", file="content.md", from=191, chars=7900)`; the tools' descriptions say how to size and go on.
 - **One size knob, in characters: `--chars C` in place of `--to`** (KNOWN-ISSUES 277): an answer was one block of
   7 900 characters unless `--from N --to M` named a range in lines, a measure a model cannot set against its tool's
   limit. `--chars C` (MCP `chars`) is the whole answer's size - header, outline and the lines around the text

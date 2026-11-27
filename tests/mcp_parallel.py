@@ -323,7 +323,8 @@ try:
     check("... and the text gave up no more than it had to (not more than two paragraphs of it)",
           c_chars > p_chars - 2 * 700, "%d chars against %d without the notes" % (c_chars, p_chars))
     said = mcp_said(busy)
-    nxt = re.search(r"── next: line (\d+) of \d+ → read\(dir, file=\"content.md\", from=(\d+), chars=7900\) ──", said)
+    nxt = re.search(r"── next: line (\d+) of \d+ ──\nread\(dir=\"[^\"]+\", file=\"content.md\", from=(\d+), chars=7900\)",
+                    said)
     last = re.search(r"── content\.md: lines 1-(\d+) of \d+ ──", said)
     check("... the pointer is the line after the block's last one",
           nxt and last and int(nxt.group(1)) == int(last.group(1)) + 1 == int(nxt.group(2)),
