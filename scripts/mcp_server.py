@@ -5,9 +5,9 @@
 
 Tools (the same names as the CLI flags):
   read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?,
-           screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?)
+           screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, chars?)
       -> the answer the CLI prints (header, outline, text block, next line) + image blocks
-  read(dir, file="content.md", from=1)
+  read(dir, file="content.md", from=1, chars?)
       -> the block of a saved file that starts at that line; images are shown, binaries described
 
 The answer budget lives in answer.py, the download cap and the timeouts in readpage.py; this
@@ -133,10 +133,9 @@ TOOLS = [
                          "description": "start the text at this line of the saved copy (no network), or at the line "
                                         "that holds this piece of text (a quote, a heading, a marker such as "
                                         "\"[tab · Plans]\" or \"[img #3]\"); the answer names the next line"},
-                "to": {"type": "integer", "minimum": 1,
-                       "description": "with from: the lines up to this one, more than one block if need be, for a "
-                                      "client that shows that much; the answer says they were sent and how to go on "
-                                      "if they were cut"},
+                "chars": {"type": "integer",
+                          "description": "how much one answer holds, in characters, whole lines; 7 900, the default, "
+                                         "fits every client"},
                 "ocr": {"type": "integer", "minimum": 1,
                         "description": "answer with the text drawn in picture N (the number on its marker) instead "
                                        "of the page's text: for a model that cannot see pictures"},
@@ -173,8 +172,9 @@ TOOLS = [
                 "from": {"type": ["integer", "string"], "minimum": 1, "default": 1,
                          "description": "the line to start at (the answer names the next one), or a piece of "
                                         "text: the first line holding it"},
-                "to": {"type": "integer", "minimum": 1,
-                       "description": "the last line: the lines from `from` up to it, more than one block if need be"},
+                "chars": {"type": "integer",
+                          "description": "how much one answer holds, in characters, whole lines; 7 900, the default, "
+                                         "fits every client"},
                 "ocr": {"type": "boolean", "default": False,
                         "description": "for a picture (img/...): its text instead of the image, for a model "
                                        "that cannot see pictures"},
@@ -620,8 +620,8 @@ def fitted(render, blocks_of, shrink=True, is_error=False, limits=None):
     the result's blocks of it. A client counts the blocks together, in the form it is given them (counted): the
     notes after the text, the stand-ins of the pictures and what JSON's escapes add come on top of the text, so the
     text gives up that room and is rendered again inside what is left - counted from the size it has, since a block
-    ends at a paragraph; at least half its block stays, four passes at most (a picture is converted once). `shrink`
-    False: one pass (a range sent whatever the block, an outline, a single image)."""
+    ends at a paragraph; at least half its block stays, four passes at most (a picture is converted once). `limits`:
+    the answer's size (answer.limits, `chars`). `shrink` False: one pass (an outline, a single image)."""
     limits = limits or LIMITS
     room = dict(limits)
     for _ in range(4):
@@ -639,19 +639,25 @@ def fitted(render, blocks_of, shrink=True, is_error=False, limits=None):
     return said, nxt, blocks, state
 
 
-def mcp_next(n, total, view):
-    return '── next: line %d of %d → read(dir, file="%s", from=%d) ──' % (n, total, view, n)
+def mcp_next_for(chars):
+    """How an MCP answer ends while text remains (answer.render's next_hint): the line it goes on from and the
+    size this answer was asked with."""
+    def hint(n, total, view):
+        return '── next: line %d of %d → read(dir, file="%s", from=%d, chars=%d) ──' % (n, total, view, n, chars)
+    return hint
 
 
-def mcp_call(frm, view, to=None):
-    # a `to` answer's ways on: the next range, or a quote of the last line seen before a cut
-    return 'read(dir, file="%s", from=%s%s)' % (view, frm, ", to=%d" % to if to else "")
+def not_ours(args, known):
+    """What a call has that the tool cannot use, as notes for `ignored:`; the call goes on without it (a model once
+    invented --to from --from and lost the whole call). `to`, a range in lines until 2026-11-27, is gone."""
+    return ["%s %s (gone: chars sets the size)" % (k, args[k]) if k == "to" else "%s (no such parameter)" % k
+            for k in args if k not in known]
 
 
 def line_args(args, ignored):
-    """`from` and `to` as the CLI takes them: (start, to, quote). `from` is a line number or words of a
-    line - the quote, which the text resolves (readpage.start_of); a value it cannot use is left out and
-    named."""
+    """`from` and `chars` as the CLI takes them: (start, quote, chars). `from` is a line number or words of a
+    line - the quote, which the text resolves (readpage.start_of); `chars` the answer's size (answer.chars_asked).
+    A value it cannot use is left out and named."""
     raw, quote = args.get("from"), ""
     try:
         start = int(raw or 1)
@@ -664,32 +670,18 @@ def line_args(args, ignored):
     if start < 1:
         ignored.append("from %d (a line number, 1 or more)" % start)
         start = 1
-    to = None
-    if args.get("to") not in (None, "", 0, False):
-        try:
-            to = int(args.get("to"))
-        except (TypeError, ValueError):
-            ignored.append("to %s (a line number)" % args.get("to"))
-        if to is not None and to < start:
-            ignored.append("to %d (before from %d)" % (to, start))
-            to = None
-    return start, to, quote
-
-
-def quote_start(workdir, manifest, view, quote, to):
-    """A quote's line in the text (None: no line holds it), and `to` left out when it comes before that line
-    (the CLI, given the same, names it on its `ignored:` line)."""
-    start = readpage.start_of(workdir, manifest, view, quote)
-    return start, (None if start is not None and to is not None and to < start else to)
+    chars, why = answer.chars_asked(args.get("chars"))
+    if why:
+        ignored.append("chars %s (%s)" % (args.get("chars"), why))
+    return start, quote, chars
 
 
 def tool_read_url(args):
     # what this call has that read_url cannot use is left out, and the answer says so: the read goes
-    # on, as the CLI's does (a model once invented --to from --from and lost the whole call); a
-    # misspelled argument (allow_externl) is the one meant
+    # on, as the CLI's does; a misspelled argument (allow_externl) is the one meant
     known = TOOLS[0]["inputSchema"]["properties"]
     args = {readpage.typo_fixed(k, list(known)): v for k, v in args.items()}
-    ignored = ["%s (no such parameter)" % k for k in args if k not in known]
+    ignored = not_ours(args, known)
     for key, make in (("probe", answer.probe), ("probe_units", answer.probe_units)):
         if args.get(key) not in (None, False, ""):
             # numbered lines and nothing else, as `readpage.py --probe N` and `--probe-units N` print them: what the
@@ -714,7 +706,7 @@ def tool_read_url(args):
     if view and view not in readpage.VIEWS:
         ignored.append("file %s (content.md or page.md)" % args.get("file"))
         view = ""
-    start, to, quote = line_args(args, ignored)
+    start, quote, chars = line_args(args, ignored)
     argv = [url, "--json"]
     for flag in ("allow_external", "force_external", "alternate", "refresh", "clear_cookies", "download"):
         if args.get(flag):
@@ -736,8 +728,8 @@ def tool_read_url(args):
         argv.append("--from=" + quote)          # the saved copy, from the line holding the quote
     elif start > 1:
         argv += ["--from", str(start)]          # a continuation reads the saved copy: no network
-    if to:
-        argv += ["--to", str(to)]               # the window's pictures are the range's
+    if chars != answer.BUDGET_CHARS:
+        argv += ["--chars", str(chars)]         # the window's pictures are the block's of that size
     if view:
         argv += ["--file", view]                # page.md printed: its pictures come
     ocr_n = 0
@@ -760,11 +752,12 @@ def tool_read_url(args):
         return err("no manifest: " + (out[-300:] or "empty output"))
     if ignored:
         manifest["ignored"] = ignored + list(manifest.get("ignored") or [])
+    size = answer.limits(chars)
     if ocr_n and isinstance(manifest.get("ocr"), dict):
         found = manifest["ocr"].pop("text", "") or ""
         _, _, blocks, _ = fitted(lambda room: answer.render(manifest, found, "img #%d text" % ocr_n, 1,
                                                             readpage.ocr_next, **room),
-                                 lambda said: ([text(said)], None))
+                                 lambda said: ([text(said)], None), limits=size)
         return result(blocks)
 
     status = manifest.get("status") or "error"
@@ -780,7 +773,7 @@ def tool_read_url(args):
     view = readpage.answer_view(saved or manifest, workdir, view, continuing)
     lost = False                                # a quote no line holds: the answer is the outline
     if quote and workdir:
-        found, to = quote_start(workdir, saved or {}, view, quote, to)
+        found = readpage.start_of(workdir, saved or {}, view, quote)
         lost, start = found is None, found or 1
     if workdir:
         readpage.remember_view(workdir, view, None if lost else start)
@@ -792,18 +785,18 @@ def tool_read_url(args):
     for n, _rel in ANY_MARKER.findall(body):
         uses[int(n)] = uses.get(int(n), 0) + 1
     tiles = manifest.get("screenshots") or []
-    # The text is rendered inside the room the result's other blocks and its JSON leave it (fitted). A quote no line
-    # holds (the outline) and a range (`to`, sent whatever the block) have no block to give up.
+    # The text is rendered inside the room the result's other blocks and its JSON leave it (fitted), in an answer of
+    # `chars` characters. A quote no line holds (the outline) has no block to give up.
     converted = {}
 
     def render(room):
         if lost:
-            return answer.not_found(manifest, body, view, quote), None
-        return answer.render(manifest, body, view, start, mcp_next, to=to, call=mcp_call, **room)
+            return answer.not_found(manifest, body, view, quote, **size), None
+        return answer.render(manifest, body, view, start, mcp_next_for(chars), **room)
 
     _, _, blocks, _ = fitted(
         render, lambda said: result_blocks(manifest, said, workdir, inline, images, tiles, uses, shots, converted),
-        shrink=not (lost or to or status == "media_only"), is_error=status == "error")
+        shrink=not (lost or status == "media_only"), is_error=status == "error", limits=size)
     return result(blocks, status == "error")
 
 
@@ -834,7 +827,7 @@ def tool_read(args):
     # left out and named, as read_url does: an old `offset`, a word for `from`; a typo is the one meant
     known = TOOLS[1]["inputSchema"]["properties"]
     args = {readpage.typo_fixed(k, list(known)): v for k, v in args.items()}
-    ignored = ["%s (no such parameter)" % k for k in args if k not in known]
+    ignored = not_ours(args, known)
     d = ownenv.fs_path((args.get("dir") or "").strip())       # the folder as an answer named it (shown_paths)
     if not d or not os.path.isdir(d):
         return err("dir is not a directory: %r" % d)
@@ -843,7 +836,8 @@ def tool_read(args):
                    "line of a read_url answer, or a folder written with --dir)" % d)
     # no file named: the text read last; a text named here becomes the one read last
     rel = (args.get("file") or "").strip() or readpage.answer_view(readpage.load_manifest(d), d, "", True)
-    start, to, quote = line_args(args, ignored)
+    start, quote, chars = line_args(args, ignored)
+    answer_size = answer.limits(chars)
     if rel in readpage.VIEWS and not quote:
         readpage.remember_view(d, rel, start)
     path = inside(d, rel)
@@ -870,7 +864,7 @@ def tool_read(args):
             manifest["ignored"] = ignored
         _, _, blocks, _ = fitted(lambda room: answer.render(manifest, found, "%s text" % os.path.basename(path), 1,
                                                             readpage.ocr_next, **room),
-                                 lambda said: ([text(said)], None))
+                                 lambda said: ([text(said)], None), limits=answer_size)
         return result(blocks)
     if ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif", ".ico"):
         block, caption = image_block(path)
@@ -922,19 +916,15 @@ def tool_read(args):
         last = saved.get("_from") or {}
         found = answer.find(body.split("\n"), quote, last.get("line") if last.get("view") == rel else 1)
         lost, start = found is None, found or 1
-        if not lost and to is not None and to < start:
-            ignored.append("to %d (before line %d, where the quote is)" % (to, start))
-            to = None
         if rel in readpage.VIEWS:
             readpage.remember_view(d, rel, None if lost else start)
     manifest = dict(saved or {"status": "ok"}, dir=shown_d, cache="hit")
     if ignored:
         manifest["ignored"] = ignored
     if lost:
-        return result([text(answer.not_found(manifest, body, rel, quote))])
-    _, _, blocks, _ = fitted(lambda room: answer.render(manifest, body, rel, start, mcp_next, to=to, call=mcp_call,
-                                                        **room),
-                             lambda said: ([text(said)], None), shrink=to is None)
+        return result([text(answer.not_found(manifest, body, rel, quote, **answer_size))])
+    _, _, blocks, _ = fitted(lambda room: answer.render(manifest, body, rel, start, mcp_next_for(chars), **room),
+                             lambda said: ([text(said)], None), limits=answer_size)
     return result(blocks)
 
 

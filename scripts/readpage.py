@@ -4,10 +4,10 @@
 usage: python -X utf8 readpage.py URL [--allow-external] [--force-external] [--alternate]
                                    [--download] [--deny-images] [--screenshots [N]]
                                    [--refresh] [--clear-cookies] [--file content.md|page.md]
-                                   [--from N] [--json] [--dir DIR] [--caps]
+                                   [--from N] [--chars C] [--json] [--dir DIR] [--caps]
 
-Prints the answer (a header, then the text: whole when it fits the output budget, else an
-outline, the first block and the line to go on from with --from); --json prints the manifest
+Prints the answer (a header, then the text: whole when it fits the output budget - 7 900 characters,
+or C with --chars C -, else an outline, the first block and the line to go on from with --from); --json prints the manifest
 instead. Writes content.md, page.md, the raw response and manifest.json into the working
 folder (the per-URL cache entry, or --dir). Never returns a partial page
 silently: it reports which engine produced the text, whether it may be only a fragment of the
@@ -9079,8 +9079,8 @@ def picture_lines(entries, text, page_text):
             e["line"] = ln
 
 
-def window_pictures(workdir, manifest, url, view, start, public, to=None):
-    """A call downloads the pictures of the lines it prints (from `start`, to `to` when --to asks) that
+def window_pictures(workdir, manifest, url, view, start, public, chars=None):
+    """A call downloads the pictures of the lines it prints (from `start`, as many as `chars` - --chars C - hold) that
     have no file yet - never printed, cut by the 6 s phase, lost to the network, or named by a
     --deny-images run - and rewrites their markers in place; no line moves. A picture outside
     every printed window stays a numbered address. Moscow's first read took 8.6 s with its 146
@@ -9095,7 +9095,8 @@ def window_pictures(workdir, manifest, url, view, start, public, to=None):
         # pictures are in: look again, while there is time
         with open(path, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
-        _, nxt = answer.render(public, text, view, start or 1, cli_next, to=to, call=cli_call)
+        _, nxt = answer.render(public, text, view, start or 1, cli_next_for(chars or answer.BUDGET_CHARS),
+                               **answer.limits(chars))
         lines = text.split("\n")
         shown = "\n".join(lines[(start or 1) - 1:(nxt or len(lines) + 1) - 1])
         nums = {int(x) for x in re.findall(r"\[img #(\d+)", shown)} - asked
@@ -9591,8 +9592,10 @@ def ignored_flags(extra, args, known):
         flag = item.split("=")[0].split(" ")[0]
         if not flag.startswith("-"):
             notes.append("%s (not a flag; one URL a call)" % item)
-        elif flag in ("--till", "--until", "--end", "--lines", "--limit", "--max-lines"):
-            notes.append("%s (no such flag: --from N --to M prints lines N to M)" % item)
+        elif flag == "--to":
+            notes.append("%s (gone: --chars sets the size)" % item)        # --from N --to M until 2026-11-27
+        elif flag in ("--till", "--until", "--end", "--lines", "--limit", "--max-lines", "--size", "--length"):
+            notes.append("%s (no such flag: --chars sets the size)" % item)
         else:
             notes.append("%s (no such flag)" % item)
     return notes
@@ -9635,9 +9638,9 @@ def main(argv=None):
                     help="print the block that starts at line N of the saved copy (no network), or at the line "
                          "that holds a piece of text: --from \"words of a line\", --from \"[tab · Plans]\", "
                          "--from \"[img #3]\"")
-    ap.add_argument("--to", dest="to_line", default="", metavar="M",
-                    help="with --from: print the lines up to M, more than one block if need be, for a tool "
-                         "that shows that much; the answer says they were sent and how to go on if they were cut")
+    ap.add_argument("--chars", dest="chars", default="", metavar="C",
+                    help="how much one answer holds, in characters (UTF-16 units), whole lines: 7900 by default, which "
+                         "fits every harness; 1000 to 150000 (the bytes and lines in the same ratio)")
     ap.add_argument("--json", action="store_true", help="print the manifest instead of the text")
     ap.add_argument("--ocr", default="", metavar="N",
                     help="print the text drawn in picture N (the number on its marker) instead of the "
@@ -9646,7 +9649,7 @@ def main(argv=None):
     ap.add_argument("--probe", default="", metavar="N",
                     help="for testing a harness, not for reading: print N characters of numbered lines and nothing "
                          "else, no network (what it shows of a command's output); probe:N read as an address is a "
-                         "page of them, for --from and --to")
+                         "page of them, for --from and --chars")
     ap.add_argument("--probe-units", dest="probe_units", default="", metavar="N",
                     help="for testing a harness, not for reading: like --probe, N characters, but each line says how "
                          "many characters, UTF-16 units and bytes stand before it and its filler is ASCII, Cyrillic, CJK "
@@ -9688,17 +9691,12 @@ def main(argv=None):
     if args.from_line < 0:
         args.ignored.append("--from %d (a line number, 1 or more)" % args.from_line)
         args.from_line = 0
-    try:
-        args.to_line = int(str(args.to_line).strip() or 0)
-    except ValueError:
-        args.ignored.append("--to %s (a line number)" % args.to_line)
-        args.to_line = 0
-    if args.to_line < 0:
-        args.ignored.append("--to %d (a line number, 1 or more)" % args.to_line)
-        args.to_line = 0
-    elif args.to_line and args.to_line < max(1, args.from_line):
-        args.ignored.append("--to %d (before --from %d)" % (args.to_line, max(1, args.from_line)))
-        args.to_line = 0
+    # the answer's size in characters, the bytes and the lines in the default's ratio (answer.limits); a value
+    # outside 1 000 .. 150 000, or no number, is named with what was used
+    asked = str(args.chars).strip()
+    args.chars, why = answer.chars_asked(asked)
+    if why:
+        args.ignored.append("--chars %s (%s)" % (asked, why))
     try:
         args.ocr = int(str(args.ocr).strip() or 0)
     except ValueError:
@@ -9740,8 +9738,8 @@ PROBE_URL = re.compile(r"(?i)probe:(\d{1,8})$")
 
 def probe_page(args, n, t0):
     """`probe:N` read as an address: a page whose text is answer.probe(N), answered as any page is - its
-    outline, its block, `--from`, `--to` and a quote - so a harness's tester sees what an answer and a range
-    send. No network; the text is the same every time, so a continuation reads it from the folder."""
+    outline, its block, `--from`, `--chars` and a quote - so a harness's tester sees what an answer of a size
+    sends. No network; the text is the same every time, so a continuation reads it from the folder."""
     url = "probe:%d" % n
     workdir = args.dir or page_dir(url)
     os.makedirs(workdir, exist_ok=True)
@@ -11132,9 +11130,9 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         start = start_of(workdir, manifest, view, quote)
         lost = start is None
         start = start or 1
-        if not lost and 0 < (getattr(args, "to_line", 0) or 0) < start:
-            args.ignored.append("--to %d (before line %d, where the quote is)" % (args.to_line, start))
-            args.to_line = 0
+    # the answer's size: --chars C, the bytes and the lines in the default's ratio (answer.limits)
+    chars = (getattr(args, "chars", 0) or answer.BUDGET_CHARS) if args is not None else answer.BUDGET_CHARS
+    size = answer.limits(chars)
     if ocr_n:
         # --ocr N answers with picture N's text: the window's other pictures are not wanted
         manifest, ocr = ocr_answer(workdir, manifest, ocr_n)
@@ -11148,7 +11146,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         try:
             manifest = window_pictures(workdir, manifest, url, view, start,
                                        shown_paths(_prune({k: v for k, v in manifest.items() if not k.startswith("_")})),
-                                       getattr(args, "to_line", 0) or None)
+                                       chars)
         except Exception as e:                                 # noqa: BLE001
             debuglog.exc("pictures: window", e)
             trace("images.window", error=str(e)[:120])
@@ -11196,7 +11194,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         text = ""
         path = os.path.join(workdir, view)
         if ocr is not None:
-            out, _ = answer.render(public, ocr.get("text") or "", "img #%d text" % ocr_n, 1, ocr_next)
+            out, _ = answer.render(public, ocr.get("text") or "", "img #%d text" % ocr_n, 1, ocr_next, **size)
             sys.stdout.write(out)
             sys.stdout.flush()
             return 0
@@ -11204,10 +11202,9 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
             with open(path, encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
         if lost:
-            out = answer.not_found(public, text, view, quote)
+            out = answer.not_found(public, text, view, quote, **size)
         else:
-            out, _ = answer.render(public, text, view, start, cli_next, to=getattr(args, "to_line", 0) or None,
-                                   call=cli_call)
+            out, _ = answer.render(public, text, view, start, cli_next_for(chars), **size)
         sys.stdout.write(out)
     sys.stdout.flush()
     return 0                           # an answer was printed, whatever its status
@@ -11257,14 +11254,14 @@ def remember_view(workdir, view, start=None):
         pass
 
 
-def cli_next(n, total, view):
-    # the file is named even when it is the default: a continuation never depends on a guess
-    return "── next: line %d of %d → the same command with --from %d --file %s ──" % (n, total, n, view)
-
-
-def cli_call(frm, view, to=None):
-    # a --to answer's ways on: the next range, or a quote of the last line seen before a cut
-    return "the same command with --from %s%s --file %s" % (frm, " --to %d" % to if to else "", view)
+def cli_next_for(chars):
+    """How a CLI answer ends while text remains (answer.render's next_hint): the line it goes on from and the size
+    this answer was asked with. The file is named even when it is the default: a continuation never depends on a
+    guess."""
+    def hint(n, total, view):
+        return "── next: line %d of %d → the same command with --from %d --chars %d --file %s ──" % (n, total, n, chars,
+                                                                                                      view)
+    return hint
 
 
 def ocr_next(n, total, view):

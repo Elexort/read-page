@@ -23,7 +23,7 @@ outline (line, heading):
       …
 ── content.md: lines 1-126 of 389 ──
 (the text)
-── next: line 127 of 389 → the same command with --from 127 --file content.md ──
+── next: line 127 of 389 → the same command with --from 127 --chars 7900 --file content.md ──
 ```
 
 The outline takes at most 2.5 KB: every heading when they fit, else the deepest levels that fit.
@@ -57,21 +57,19 @@ line holds it, the answer says
 so and shows the outline (its line numbers are what `--from N` takes), and no text. It works on `content.md` and
 `page.md` alike.
 
-`--from N --to M` prints lines N to M whatever the block, for a harness that shows more than one (Codex with an
-OpenAI model shows about 40 000 bytes, Claude Code 30 000, goose and OpenCode 50 000), at most 150 KB a call; `--to`
-alone reads from line 1, and one before `--from` is left out and named on the `ignored:` line. The skill cannot see
-what the harness shows, so such an answer never says its lines were shown: it says they were sent, and carries the
-way on at its top and at its bottom, as most harnesses keep both ends of what they cut:
+`--chars C` sets how much one answer holds, for a harness that shows more (Codex with an OpenAI model about 40 000
+bytes, Claude Code 30 000, goose and OpenCode 50 000) or less: at most C characters (UTF-16 units, as Cline counts
+them), whole lines, at most C x 9 980 / 7 900 bytes and C x 495 / 7 900 lines - the header, the outline and the lines
+above and below the text included. Without it an answer is `--chars 7900`: the 7 900 characters, 9 980 bytes and
+495 lines that fit every harness. It works on a first read, `--from N` and `--from "text"` alike, and the next line
+carries it on; C is 1 000 to 150 000 (the most a harness shows: Claude Code with its limit raised), and a value
+outside, or not a number, is named on the `ignored:` line with what was used (`--chars 500 (1000 at the least: 1000
+used)`). The skill cannot see what the harness shows: SKILL.md says when to raise the size and how to go on from a
+cut. `--to` is gone (it named a range in lines until 2026-11-27): `--to M` is left out and named, `--to 120 (gone:
+--chars sets the size)`, and the read goes on.
 
-```
-── content.md: lines 1-300 of 812 sent; cut by your tool? go on from the last line before the cut: the same command with --from "<its words>" --file content.md ──
-(lines 1-300)
-── next: line 301 of 812 → the same command with --from 301 --to 600 --file content.md; cut by your tool? go on from the last line before the cut: the same command with --from "<its words>" --file content.md ──
-```
-
-The text's own lines carry no numbers, as an editor would show them; the range sent, the pointers and the
-outline (an answer from line 1 has it) keep theirs. The next range is as long as this one; at the end of the file
-the bottom line says so.
+The text's own lines carry no numbers, as an editor would show them; the block's line above it, the pointers and the
+outline (an answer from line 1 has it) keep theirs.
 
 | File | What it is |
 |---|---|
@@ -148,7 +146,7 @@ A PDF's tables come as Markdown tables where the layout model is installed (`--s
 | Flag | Meaning |
 |---|---|
 | `--from N` | print the block that starts at line N of the saved copy, no network; without `--file` it goes on in the file read last (`--file` switches it). `--from "text"`: from the first line that holds it, a marker by its type and name (see The answer) |
-| `--to M` | with `--from N`: lines N to M at once, past one block, for a harness that shows more; said to be sent, with the way on at both ends (see The answer) |
+| `--chars C` | how much one answer holds: C characters (UTF-16 units), whole lines, the bytes and lines in the same ratio; 7 900 by default, which fits every harness; 1 000 to 150 000 (see The answer) |
 | `--file page.md` | answer with the whole page (default: `content.md`, or `page.md` for a fragment) |
 | `--json` | print the manifest instead of the answer |
 | `--ocr N` | answer with the text drawn in picture N, the number on its marker, instead of the page's text: for a model that cannot see pictures (see Pictures) |
@@ -354,9 +352,9 @@ recognition, no frame analysis - [video.md](video.md) prices both.
 ## MCP
 
 `read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?, screenshots?,
-inline_images?, refresh?, clear_cookies?, file?, from?)` and `read(dir, file?, from=1)`.
+inline_images?, refresh?, clear_cookies?, file?, from?, chars?)` and `read(dir, file?, from=1, chars?)`.
 `read_url` answers with the text the CLI prints; its last line names the call that goes on:
-`read(dir, file="content.md", from=127)`, with `dir` from the `files:` line. Without `file`, `read`
+`read(dir, file="content.md", from=127, chars=7900)`, with `dir` from the `files:` line. Without `file`, `read`
 goes on in the text read last. `read` also opens `manifest.json`, and a picture as an image block.
 `inline_images=true` attaches the text's content pictures (not icons, logos or decorations) as
 image blocks right after their markers, as PNG or JPEG up to 1 568 px, the whole answer inside

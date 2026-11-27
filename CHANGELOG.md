@@ -8,6 +8,14 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **One size knob, in characters: `--chars C` in place of `--to`** (KNOWN-ISSUES 277): an answer was one block of
+  7 900 characters unless `--from N --to M` named a range in lines, a measure a model cannot set against its tool's
+  limit. `--chars C` (MCP `chars`) is the whole answer's size - header, outline and the lines around the text
+  included - in characters (UTF-16 units), whole lines, the bytes and the lines in the default's ratio
+  (C x 9 980 / 7 900 and C x 495 / 7 900); no `--chars` is `--chars 7900`, the 7 900 / 9 980 / 495 of before. It works
+  on a first read, `--from N` and `--from "text"`; C is 1 000 to 150 000, a value outside or not a number named on
+  `ignored:` with what was used; the next line carries it on. `--to` is gone, CLI, MCP and `probe:N`: `--to M` is
+  left out and named (`--to 120 (gone: --chars sets the size)`), the read goes on.
 - **MCP read results carry no structuredContent** (KNOWN-ISSUES 275): a result was its blocks and the whole manifest
   as `structuredContent` (3 to 11 KB). Cline's SDK runtime gives the model a tool's result object as its JSON and
   cuts the middle past 8 000 characters, so every MCP read there lost about as much from its text

@@ -23,8 +23,8 @@ error, so a prompt-injected model cannot turn the tool into a general file reade
 
 ```
 read_url(url, allow_external?, force_external?, alternate?, download?, deny_images?,
-         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, to?, probe?, probe_units?)
-read(dir, file?, from=1, to?)
+         screenshots?, inline_images?, refresh?, clear_cookies?, file?, from?, chars?, probe?, probe_units?)
+read(dir, file?, from=1, chars?)
 ```
 
 Arguments are the CLI flags without dashes: `--allow-external` -> `allow_external`, `--from` ->
@@ -46,7 +46,7 @@ outline (line, heading):
       …
 ── content.md: lines 1-126 of 389 ──
 (the text)
-── next: line 127 of 389 → read(dir, file="content.md", from=127) ──
+── next: line 127 of 389 → read(dir, file="content.md", from=127, chars=7900) ──
 ```
 
 `dir` is the folder on the `files:` line. `read_url(url, from=127)` gives the same block, also from
@@ -65,11 +65,11 @@ and name, a picture by its number: `from="[tab · Developer Plan Limits]"`, `fro
 matched as it stands too, so a quote that ends inside a marker (a client cut the result there) is found. No line
 holds it: the answer says so and shows the outline, and names no next line.
 
-`to` (both tools) is the CLI's `--to`: the lines from `from` up to it at once, past one block, for a
-client that shows more - said to be sent, not shown, with the way on at the top and at the bottom in
-`read()`'s words: `read(dir, file="content.md", from=301, to=600)` for the next range, and
-`read(dir, file="content.md", from="<its words>")` for a tool that cut the answer. One before `from` is
-left out and named on the `ignored:` line.
+`chars` (both tools) is the CLI's `--chars`: how much one answer holds, in characters, whole lines - 7 900 by
+default, which fits every client; 1 000 to 150 000, a value outside or not a number named on the `ignored:` line with
+what was used. The result as Cline counts it, its JSON (see How a client counts a result), stays within it, and the
+next line carries it on. `to`, a range in lines until 2026-11-27, is gone: left out and named, `to 120 (gone: chars
+sets the size)`, and the call goes on.
 
 `read` behaves by file type:
 
@@ -86,7 +86,7 @@ left out and named on the `ignored:` line.
 before it, a head and a tail sentinel, ASCII - so what a client shows of a tool's result, and where it cut,
 can be read off what reaches the model (Cline's SDK runtime keeps about 3 985 characters at each end of
 8 000). `read_url(url="probe:N")` is a page of the same lines answered the normal way, and with `from` and
-`to` it shows what a range sends. It is for testing the skill, not for reading; SKILL.md does not name it.
+`chars` it shows what an answer of that size sends. It is for testing the skill, not for reading; SKILL.md does not name it.
 
 `read_url(url="probe", probe_units=N)` is the probe that tells the units apart (`readpage.py --probe-units N`): the
 same N characters in lines of 100, but each line's label says its number and how many characters, UTF-16 units and
