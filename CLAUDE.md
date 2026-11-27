@@ -9,7 +9,7 @@ git-ignored, so a contributor may keep a file of their own under that name.
 ## Rules
 - The skill serves any agent, OS and shell, weak models included. Nothing is tailored to one
   harness or to one machine.
-- `SKILL.md` stays the procedure, about 1 400 tokens; details go to `references/`.
+- `SKILL.md` stays the procedure, about 1 500 tokens; details go to `references/`. It grows only where that is worth it.
 - The skill installs nothing without the user's consent. Keys are the user's own.
 - While the maintainer runs agent tests (headless agent sessions, weak models), `SKILL.md`,
   `references/` and `scripts/` stay as they are; the maintainer does not always announce a run, so
