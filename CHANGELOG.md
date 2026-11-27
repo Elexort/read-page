@@ -24,6 +24,11 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   `not in` line raised. `ownenv.arg_text` reads an argument in the locale's code set only where it holds a lone
   surrogate; a clean UTF-8 argument is never re-read (`ownenv.shown` is for paths). A web address typed in those
   bytes is repaired the same way (it was `%3F%3F`, a 404), and a quote nothing can read is shown with U+FFFD.
+  Its checks in `tests/cjk.py` built the argument the way Python's UTF-8 mode decodes argv bytes, and failed on
+  CI's GBK job, whose interpreter is not in that mode (the GBK bytes of `资料说明` hold `CB B5`, a valid UTF-8 sequence,
+  so the string mixed lone surrogates with a character GBK cannot encode); they now build it as the interpreter
+  itself decodes those bytes (`interp_arg`), which is the lone surrogates in UTF-8 mode and the text under GBK.
+  The skill's code is unchanged.
 - **A quote that ends inside a marker is found** (KNOWN-ISSUES 269): `--from "text"` compared a quote with each
   line in its folded form, a marker reduced to its type and name (`[img #3]`, `[tab · Name]`), so the words an agent
   has when its harness cut the answer in the middle of a picture's or a tab's line - `#299997 · 100x80 3K ·

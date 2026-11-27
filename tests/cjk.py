@@ -1729,7 +1729,21 @@ PLANS = ("<!doctype html><html><head><meta charset='utf-8'><title>Plans</title><
          + "</article></body></html>").encode("utf-8")
 QUOTE = "[tab · Developer Plan Limits]"
 as_bytes = QUOTE.encode("gbk")                         # what a GBK parent passes: the `·` is A1 A4
-as_arg = as_bytes.decode("utf-8", "surrogateescape")   # what Python's UTF-8 mode makes of them
+
+
+def interp_arg(raw):
+    """Argument bytes as this suite's own interpreter decodes argv (`ownenv.arg_text` takes the string back with the
+    same filesystem encoding): lone surrogates in UTF-8 mode, which is what the repair is for; the text itself under a
+    GBK interpreter (CI's GBK job runs none in UTF-8 mode), where a build as UTF-8 mode makes it would mix lone
+    surrogates with a real character GBK cannot encode (the GBK bytes of 资料说明 hold CB B5, a valid UTF-8 `˵`) and
+    fail for a reason that is not the skill's. Windows has no argv bytes: its filesystem encoding is UTF-8 and
+    `os.fsdecode` raises on bytes that are not."""
+    return raw.decode(sys.getfilesystemencoding() or "utf-8", "surrogateescape")
+
+
+as_arg = interp_arg(as_bytes)
+zh_arg = interp_arg("资料说明".encode("gbk"))
+lone_arg = as_bytes.decode("utf-8", "surrogateescape")   # lone surrogates, whatever the interpreter
 real_codeset = list(ownenv._CODESET)
 
 
@@ -1746,19 +1760,20 @@ def repaired(name, s):
     return attempt(with_codeset, name, lambda x: ownenv.arg_text(x), s)
 
 
-check("an argument in GBK bytes (lone surrogates in UTF-8 mode) is read in the locale's code set: [tab · Plans]",
+check("an argument in GBK bytes, as the interpreter decodes them (lone surrogates in UTF-8 mode), is read in the "
+      "locale's code set: [tab · Plans]",
       repaired("gbk", as_arg) == QUOTE, ascii(repaired("gbk", as_arg)))
 check("... and so is a Chinese one",
-      repaired("gbk", "资料说明".encode("gbk").decode("utf-8", "surrogateescape")) == "资料说明", "")
+      repaired("gbk", zh_arg) == "资料说明", ascii(repaired("gbk", zh_arg)))
 check("an argument that is clean text stays as it is - a harness wrote it in UTF-8: `·`, Chinese, ASCII",
       all(repaired("gbk", s_) == s_ for s_ in (QUOTE, "资料说明", "plain words")),
       ascii([repaired("gbk", s_) for s_ in (QUOTE, "资料说明")]))
 check("an argument with lone surrogates under a UTF-8 locale has no code set to read it in: it stays",
-      repaired("", as_arg) == as_arg, "")
+      repaired("", lone_arg) == lone_arg, "")
 check("... and bytes that the locale's code set cannot read stay as they are",
       repaired("gbk", "\udcff\udcff") == "\udcff\udcff", "")
 check("... and one that names a code set Python does not know stays too",
-      repaired("no-such-codec", as_arg) == as_arg, "")
+      repaired("no-such-codec", lone_arg) == lone_arg, "")
 lone = attempt(lambda: __import__("answer").not_found({}, "first line\nsecond line", "content.md", "\udca1\udca4 words"))
 check("a quote with lone surrogates that nothing repairs is said as not found, with no internal error (the outline "
       "could not be written: UTF-8 cannot hold them)",
@@ -1793,10 +1808,11 @@ try:
         said_gbk = run_main("--from", as_arg)
         said_clean = run_main("--from", QUOTE)
         said_zh = run_main("--from", "资料说明")
-        said_zh_bytes = run_main("--from", "资料说明".encode("gbk").decode("utf-8", "surrogateescape"))
+        said_zh_bytes = run_main("--from", zh_arg)
     finally:
         ownenv._CODESET[:] = real_codeset
-    check("the CLI: `--from` given the quote as GBK bytes under a GBK locale goes to the tab's line",
+    check("the CLI: `--from` given the quote as GBK bytes (as the interpreter decodes them) under a GBK locale goes "
+          "to the tab's line",
           tab_line and started(said_gbk) == tab_line, "line %s, answer starts at %s; %s" % (
               tab_line, started(said_gbk), said_gbk[-80:].replace("\n", " | ")))
     check("... a Chinese quote in GBK bytes too", zh_line and started(said_zh_bytes) == zh_line,
@@ -1806,7 +1822,7 @@ try:
           "%s %s of %s %s" % (started(said_clean), started(said_zh), tab_line, zh_line))
     # the other words an argument holds: an address typed in the locale's code set is the address a browser asks for
     # (the UTF-8 escapes of 中文), not `%3F%3F` for lone surrogates
-    zh_url = psrv.url("/") + "中文".encode("gbk").decode("utf-8", "surrogateescape")
+    zh_url = psrv.url("/") + interp_arg("中文".encode("gbk"))
     for label, arg_, name in (("typed in GBK bytes", zh_url, "gbk"), ("typed as UTF-8", psrv.url("/") + "中文", "gbk")):
         buf9 = io.StringIO()
         ownenv._CODESET[:] = [name]
