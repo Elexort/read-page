@@ -8,6 +8,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **`tests/cjk.py`: the read into a folder named in Chinese takes several blocks whatever reads it** - a local file of
+  300 lines, each its own, in place of a page of one paragraph again and again, which trafilatura (CI has no
+  defuddle) took as 3 lines with no `next:`, so both checks of its command failed on every CI job.
 - **An MCP server with no UTF-8 mode finds a folder named in UTF-8 bytes under a GBK locale** (KNOWN-ISSUES 278):
   under `LC_ALL=zh_CN.GBK` a folder a process in UTF-8 mode made (the reader's child, which the server always starts
   with `-X utf8`; a `--dir`) has its name's UTF-8 bytes, the child names it by them when GBK does not read them, and

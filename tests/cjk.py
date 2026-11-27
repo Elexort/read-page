@@ -297,7 +297,6 @@ srv = serve({
                                      "they send. " * 12) + "你好", "Notes").encode("gbk")),
     "/koi8u": (200, {"Content-Type": "text/plain"}, (UK + "\n").encode("koi8-u") * 3),
     "/hebrew": (200, {"Content-Type": "text/plain"}, (HE + "\n").encode("cp1255") * 3),
-    "/zh-long": (200, {"Content-Type": "text/html; charset=utf-8"}, html("</p><p>".join([ZH_S] * 60)).encode("utf-8")),
 })
 try:
     for path, want, label in (("/gbk", "中华人民共和国", "an undeclared GBK page"),
@@ -337,11 +336,16 @@ try:
           "ירושלים" in content(folder) or "doubtful" in first, "%s | %s" % ((man.get("url") or {}).get("charset"), first[:100]))
     # the command under next: of an answer read into a folder named in Chinese names it as the files: line does, in the
     # locale's letters - under zh_CN.GBK its GBK bytes are lone surrogates in UTF-8 mode, which the answer could not
-    # print: it stopped with an internal error (KNOWN-ISSUES 278) - and a shell of the locale runs it as printed
+    # print: it stopped with an internal error (KNOWN-ISSUES 278) - and a shell of the locale runs it as printed.
+    # The text is a file of 300 lines, each its own, so that it takes several blocks whatever reads it: a page of one
+    # paragraph again and again came as 3 lines through trafilatura, which drops repeats, and had no next: line on CI
     import ownenv as ownenv_zh                                 # noqa: E402
     import shlex                                               # noqa: E402
     zh_root = os.path.join(ROOT, "资料")
-    rc, out, man, folder = cli(srv.url("/zh-long"), root=zh_root)
+    zh_lines = os.path.join(ROOT, "zh-lines.txt")
+    with open(zh_lines, "w", encoding="utf-8", newline="\n") as fh_zh:
+        fh_zh.write("".join("第%03d行：%s\n" % (i, ZH_S[:60]) for i in range(1, 301)))
+    rc, out, man, folder = cli(zh_lines, root=zh_root)
     rows_zh = out.decode("utf-8", "replace").rstrip("\n").split("\n")
     files_zh = next((ln[len("files: "):ln.rindex(" (")] for ln in rows_zh if ln.startswith("files: ") and " (" in ln), "")
     argv_zh = shlex.split(rows_zh[-1]) if len(rows_zh) > 1 and rows_zh[-2].startswith("── next: line ") else []
