@@ -63,6 +63,38 @@ def probe(n):
     return "".join(out)
 
 
+PROBE_FILLER = ("-", "ж", "字", "\U0001f600")   # ASCII; Cyrillic, 2 bytes; CJK, 3 bytes; past U+FFFF, 2 units and 4 bytes
+
+
+def probe_units(n):
+    """`readpage.py --probe-units N`: the probe that tells the units apart. `probe` is ASCII, so its characters,
+    UTF-16 units and bytes are one count and it cannot show which of them a harness counts - and for a Russian or a
+    Chinese answer that is the question (Cline counts UTF-16 units, Codex bytes). N characters again, in lines of
+    PROBE_LINE; each line's label says its number and how many characters, UTF-16 units and bytes stand before it,
+    and its filler is of one kind by the line's number - 1 ASCII, 2 Cyrillic, 3 CJK, 4 past U+FFFF, then again -,
+    so the three counts drift apart line by line. The last line a harness shows and where it cut that line give the
+    three counts at the cut: the one that comes to the harness's limit is the one it counts."""
+    n = max(0, min(int(n), PROBE_MAX))
+    if n < 2 * PROBE_LINE:
+        return ("UNITS HEAD AND TAIL | %d chars in one line " % n + "".join(PROBE_FILLER) * n)[:max(0, n - 1)] \
+            + ("\n" if n else "")
+    last = (n - PROBE_LINE) // PROBE_LINE + 1
+    out, chars, units, size = [], 0, 0, 0
+    for k in range(1, last + 1):
+        width = PROBE_LINE if k < last else n - chars
+        where = "line %d | %d chars %d utf16 %d bytes before" % (k, chars, units, size)
+        if k == 1:
+            where = "UNITS HEAD | %s | %d chars in %d lines" % (where, n, last)
+        elif k == last:
+            where = "UNITS TAIL | %s | %d chars" % (where, n)
+        line = (where + " " + PROBE_FILLER[(k - 1) % 4] * width)[:width - 1] + "\n"
+        out.append(line)
+        chars += len(line)
+        units += u16(line)
+        size += len(line.encode("utf-8"))
+    return "".join(out)
+
+
 def _too_long(line):
     return len(line) > LINE_CHARS or len(line.encode("utf-8")) > LINE_BYTES
 
@@ -370,28 +402,59 @@ def _plain(s):
     return " ".join(s.split())
 
 
+def _first(rows, want, after):
+    """(the first line at or after `after` that holds `want`, the first line that holds it): line numbers or
+    None, from (number, text) pairs in order; stops at the first line at or after `after`."""
+    first = None
+    for i, x in rows:
+        if want in x:
+            if first is None:
+                first = i
+            if i >= after:
+                return i, first
+    return None, first
+
+
+def _earliest(*numbers):
+    got = [n for n in numbers if n is not None]
+    return min(got) if got else None
+
+
 def find(lines, quote, after=1):
     """The line a quote starts at (`--from "text"`), from 1, or None: the first line holding it - whitespace
     folded, then without case -, the first at or after `after` (where the last answer of the page started)
     when there are several. A quote cut in the middle of a line matches; one of several lines is looked for
-    by its first, when it is not found whole."""
-    wants = [_plain(quote)]
+    by its first, when it is not found whole. A marker is matched twice: by its type and name (_plain) and as
+    it stands, so a quote that ends inside a marker - what an agent has when its harness cut the answer in
+    the middle of a picture's or a tab's line - is found too."""
+    texts = [str(quote)]
     rows = [r for r in str(quote).split("\n") if r.strip()]
     if len(rows) > 1:
-        wants.append(_plain(rows[0]))
-    plain = folded = None
-    for want in wants:
+        texts.append(rows[0])
+    after = after or 1
+    plain = folded = alt = alt_folded = None
+    for text in texts:
+        want, raw = _plain(text), " ".join(text.split())
         if not want:
             continue
         if plain is None:
             plain = [_plain(x) for x in lines]
-            folded = [x.casefold() for x in plain]
-        exact = [i for i, x in enumerate(plain, 1) if want in x]
-        loose = [i for i, x in enumerate(folded, 1) if want.casefold() in x]
+            # the lines that hold a marker, as they stand: the only ones whose two forms differ
+            alt = {i: r for i, r in ((i, " ".join(x.split())) for i, x in enumerate(lines, 1) if "[" in x)
+                   if r != plain[i - 1]}
         # where the reading is first: an agent goes on from its own place, a retyped quote may differ in case
-        for hits in ([i for i in exact if i >= (after or 1)], [i for i in loose if i >= (after or 1)], exact, loose):
-            if hits:
-                return hits[0]
+        hit = _first(enumerate(plain, 1), want, after), _first(alt.items(), raw, after)
+        if hit[0][0] or hit[1][0]:
+            return _earliest(hit[0][0], hit[1][0])
+        if folded is None:
+            folded = [x.casefold() for x in plain]
+            alt_folded = {i: x.casefold() for i, x in alt.items()}
+        loose = _first(enumerate(folded, 1), want.casefold(), after), _first(alt_folded.items(), raw.casefold(), after)
+        if loose[0][0] or loose[1][0]:
+            return _earliest(loose[0][0], loose[1][0])
+        for first in (_earliest(hit[0][1], hit[1][1]), _earliest(loose[0][1], loose[1][1])):
+            if first is not None:
+                return first
     return None
 
 
@@ -403,6 +466,10 @@ def not_found(manifest, text, view, quote):
         lines.pop()
     head = header(manifest, view, len(lines), len((text or "").encode("utf-8")))
     q = " ".join(str(quote).split())
+    try:
+        q = q.encode("utf-8", "surrogateescape").decode("utf-8", "replace")     # bytes of another code set: U+FFFD
+    except UnicodeError:
+        q = q.encode("utf-8", "replace").decode("utf-8")
     q = q if len(q) <= 80 else q[:79] + "…"
     say = ['── not in %s: "%s", spaces and case aside; the outline below names its lines for --from N ──' % (view, q)]
     room = min(OUTLINE_BYTES * 2, (BUDGET_BYTES - _bytes(head + say)) // 2, (BUDGET_CHARS - _chars(head + say)) // 2)

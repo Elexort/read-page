@@ -2678,8 +2678,9 @@ def _cut_lost(zf, b, sheet):
     """What a spreadsheet cut in its content.xml lost, as markers: the rows of the sheet the cut came in, from the
     first row not whole on - `[rows · lost in the cut · 54-? · Third]`, the extent not in the file (content.xml
     names no sheet's size) -, then the sheets after it the file names elsewhere: LibreOffice's settings.xml lists
-    every sheet by name (in its own order, by name), its meta.xml how many there are; Excel writes neither (and
-    its content.xml first), so its cut ODS names no lost sheet."""
+    every sheet by name (alphabetically, not in the workbook's order: several lost sheets each say `order unknown`),
+    its meta.xml how many there are; Excel writes neither (and its content.xml first), so its cut ODS names no lost
+    sheet."""
     out = []
     begun = [s.name for s in b.begun if not s.cache()]          # an external link's cache is no sheet of its own
     if sheet is not None and not sheet.cache():
@@ -2694,7 +2695,10 @@ def _cut_lost(zf, b, sheet):
                  for n in re.findall(rb'<config:config-item-map-entry\s+config:name="([^"]*)"', box.group(1))] \
             if box else []
     seen = set(s.name for s in b.begun)
-    out.extend(lost_marker("sheet", n) for n in names if n not in seen)
+    gone = [n for n in names if n not in seen]
+    # settings.xml lists the sheets by name, not in the workbook's order: they all follow the last sheet that arrived,
+    # and among themselves they have no order the file knows - said, when there are several
+    out.extend(lost_marker("sheet", n, *(("order unknown",) if len(gone) > 1 else ())) for n in gone)
     count = re.search(rb'meta:table-count="(\d{1,6})"', meta or b"")
     if count and not names:
         total = int(count.group(1))           # how many, not which: each by its place

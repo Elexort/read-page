@@ -267,6 +267,25 @@ def shown(p):
         return raw.decode("utf-8", "replace")
 
 
+def arg_text(s):
+    """A command-line argument that is words, not a path - what `--from "text"` looks for, an address - as the user
+    wrote it. Under a POSIX locale that is not UTF-8 (zh_CN.GBK) a parent writes the quote's `·` as the bytes A1 A4;
+    Python's UTF-8 mode holds bytes it cannot read as lone surrogates, and no line holds those. An argument with lone
+    surrogates goes back to its bytes and is read in the locale's code set (fs_codeset); one without them is text
+    already - a harness writes UTF-8, as most do - and is never re-read (`shown` re-reads every non-ASCII string,
+    which is right for a name from the disk and wrong for words); bytes the code set cannot read, and no code set,
+    leave it as it is."""
+    if not isinstance(s, str) or s.isascii() or not any("\udc80" <= c <= "\udcff" for c in s):
+        return s
+    cs = fs_codeset()
+    if not cs:
+        return s
+    try:
+        return s.encode(sys.getfilesystemencoding() or "utf-8", "surrogateescape").decode(cs)
+    except (UnicodeError, LookupError):
+        return s
+
+
 def fs_path(s):
     """The other way: a path given as text - the `dir` of an answer, an MCP client's argument - as this process
     names it. It is taken only when it is there (a path that is there already, or none, comes back as it is)."""

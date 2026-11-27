@@ -50,7 +50,10 @@ temp directory, or `--dir DIR`.
 several do, the first at or after where the last answer of that file started, so an agent that quotes the last line
 it saw goes on from its own place. A quote cut in the middle of a line matches, one of several lines is looked for
 by its first, and a marker is found by its type and name - a picture by its number - whatever its state and
-properties say: `--from "[tab · Developer Plan Limits]"`, `--from "[img #3]"`. When no line holds it, the answer says
+properties say: `--from "[tab · Developer Plan Limits]"`, `--from "[img #3]"`. The line is matched as it stands too,
+whitespace folded, so a quote that ends inside a marker is found - the case when a harness cut the answer in the middle
+of a picture's or a tab's line: `--from "#3 · 100x80 3K · picture 3] im"`, `--from "[tab · hidden, but extr"`. When no
+line holds it, the answer says
 so and shows the outline (its line numbers are what `--from N` takes), and no text. It works on `content.md` and
 `page.md` alike.
 
@@ -357,5 +360,6 @@ inline_images?, refresh?, clear_cookies?, file?, from?)` and `read(dir, file?, f
 goes on in the text read last. `read` also opens `manifest.json`, and a picture as an image block.
 `inline_images=true` attaches the text's content pictures (not icons, logos or decorations) as
 image blocks right after their markers, as PNG or JPEG up to 1 568 px, the whole answer inside
-25 000 tokens; leave it off below a 1M context. Calls run four at a time, and a cancelled call is
+25 000 tokens, and the blocks of the result together inside the text's 7 900 characters (the text gives up the room
+the notes and the pictures take); leave it off below a 1M context. Calls run four at a time, and a cancelled call is
 killed. Details: [mcp.md](mcp.md).
