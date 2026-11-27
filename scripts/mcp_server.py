@@ -142,7 +142,7 @@ TOOLS = [
                 "probe": {"type": "integer", "minimum": 0,
                           "description": "for testing a client, not for reading: answer with N characters of numbered "
                                          "lines and nothing else, no network (the url is not read). url=\"probe:N\" is "
-                                         "a page of them, answered the normal way (with from and to)"},
+                                         "a page of them, answered the normal way (with from and chars)"},
                 "probe_units": {"type": "integer", "minimum": 0,
                                 "description": "for testing a client, not for reading: like probe, but each line says how "
                                                "many characters, UTF-16 units and bytes stand before it, and its filler "

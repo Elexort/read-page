@@ -8,6 +8,8 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The MCP `probe`'s description names `chars`**: a page of probes, it said, is answered "with from and to";
+  `to` is gone (KNOWN-ISSUES 277).
 - **After a cut, the last size that came back whole** (KNOWN-ISSUES 280): SKILL.md said to go on from a cut answer
   with about half the `--chars`. Under Cline's cut of the middle the answer's `next:` survives and repeats the size
   that was cut, and Haiku kept it, filling each gap with a small `--from "<quote>"` call: 15 and 17 calls for 99 % and

@@ -1050,5 +1050,9 @@ import mcp_server                                              # noqa: E402
 read_says = " ".join(next((t["description"] for t in mcp_server.TOOLS if t["name"] == "read"), "").split())
 check("the MCP read tool's description says the same of a cut: the last chars that came back whole (KNOWN-ISSUES 280)",
       all(w in read_says for w in WHOLE_AGAIN) and "half" not in read_says, read_says[-160:])
+# to is gone (KNOWN-ISSUES 277): no description names it, the probe's - a page of probes read the normal way - neither
+probe_says = ((mcp_server.TOOLS[0].get("inputSchema") or {}).get("properties") or {}).get("probe", {}).get("description", "")
+check("the MCP probe's description names what a page of probes is read with, from and chars, not the gone to",
+      "with from and chars" in probe_says and "and to)" not in probe_says, probe_says[-70:])
 
 sys.exit(check.done())
