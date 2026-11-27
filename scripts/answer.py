@@ -526,9 +526,11 @@ def not_found(manifest, text, view, quote, budget=BUDGET_BYTES, max_lines=BUDGET
     return "\n".join(head + say + (["outline (line, heading):"] + rows if rows else [])) + "\n"
 
 
-def _lines(view, first, last, total):
-    """The line above an answer's text: which lines of which file it holds."""
-    return "── %s: lines %d-%d of %d ──" % (view, first, last, total)
+def _lines(view, first, total):
+    """The line above an answer's text: where in which file it starts, and no end. A harness that keeps an answer's
+    head and cuts its tail (Zed) cuts `next:` off and leaves this line, and a model took the end it named for the end
+    of what it had seen (KNOWN-ISSUES 279): the end is named in `next:` and in EOF alone."""
+    return "── %s: from line %d of %d ──" % (view, first, total)
 
 
 def _eof(view, first, last, total):
@@ -542,8 +544,8 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
     `next_hint(n, total, view)` words the pointer for the caller while text remains: `── next: line N of T ──` and
     on a line of its own the command or the MCP call that reads on. `budget`, `max_lines` and `chars` are the
     answer's size in bytes, lines and characters (limits: --chars C sets all three). The lines around the text are
-    dry: above it `── content.md: lines A-B of T ──`, every block alike; the last block's last line
-    `── EOF content.md: lines A-T of T ──` (KNOWN-ISSUES 276).
+    dry: above it `── content.md: from line A of T ──`, every block alike, no end (KNOWN-ISSUES 279); the last
+    block's last line `── EOF content.md: lines A-T of T ──` (KNOWN-ISSUES 276).
     """
     lines = (text or "").split("\n")
     if lines and lines[-1] == "":
@@ -566,7 +568,7 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
     whole = (start == 1 and _bytes(lines) + POINTER_BYTES <= room_b and _chars(lines) + POINTER_BYTES <= room_c
              and total + 2 <= room_l)
     if whole:
-        return "\n".join(head + [_lines(view, 1, total, total)] + pictures.compact(lines)
+        return "\n".join(head + [_lines(view, 1, total)] + pictures.compact(lines)
                          + [_eof(view, 1, total, total)]) + "\n", None
 
     block, block_c = room_b - POINTER_BYTES, room_c - POINTER_BYTES
@@ -592,7 +594,7 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
     end = window(lines, start, block - _bytes(rows), room_l - len(rows) - 3, block_c - _chars(rows))
     while True:
         # a picture's first marker in this answer is full, a repeat short
-        body = [_lines(view, start, end - 1, total)] + pictures.compact(lines[start - 1:end - 1])
+        body = [_lines(view, start, total)] + pictures.compact(lines[start - 1:end - 1])
         tail = [next_hint(end, total, view) if end <= total else _eof(view, start, end - 1, total)]
         out = "\n".join(head + rows + body + tail) + "\n"
         if _fits(out, budget, chars, max_lines):

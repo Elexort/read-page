@@ -37,7 +37,7 @@ python -X utf8 "SKILL_DIR/scripts/readpage.py" URL --allow-external
 read-page · ok · defuddle · content.md 24.7 KB, 389 lines · 1.9 s
 files: /tmp/read-page-1000/pages/example.com-9c1f… (content.md, page.md, manifest.json)
 outline (line, heading): …
-── content.md: lines 1-126 of 389 ──
+── content.md: from line 1 of 389 ──
 (the text)
 ── next: line 127 of 389 ──
 python -X utf8 "SKILL_DIR/scripts/readpage.py" URL --allow-external --from 127 --chars 7900 --file content.md

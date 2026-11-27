@@ -325,14 +325,19 @@ try:
     said = mcp_said(busy)
     nxt = re.search(r"── next: line (\d+) of \d+ ──\nread\(dir=\"[^\"]+\", file=\"content.md\", from=(\d+), chars=7900\)",
                     said)
-    last = re.search(r"── content\.md: lines 1-(\d+) of \d+ ──", said)
+    # the line above the text names no end (KNOWN-ISSUES 279): the block's lines are counted between that line and
+    # next:, in the text blocks joined back (each is cut at a marker's end)
+    rows = said.split("\n")
+    top = next((i for i, ln in enumerate(rows) if ln.startswith("── content.md: from line 1 of ")), None)
+    at_next = next((i for i, ln in enumerate(rows) if ln.startswith("── next: line ")), None)
+    shown = at_next - top - 1 if top is not None and at_next is not None else None
     check("... the pointer is the line after the block's last one",
-          nxt and last and int(nxt.group(1)) == int(last.group(1)) + 1 == int(nxt.group(2)),
-          "%s %s" % (nxt and nxt.group(1), last and last.group(1)))
+          nxt and shown and int(nxt.group(1)) == shown + 1 == int(nxt.group(2)),
+          "%s %s" % (nxt and nxt.group(1), shown))
     more = mcp.tool_read({"dir": mcp_dir(busy), "from": int(nxt.group(1))}) if nxt else {}
     mt = mcp_said(more)
     check("... and read(dir, from=next) goes on from there",
-          nxt and ("── content.md: lines %s-" % nxt.group(1)) in mt, mt[:120].replace("\n", " | "))
+          nxt and ("── content.md: from line %s of " % nxt.group(1)) in mt, mt[:120].replace("\n", " | "))
     again = mcp.tool_read_url({"url": s.url("/fill"), "inline_images": True})
     a_chars, a_bytes, a_lines = counted(again["content"])
     check("inline_images alone: within the block as well",

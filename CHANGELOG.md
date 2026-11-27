@@ -8,6 +8,12 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The line above the text names where it starts, not where it ends** (KNOWN-ISSUES 279):
+  `── content.md: from line 53 of 474 ──` in place of `lines 53-182 of 474`; the end is named in `next:` and in EOF
+  alone. Zed keeps the head of a command's output and cuts its tail, `next:` with it, and leaves the line above the
+  text: Haiku took the end it named for the end of what it had seen and went on after it, 2 runs of 2 skipping 27
+  lines of a 474-line essay (94 % read). With the start alone 6 runs of 6 read 100 %, each going on from a quote of
+  the last line it saw. CLI and MCP alike; SKILL.md's example, `references/answer.md`, `references/mcp.md`, README.
 - **`tests/cjk.py`: the read into a folder named in Chinese takes several blocks whatever reads it** - a local file of
   300 lines, each its own, in place of a page of one paragraph again and again, which trafilatura (CI has no
   defuddle) took as 3 lines with no `next:`, so both checks of its command failed on every CI job.

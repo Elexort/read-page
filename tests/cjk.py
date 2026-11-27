@@ -368,7 +368,7 @@ try:
                               capture_output=True, timeout=240, env=e_zh)
     said_zh = p_zh.stdout.decode("utf-8", "replace") if p_zh else ""
     check("... and run as printed, by a shell of this locale, it gives the next block of that folder's copy",
-          p_zh is not None and p_zh.returncode == 0 and ("── content.md: lines %d-" % n_zh) in said_zh
+          p_zh is not None and p_zh.returncode == 0 and ("── content.md: from line %d of " % n_zh) in said_zh
           and "note: the page was read again" not in said_zh,
           (said_zh.split("\n")[0] or (p_zh.stderr.decode("utf-8", "replace")[-160:] if p_zh else "no command"))[:120])
 finally:
@@ -1840,7 +1840,7 @@ try:
     zh_line = next((i for i, ln in enumerate(saved_lines, 1) if "资料说明" in ln), 0)
 
     def started(text_):
-        found = re.search(r"── content\.md: lines (\d+)-", text_)
+        found = re.search(r"── content\.md: from line (\d+) of ", text_)
         return int(found.group(1)) if found else (0 if "── not in content.md" in text_ else -1)
     ownenv._CODESET[:] = ["gbk"]
     try:
@@ -1901,7 +1901,7 @@ else:
         p9 = subprocess.run(base_ + [b"--from", as_bytes], capture_output=True, timeout=240, env=e9)
         t9 = p9.stdout.decode("utf-8", "replace")
         check("the CLI under %s given the quote as GBK bytes (a parent in GBK): the tab's line, not \"not in content.md\"" % gbk_loc,
-              p9.returncode == 0 and "── content.md: lines %d-" % tab_line in t9,
+              p9.returncode == 0 and "── content.md: from line %d of " % tab_line in t9,
               t9.split("\n")[-3][:100] if t9 else str(p9.stderr[:100]))
     finally:
         psrv.close()
