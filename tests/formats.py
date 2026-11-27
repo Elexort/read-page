@@ -754,6 +754,19 @@ try:
             check("... and where the free memory holds one process alone (80 % of 600 MB), one does it all, with the "
                   "four CPUs for its onnxruntime", info.get("procs") == 1 and info.get("asked") == 6
                   and not info.get("left") and got_threads == ["4"], "%s %s" % (info, got_threads))
+            # KNOWN-ISSUES 279: a lone process's onnxruntime threads are capped - 20 threads took GPT-3's pages no faster
+            # than 8 for 25 % more CPU - and pdftables' own default (no share from the read: --alternate) is the same
+            os.environ["READ_PAGE_TEST_CPUS"] = "20"
+            mod3.tables_reset()
+            info = mod3.pdf_tables(six_p, d6p, list(texts6))
+            got_threads = threads_of()
+            mod3.tables_close(kill=True)
+            os.environ["READ_PAGE_TEST_CPUS"] = "4"
+            own = getattr(pt, "threads_for", None)
+            check("279: ... on 20 CPUs that one process gets 8 threads, not 20; pdftables' own default is 8 at most",
+                  info.get("procs") == 1 and info.get("asked") == 6 and got_threads == ["8"] and own is not None
+                  and own(0) == min(8, pt.cpus()) and own(20) == 8 and own(3) == 3,
+                  "%s %s %s" % (info, got_threads, [own(0), own(20), own(3)] if own else "no threads_for"))
             # several reads count together: the processes another read has started and not yet measured take
             # their figures from the same memory, as the note in the cache says
             os.environ["READ_PAGE_TEST_MEMORY"] = json.dumps({"phys": 3 << 30, "commit": 64 << 30})

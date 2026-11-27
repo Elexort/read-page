@@ -8,6 +8,11 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A layout model process runs 8 onnxruntime threads at most** (KNOWN-ISSUES 279): a process alone (a short PDF, a
+  read the memory keeps to one) had a thread for every CPU, and twenty took GPT-3's pages no faster than eight for
+  25 % more CPU; pdftables' own default (`--alternate`) is the CPUs, 8 at most, where it was 4. The processes stay
+  counted by logical CPUs: by physical cores a four-core HT laptop was 11-39 % slower (row 280, measured and not
+  taken).
 - **A PDF's table pages in several layout model processes** (KNOWN-ISSUES 242): the pages that look like a table
   go to as many model processes as 85 % of the CPUs the read may use (1-3 all of them, from 4 one free), the pages
   and the memory hold, a page each from one queue, the tables in page order; each process with onnxruntime's

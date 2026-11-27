@@ -6244,12 +6244,12 @@ PDF_TABLES_SLOW = 1.1          # slowed less than this, the model keeps its 10 s
 # page each from one queue (one process took GPT-3's 33 pages in 8.4 s here, 17.1 s on an N100's four cores). The
 # CPUs: 85 % of those the read may use, rounded half up - 1-3 all of them, from 4 one stays free for the system
 # ((17 * cpus + 10) // 20: 4 -> 3, 8 -> 7, 20 -> 17) - never more than the pages; each process's onnxruntime gets
-# the CPUs over the processes. The memory, the one guard: our processes together take at most 80 % of the free
-# physical memory by what a process really uses (its peak working set), and on Windows at most 80 % of the commit
-# left by what it reserves (its private commit) - the commit limit is the danger, past it every program's
-# allocations fail -, within a job's or a cgroup's room too (hostmem.free_memory). Two start at once when two fit by
-# the figures below; more once the first say theirs after a page, and several reads count together through a note
-# in the cache.
+# the CPUs over the processes, 8 at most (pdftables.THREADS_CAP, KNOWN-ISSUES 279). The memory, the one guard: our
+# processes together take at most 80 % of the free physical memory by what a process really uses (its peak working
+# set), and on Windows at most 80 % of the commit left by what it reserves (its private commit) - the commit limit is
+# the danger, past it every program's allocations fail -, within a job's or a cgroup's room too
+# (hostmem.free_memory). Two start at once when two fit by the figures below; more once the first say theirs after a
+# page, and several reads count together through a note in the cache.
 PDF_TABLES_MEM_SHARE = 0.8
 # What one model process takes, rounded up, with numpy's OpenBLAS on one thread (pdftables.main): its peak working
 # set and private commit at the end of GPT-3's 33 pages 450 and 442 MB, after its first page 255-277 and 239-259 MB
@@ -6273,7 +6273,10 @@ def tables_cpus():
 
 
 def tables_cpu_share(cpus):
-    """85 % of the CPUs, rounded half up: 1-3 all of them, from 4 one free for the system."""
+    """85 % of the CPUs, rounded half up: 1-3 all of them, from 4 one free for the system. Logical CPUs:
+    counted by physical cores (3 x 2 threads on four cores with HT) GPT-3's 33 pages took 11 % longer than
+    by logical CPUs (7 x 1), 200 pages of a datasheet 39 % longer - a page's work is two thirds one thread
+    of Python, which an HT sibling runs better than a second onnxruntime thread (KNOWN-ISSUES 280)."""
     return max(1, (17 * max(1, int(cpus)) + 10) // 20)
 
 
@@ -6806,7 +6809,7 @@ def pdf_tables(path, doc, pages):
                                        hold=True) == 0:
                     state["cap"], state["fit_at"] = len(pool), now() + 0.25
                     continue
-                threads = max(1, cpus // max(plan, len(pool) + 1))
+                threads = pdftables.threads_for(max(1, cpus // max(plan, len(pool) + 1)))     # (8 at most: 279)
                 w = tables_start(threads)
                 if w is None:
                     if not pool:

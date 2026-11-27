@@ -70,6 +70,11 @@ SPLIT_COLS = True      # columns of the page in one column of the grid are colum
 COL_EDGE = 1.0         # pt: the words of one column of the page share an edge (left, right or middle) this close
 NUMBER = re.compile(r"^[-+−–±$€£(]?\d[\d.,]*%?\)?[*†‡§]*$")
 TICK = 0.5             # seconds between the words of the process's pace while nothing else is said
+# onnxruntime's intra-op threads for one model process at most: the fewest within about 2 % of the best on GPT-3's 33
+# table pages in one process - 20 logical CPUs (8 P-cores with HT, 4 E-cores): 8 threads 8.07 s, 6 8.32 (+3 %), 10
+# 8.10, 20 8.21 s for 25 % more CPU than 8; 4 P-cores with HT: 8 threads 8.74 s, 4 9.02 (+3 %); 4 E-cores: 4 and 8
+# alike (2026-11-27, KNOWN-ISSUES 279). A page's work is two thirds one thread of Python, so threads buy little.
+THREADS_CAP = 8
 
 
 def cpus():
@@ -102,10 +107,16 @@ def cpus():
         return os.cpu_count() or 1
 
 
+def threads_for(threads=0):
+    """The intra-op threads a model process runs: the read's share of the CPUs (`threads`), else the
+    CPUs this process may use (--alternate's lone process), THREADS_CAP at most."""
+    return max(1, min(THREADS_CAP, threads or cpus()))
+
+
 def calm_onnx(threads=0):
     """onnxruntime as a small model needs it on a machine that does other things: the read's share of
-    the CPUs (`threads`), else four threads at most, none spinning while it waits. As the library sets
-    its sessions up (a thread a core, each
+    the CPUs (`threads`), else the CPUs, THREADS_CAP at most (threads_for), none spinning while it
+    waits. As the library sets its sessions up (a thread a core, each
     spinning) a page of the layout model took 0.23 s and 2.4 s of CPU on 20 cores, but 4.5 s on
     four slow cores and 1.8 s (at most 2.5) on two; so set: 0.23, 0.51 and 0.32 s, a third of a
     CPU second (2026-11-19). The threads come from cpus(), or `threads` - the read's share of the
@@ -126,7 +137,7 @@ def calm_onnx(threads=0):
         def __init__(self, path, sess_options=None, **kw):
             so = sess_options or ort.SessionOptions()
             try:
-                so.intra_op_num_threads = threads or min(4, cpus())
+                so.intra_op_num_threads = threads_for(threads)
                 so.inter_op_num_threads = 1
                 so.add_session_config_entry("session.intra_op.allow_spinning", "0")
             except Exception:                                  # noqa: BLE001
