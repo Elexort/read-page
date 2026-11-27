@@ -8,6 +8,13 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **SKILL.md: read on with the command under `next:`, size it with `--chars`, go on from a cut** (KNOWN-ISSUES 276,
+  277): the example answer ends as an answer does, the `next:` line and the command under it; the rest of a long text
+  is that command (the saved copy, no network), `EOF` its end; for more at once `--chars` up to the tool's output limit
+  if known, else about 20 000; an answer that comes back cut or saved to a file goes on from the words of the last
+  line before the gap, or the same `--from`, with about half the `--chars`, the size that came whole kept for the next
+  pages. The pipe line says a pipe can cut off `next:`, the rules read on with `next:`, the MCP line names `chars`.
+  5 625 -> 6 079 characters, 926 -> 1 005 words.
 - **The answer's `next:` is the command that reads on; dry lines and EOF** (KNOWN-ISSUES 276): the answer said how to
   go on in words (`── next: line 127 of 389 → the same command with --from 127 --file content.md ──`), and agents
   copy what an answer names. Now, above the text, every block alike: `── content.md: lines 53-190 of 474 ──`; below

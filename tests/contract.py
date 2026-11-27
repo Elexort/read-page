@@ -935,4 +935,20 @@ check("SKILL.md's `error` row fits both kinds of error: retry later, and a cut o
       "(\"retry later\" alone was wrong for a file cut short)",
       "retry later" in err_row and "cut" in err_row and "damaged" in err_row and "again" in err_row, err_row)
 
+# SKILL.md's answer is the answer's own (KNOWN-ISSUES 276, 277): its example ends with the next: line and the
+# command under it, as an answer does; it names --chars and EOF, the way back from a cut, and no --to
+with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as fh_:
+    skill = fh_.read()
+example = re.search(r"(?s)```\nread-page · ok · .*?\n```", skill)
+ex_rows = example.group(0).split("\n")[1:-1] if example else []
+check("SKILL.md's example answer ends as an answer does: `── next: line N of T ──`, then the command alone",
+      len(ex_rows) >= 2 and re.match(r"── next: line (\d+) of \d+ ──$", ex_rows[-2]) is not None
+      and re.match(r'python -X utf8 "SKILL_DIR/scripts/readpage\.py" URL .*--from %s --chars 7900 --file content\.md$'
+                   % re.match(r"── next: line (\d+)", ex_rows[-2]).group(1), ex_rows[-1]) is not None
+      if len(ex_rows) >= 2 and ex_rows[-2].startswith("── next: line ") else False, str(ex_rows[-2:])[:160])
+rest = next((p for p in skill.split("\n- ") if p.startswith("The rest of a long text")), "")
+check("SKILL.md: the rest of a text is the command under next:, EOF its end, --chars its size, half of it after a cut",
+      all(w in rest for w in ("`next:`", "`EOF`", "`--chars`", "20 000", "half", "--from \"<words of the last line"))
+      and "--to" not in skill, rest[:120].replace("\n", " "))
+
 sys.exit(check.done())
