@@ -367,7 +367,7 @@ try:
     saved = lines_of(first)
     n = next_line(first.text)
     line = last_rows(first.text, 1)[0]
-    python_name = getattr(ownenv, "python_name", None) or (lambda exe: "python")   # 2a87981 had none
+    python_name = getattr(ownenv, "python_name", None) or (lambda exe: "python")   # none before KNOWN-ISSUES 276
     me = python_name(sys.executable)
     argv_want = [me, "-X", "utf8", slashed(SCRIPT), srv.url("/long"), "--dir", slashed(first.dir), "--from", str(n),
                  "--chars", "7900", "--file", "content.md"]
@@ -476,7 +476,7 @@ try:
     # READ_PAGE_TEST_CUT, a test hook (references/answer.md, For testing the skill): the skill cuts its own answer the
     # way a harness cuts what a command printed, after the answer is built - Cline's middle, Zed's head, OpenCode's
     # tail, Claude Code's file - so that a model can be taught to go on under each cut
-    cut_of = getattr(answer, "harness_cut", None) or (lambda out, spec=None: out)        # 0b9253a had none
+    cut_of = getattr(answer, "harness_cut", None) or (lambda out, spec=None: out)        # none before the hook
     big_text = "".join("line %04d %s\n" % (i, "x" * 90) for i in range(1, 801))
     mid = cut_of(big_text, "middle:8000")
     m_gap = re.search(r"\n\n\.\.\.\[truncated (\d+) chars\]\.\.\.\n\n", mid)

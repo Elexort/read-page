@@ -565,6 +565,12 @@ def cmd_suites(a):
     names = [x for x in a.only.split(",") if x] or (OFFLINE + cjk + ([] if a.no_browser else [BROWSER_SUITE]))
     names = [x for x in names if x not in a.skip.split(",")]
     flags = [] if a.no_xutf8 else ["-X", "utf8"]       # a Chinese Windows or locale gives a driver no UTF-8 mode
+    runs = [(n, flags) for n in names]
+    if a.no_xutf8 and os.name != "nt" and "cjk" in names:
+        # under a POSIX locale that is not UTF-8, tests/cjk.py once more in UTF-8 mode, as an agent or an MCP client
+        # config runs it: what it writes is then UTF-8 bytes in a GBK world, which the run without it never makes
+        # (KNOWN-ISSUES 278: two MCP checks failed only so)
+        runs.append(("cjk -X utf8", ["-X", "utf8"]))
     py = a.python or env_python(a) or sys.executable
     print("suites run under %s" % py)
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
@@ -586,11 +592,11 @@ def cmd_suites(a):
     os.environ.clear()
     os.environ.update(keep)
     res, bad = {}, []
-    for n in names:
-        path = os.path.join(ROOT, "tests", n + ".py")
+    for n, run_flags in runs:
+        path = os.path.join(ROOT, "tests", n.split(" ")[0] + ".py")
         t0 = time.time()
-        rc, out = run_capture([py] + flags + [path], env=env, timeout=a.timeout, cwd=ROOT)
-        with open(os.path.join(logs(), "suite-%s.log" % n), "w", encoding="utf-8") as fh:
+        rc, out = run_capture([py] + run_flags + [path], env=env, timeout=a.timeout, cwd=ROOT)
+        with open(os.path.join(logs(), "suite-%s.log" % n.replace(" ", "")), "w", encoding="utf-8") as fh:
             fh.write(out)
         m = None
         for ln in out.splitlines()[::-1]:

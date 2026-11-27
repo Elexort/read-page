@@ -35,9 +35,11 @@ the script by its absolute path in forward slashes, the address and `--dir` in d
 if the saved copy is gone and the page is read again (`--allow-external`, `--force-external`, `--alternate`,
 `--deny-images`, `--download`, `--dir`; never `--refresh`, whose every step would fetch again and could move the
 lines, `--clear-cookies`, `--screenshots`, `--ocr` or `--json`), then `--from N --chars C --file F`, C the size this
-answer was asked with. It runs as printed in bash, PowerShell 5.1 and 7 and cmd. An address, a folder or a script
-path holding `"`, `$`, a backtick, `%` or a backslash - what a shell reads inside double quotes - gets the words
-instead: `the same command with --from 127 --chars 7900 --file content.md`. When the text ends in an answer, a short
+answer was asked with. It runs as printed in bash, PowerShell 5.1 and 7 and cmd; its paths are in the locale's letters,
+as the `files:` line names them (under zh_CN.GBK the GBK reading of their bytes). An address, a folder or a script
+path holding `"`, `$`, a backtick, `%` or a backslash - what a shell reads inside double quotes -, or one a shell of the
+locale could not write back to its bytes, gets the words instead: `the same command with --from 127 --chars 7900
+--file content.md`. When the text ends in an answer, a short
 page's too, the answer's last line says so: `── EOF content.md: lines 352-389 of 389 ──`. A stray `──` on the command
 line (a model copied the decoration) is left out and named on the `ignored:` line.
 

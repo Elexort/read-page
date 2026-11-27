@@ -56,7 +56,8 @@ git-ignored, so a contributor may keep a file of their own under that name.
   clone-and-read (and README's ZIP), a bare Python, containers (Alpine, Ubuntu 20.04 and 24.04, Debian 11, Rocky 8,
   Fedora, Arch, openSUSE), a proxy that inspects TLS (`tools/ci_proxy.py`: mitmproxy, its root in the OS's store),
   a Windows whose Python has the code page 936 or 950 in a profile named in Chinese (`tools/ci_acp.py`: an
-  application manifest with `activeCodePage`, asserted by `GetACP()`), and the suites under `LC_ALL=zh_CN.GBK`, on
+  application manifest with `activeCodePage`, asserted by `GetACP()`), and the suites under `LC_ALL=zh_CN.GBK` (none
+  told `-X utf8`, then `tests/cjk.py` once more told so: what it writes is UTF-8 bytes in a GBK world), on
   every free runner (Linux, Windows, macOS; x64 and arm64). `tools/ci_install.py` is what the jobs run; a matrix
   row's `expect` lists what its platform lacks for want of wheels (a floor), and any other gap is red.
   `tools/ci_proxy.py`, `tools/ci_acp.py` and `tools/ci_container.sh` change the machine they run on (a trusted root

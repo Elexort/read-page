@@ -297,6 +297,7 @@ srv = serve({
                                      "they send. " * 12) + "你好", "Notes").encode("gbk")),
     "/koi8u": (200, {"Content-Type": "text/plain"}, (UK + "\n").encode("koi8-u") * 3),
     "/hebrew": (200, {"Content-Type": "text/plain"}, (HE + "\n").encode("cp1255") * 3),
+    "/zh-long": (200, {"Content-Type": "text/html; charset=utf-8"}, html("</p><p>".join([ZH_S] * 60)).encode("utf-8")),
 })
 try:
     for path, want, label in (("/gbk", "中华人民共和国", "an undeclared GBK page"),
@@ -334,6 +335,38 @@ try:
     first = out.decode("utf-8", "replace").split("\n")[0]
     check("CLI: an undeclared Hebrew text is read right, or its first line says the reading is doubtful",
           "ירושלים" in content(folder) or "doubtful" in first, "%s | %s" % ((man.get("url") or {}).get("charset"), first[:100]))
+    # the command under next: of an answer read into a folder named in Chinese names it as the files: line does, in the
+    # locale's letters - under zh_CN.GBK its GBK bytes are lone surrogates in UTF-8 mode, which the answer could not
+    # print: it stopped with an internal error (KNOWN-ISSUES 278) - and a shell of the locale runs it as printed
+    import ownenv as ownenv_zh                                 # noqa: E402
+    import shlex                                               # noqa: E402
+    zh_root = os.path.join(ROOT, "资料")
+    rc, out, man, folder = cli(srv.url("/zh-long"), root=zh_root)
+    rows_zh = out.decode("utf-8", "replace").rstrip("\n").split("\n")
+    files_zh = next((ln[len("files: "):ln.rindex(" (")] for ln in rows_zh if ln.startswith("files: ") and " (" in ln), "")
+    argv_zh = shlex.split(rows_zh[-1]) if len(rows_zh) > 1 and rows_zh[-2].startswith("── next: line ") else []
+    dir_zh = argv_zh[argv_zh.index("--dir") + 1] if "--dir" in argv_zh else ""
+    check("CLI: read into a folder named in Chinese, the command under next: names it as the files: line does",
+          rc == 0 and dir_zh and dir_zh == (files_zh.replace("\\", "/") if os.name == "nt" else files_zh)
+          and not any("\ud800" <= c <= "\udfff" for c in rows_zh[-1]),
+          "rc %s, %r | %s" % (rc, dir_zh[-24:], rows_zh[0][:60]))
+    n_zh = int(re.match(r"── next: line (\d+)", rows_zh[-2]).group(1)) if argv_zh else 0
+    e_zh = dict(os.environ, READ_PAGE_CACHE=os.path.join(zh_root, "cache"), READ_PAGE_TEST_PUBLIC_HOST=PUBLIC,
+                PATH=os.path.dirname(sys.executable) + os.pathsep + os.environ.get("PATH", ""),
+                READ_PAGE_SKIP=",".join(x for x in (os.environ.get("READ_PAGE_SKIP", "").split(",") + ["env"]) if x))
+    if not argv_zh:
+        p_zh = None
+    elif os.name == "nt":
+        p_zh = subprocess.run('cmd /d /s /c "%s"' % rows_zh[-1], capture_output=True, timeout=240, env=e_zh)
+    else:
+        # as a shell of this locale has the line: in the locale's code set (a GBK terminal writes GBK)
+        p_zh = subprocess.run([b"/bin/sh", b"-c", rows_zh[-1].encode(ownenv_zh.fs_codeset() or "utf-8", "surrogateescape")],
+                              capture_output=True, timeout=240, env=e_zh)
+    said_zh = p_zh.stdout.decode("utf-8", "replace") if p_zh else ""
+    check("... and run as printed, by a shell of this locale, it gives the next block of that folder's copy",
+          p_zh is not None and p_zh.returncode == 0 and ("── content.md: lines %d-" % n_zh) in said_zh
+          and "note: the page was read again" not in said_zh,
+          (said_zh.split("\n")[0] or (p_zh.stderr.decode("utf-8", "replace")[-160:] if p_zh else "no command"))[:120])
 finally:
     srv.close()
 

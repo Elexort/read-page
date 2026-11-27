@@ -504,8 +504,9 @@ jobs:
 
       # every suite, props and environment too: their fixtures are named in Cyrillic, which this locale writes in GBK
       # and the skill's children (-X utf8) hold as other bytes than UTF-8 - KNOWN-ISSUES 175, fixed; tests/cjk.py
-      # names its folders in Chinese here too
-      - name: "the suites, in that locale, none of them told -X utf8"
+      # names its folders in Chinese here too, and runs once more told -X utf8 (its folders then UTF-8 bytes in a GBK
+      # world, as an agent's or an MCP client config's run makes them - KNOWN-ISSUES 278)
+      - name: "the suites, in that locale, none of them told -X utf8 (then tests/cjk.py, told so)"
         env:
           LC_ALL: zh_CN.GBK
           PYTHONUTF8: "0"

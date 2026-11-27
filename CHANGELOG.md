@@ -8,6 +8,18 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **An MCP server with no UTF-8 mode finds a folder named in UTF-8 bytes under a GBK locale** (KNOWN-ISSUES 278):
+  under `LC_ALL=zh_CN.GBK` a folder a process in UTF-8 mode made (the reader's child, which the server always starts
+  with `-X utf8`; a `--dir`) has its name's UTF-8 bytes, the child names it by them when GBK does not read them, and
+  a server with no UTF-8 mode took that name back in GBK alone: read_url answered an empty text and `read` "dir is not
+  a directory". `ownenv.fs_path` tries the locale's code set, then UTF-8, whichever is there; a UTF-8 locale and
+  Windows are as before. `tests/cjk.py`'s two MCP checks failed so in UTF-8 mode in that locale (223 ok, 2 failed in
+  WSL; 225 now), and CI's GBK job runs it once more with `-X utf8` (`tools/ci_install.py suites --no-xutf8`, POSIX).
+  The same locale showed a regression of the `next:` command, fixed with it: a non-ASCII `--dir` was written as the
+  reader's process holds it, lone surrogates for its GBK bytes, and the answer stopped with an internal error
+  (`tests/props.py`'s big page in `большая папка`). The command names the script, the folder and a file in the
+  locale's letters, as the `files:` line does, and gives the words where a shell of the locale could not give the
+  bytes back; `tests/cjk.py` reads into a folder named in Chinese and runs the command as such a shell would.
 - **A harness's cut, simulated: `READ_PAGE_TEST_CUT`** (KNOWN-ISSUES 276), a hook for testing the skill, not for
   reading: the skill cuts its own answer after it is built the way a harness cuts a command's output - `middle:8000`
   (Cline: about half kept at each end, `...[truncated N chars]...` between, its own arithmetic), `head:16384` (Zed:

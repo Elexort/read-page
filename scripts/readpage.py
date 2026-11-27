@@ -9835,8 +9835,8 @@ def read(args):
             ("a %s: address" % scheme) if len(scheme) > 1 else repr(args.url[:120])))
     if scheme == "file" and not local:
         return usage_error("no such file: %s" % args.url[:200])
-    # what the command under next: repeats: the address as read, a file by its absolute path
-    args.target = slashed(local) if local else url
+    # what the command under next: repeats: the address as read, a file by its absolute path in the locale's letters
+    args.target = in_letters(slashed(local)) if local else url
     # one read of a page at a time: a second call for the same page (MCP runs four at once) waits
     # and then gets the cached answer, instead of writing the same folder and deleting the
     # other's .part files
@@ -11275,7 +11275,7 @@ def remember_view(workdir, view, start=None):
 # What a shell reads inside double quotes - $ and a backtick (bash, PowerShell), % (cmd) -, the quote that ends them,
 # a backslash bash may take for an escape, and what no command line holds: an address, a folder or a script path
 # with one gets the command in words (cli_command)
-UNQUOTABLE = re.compile(r'["$`%\\\x00-\x1f\x7f]')
+UNQUOTABLE = re.compile(r'["$`%\\\x00-\x1f\x7f�\ud800-\udfff]')
 # the flags that matter if the saved copy is gone and the page is read again; never --refresh (each step would fetch
 # again and the lines could move), --clear-cookies, --screenshots, --ocr or --json
 CARRIED = (("allow_external", "--allow-external"), ("force_external", "--force-external"), ("alternate", "--alternate"),
@@ -11294,16 +11294,37 @@ def slashed(path):
     return path.replace("\\", "/") if os.name == "nt" else path
 
 
+def in_letters(path):
+    """A path in the user's locale's letters, as an answer names it (ownenv.shown), for a command a shell of that
+    locale runs as printed; "" when that shell could not give its bytes back - under zh_CN.GBK a name in UTF-8 bytes
+    that GBK does not read, which `shown` names by its UTF-8 (KNOWN-ISSUES 278). Elsewhere (a UTF-8 locale, Windows)
+    the path as it is."""
+    text = ownenv.shown(path)
+    cs = ownenv.fs_codeset()
+    if cs and isinstance(text, str) and not text.isascii():
+        try:
+            if text.encode(cs) != os.fsencode(path):
+                return ""
+        except (UnicodeError, LookupError):
+            return ""
+    return text
+
+
 def cli_command(args, frm, chars, view):
     """The command that reads on, to run as it is printed in bash, PowerShell 5.1 and 7 and cmd: the interpreter by
     its name, -X utf8, the script by its absolute path and the address in double quotes, the flags that matter if
     the page is read again (CARRIED, --dir), then --from N --chars C --file F. An address, a folder or a script path
     that a shell would read inside double quotes gets the words: the same command with --from N --chars C --file F."""
     tail = "--from %d --chars %d --file %s" % (frm, chars, view)
-    target = getattr(args, "target", "") or str(getattr(args, "url", "") or "").strip()
-    folder = slashed(args.dir) if getattr(args, "dir", "") else ""
-    script = slashed(__file__)
-    if not target or any(UNQUOTABLE.search(x) for x in (script, target, folder)):
+    target = getattr(args, "target", None)                # read() sets it; "" when no shell could name it
+    if target is None:
+        target = str(getattr(args, "url", "") or "").strip()
+    # paths in the user's locale's letters, as the files: line has them (in_letters): under zh_CN.GBK a folder's GBK
+    # bytes are lone surrogates in UTF-8 mode, which no answer prints - it stopped with an internal error (278)
+    folder = in_letters(slashed(args.dir)) if getattr(args, "dir", "") else ""
+    script = in_letters(slashed(__file__))
+    if not target or not script or (getattr(args, "dir", "") and not folder) \
+            or any(UNQUOTABLE.search(x) for x in (script, target, folder)):
         return "the same command with " + tail
     flags = [flag for key, flag in CARRIED if getattr(args, key, False)]
     if folder:

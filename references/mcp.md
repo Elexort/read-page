@@ -232,7 +232,9 @@ The server reads and writes UTF-8 whatever the machine's code page is: it reconf
 input and output at the start, so a client config without `-X utf8` (a Chinese Windows, code page 936) still
 delivers `https://例子.测试/页面` and a folder under `C:\Users\张三` intact, and a UTF-8 BOM before the first line
 (a file saved with one, piped in) is dropped: the first message was a parse error. The flag stays in the
-example: it makes the children and everything else UTF-8 too.
+example: it makes the children and everything else UTF-8 too. Under a POSIX locale that is not UTF-8 (zh_CN.GBK) a
+folder the answer names is found again when a model sends it back, with or without the flag, whether its name's bytes
+are the locale's or UTF-8 - the reader's child, always in UTF-8 mode, makes the latter.
 
 ## Why not a third tool
 
