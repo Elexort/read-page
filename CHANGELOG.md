@@ -8,6 +8,13 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **After a cut, the last size that came back whole** (KNOWN-ISSUES 280): SKILL.md said to go on from a cut answer
+  with about half the `--chars`. Under Cline's cut of the middle the answer's `next:` survives and repeats the size
+  that was cut, and Haiku kept it, filling each gap with a small `--from "<quote>"` call: 15 and 17 calls for 99 % and
+  96 % of a 474-line essay; "about half", worded two ways, took 6-20 calls for 86-100 % (half of 20 000 is still over
+  Cline's 8 000). Now: go on where the text you saw breaks off with the last `--chars` that came back whole (7 900,
+  the default, if none did), and keep that size for the rest; the MCP `read` description says the same of `chars`.
+  Under Cline's cut 3 runs of 3 read 100 % in 10-12 calls: 20 000 (cut), a quote at 7 900, then 7 900 to the end.
 - **The line above the text names where it starts, not where it ends** (KNOWN-ISSUES 279):
   `── content.md: from line 53 of 474 ──` in place of `lines 53-182 of 474`; the end is named in `next:` and in EOF
   alone. Zed keeps the head of a command's output and cuts its tail, `next:` with it, and leaves the line above the

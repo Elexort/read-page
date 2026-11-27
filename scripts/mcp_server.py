@@ -162,9 +162,10 @@ TOOLS = [
             "(img/..., raw.jpg, ...); with no file, the text read last. Text comes in blocks of `chars` "
             "characters (7 900, the default, fits every client) from line `from`, each ending with the call that "
             "goes on, the last with EOF. For more at once raise `chars` to your client's output limit if you know "
-            "it, else to about 20 000; if an answer comes back cut, go on where it breaks off (`from` takes the "
-            "words of the last line before the gap) with about half the `chars`, and keep the size that comes "
-            "whole. An image is returned as an image block; audio and video only get their metadata."),
+            "it, else to about 20 000; if an answer comes back cut, go on where the text you saw breaks off (`from` "
+            "takes the words of the last line before the gap) with the last `chars` that came back whole (7 900, "
+            "the default, if none did), and keep that size for the rest. An image is returned as an image block; "
+            "audio and video only get their metadata."),
         "inputSchema": {
             "type": "object",
             "properties": {

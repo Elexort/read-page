@@ -1037,9 +1037,18 @@ check("SKILL.md's example answer ends as an answer does: `── next: line N of
       and re.match(r'python -X utf8 "SKILL_DIR/scripts/readpage\.py" URL .*--from %s --chars 7900 --file content\.md$'
                    % re.match(r"── next: line (\d+)", ex_rows[-2]).group(1), ex_rows[-1]) is not None
       if len(ex_rows) >= 2 and ex_rows[-2].startswith("── next: line ") else False, str(ex_rows[-2:])[:160])
-rest = next((p for p in skill.split("\n- ") if p.startswith("The rest of a long text")), "")
-check("SKILL.md: the rest of a text is the command under next:, EOF its end, --chars its size, half of it after a cut",
-      all(w in rest for w in ("`next:`", "`EOF`", "`--chars`", "20 000", "half", "--from \"<words of the last line"))
-      and "--to" not in skill, rest[:120].replace("\n", " "))
+rest = " ".join(next((p for p in skill.split("\n- ") if p.startswith("The rest of a long text")), "").split())
+# after a cut, the last size that came back whole (KNOWN-ISSUES 280): under Cline's middle cut next: survives and
+# repeats the size that was cut, and "about half the --chars" kept a model above the cut (half of 20 000 is 10 000);
+# the words of that rule, here once for both checks
+WHOLE_AGAIN = ("that came back whole", "(7 900, the default, if none did)", "keep that size for the rest")
+check("SKILL.md: the rest of a text is the command under next:, EOF its end, --chars its size; after a cut the last "
+      "--chars that came back whole, 7 900 if none did (KNOWN-ISSUES 280)",
+      all(w in rest for w in ("`next:`", "`EOF`", "`--chars`", "20 000", "--from \"<words of the last line")
+          + WHOLE_AGAIN) and "half" not in rest and "--to" not in skill, rest[:120])
+import mcp_server                                              # noqa: E402
+read_says = " ".join(next((t["description"] for t in mcp_server.TOOLS if t["name"] == "read"), "").split())
+check("the MCP read tool's description says the same of a cut: the last chars that came back whole (KNOWN-ISSUES 280)",
+      all(w in read_says for w in WHOLE_AGAIN) and "half" not in read_says, read_says[-160:])
 
 sys.exit(check.done())
