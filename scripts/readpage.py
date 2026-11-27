@@ -6283,10 +6283,12 @@ def tables_cpu_share(cpus):
 def tables_pace(w=None):
     """How many times longer than on a CPU of its own the read's model processes take: their seconds at
     work over their CPU seconds, all of them together, as they last said - or as the read's last ones
-    did; 1 under PDF_TABLES_SLOW. Several processes are less the crowding they and the read's main
-    thread make among themselves - their number and one over the CPUs, 1 at least: that is no other
-    work's, and two of them on two slow cores, 1.5-2 times slower by it, kept the step 15-20 s instead
-    of 10 for the tables one process laid out in 10 (KNOWN-ISSUES 242)."""
+    did; 1 under PDF_TABLES_SLOW. Several processes are less the crowding they make among themselves
+    on few CPUs - their number and one over the CPUs, 1 at least (KNOWN-ISSUES 242, 288). That is the
+    read's own, no other work's: two model processes on two E-cores wait 35-40 % of the time by each
+    other alone, each pinned to a core or not (a pace of 1.50-1.61; one alone 1.07-1.08, two on two
+    P-cores 1.09-1.10), and taken for other work it kept two slow cores' step 15-17 s instead of 10.
+    The "one" is not the read's main thread, which works about 0.2 CPU s of such a step."""
     live = [x for x in ([w] if w is not None else _TABLES["pool"]) if x is not None and x.work]
     slow = (max(1.0, sum(x.busy for x in live) / max(sum(x.work for x in live), 0.05)) if live
             else _TABLES["slow"])

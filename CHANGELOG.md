@@ -37,7 +37,8 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   larger: it grows over its pages (232-261 MB after its first, 300-371 at its last). Two start at once when two
   fit; more once they say their figures, the room for each taken in the note under its lock, while the pages left
   outlast a new one's load, at most twice those that have laid a page out and none while they wait for the CPU.
-  Row 237's pace is the processes' together, less the crowding they and the read make among themselves; one that
+  Row 237's pace is the processes' together, less the crowding they make among themselves on few CPUs (two on two
+  E-cores wait a third of the time by each other alone, KNOWN-ISSUES 288 - not the read's main thread); one that
   runs out of memory gives its page back. GPT-3's 33 table pages here 10.8-11.0 -> 7.0-7.3 s (8 processes), on 4
   big cores 10.9-11.1 -> 7.6-7.7 s; on an emulated N100 12.6-12.8 -> 14.7-15.4 s with 43 tables on 29 pages
   instead of 17 on 16; on two slow cores as before (12.8-12.9 s, 15 tables) or a little longer on a Celeron's

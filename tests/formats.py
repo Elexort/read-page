@@ -804,9 +804,9 @@ try:
                   "2 GB holds one more): one process here", info.get("procs") == 1 and info.get("asked") == 6
                   and not info.get("left"), str(info))
 
-            # row 237's pace with several processes: theirs together, less the crowding the read's own processes
-            # and its main thread make among themselves - two and the read on 2 CPUs are 1.5 times slower by that
-            # alone, and kept the step 15-20 s instead of 10 on two slow cores (2026-11-27)
+            # row 237's pace with several processes: theirs together, less the crowding they make among themselves on
+            # few CPUs - two model processes on two E-cores wait 35-40 % by each other alone, and taken for other work
+            # that kept the step 15-17 s instead of 10 there (KNOWN-ISSUES 288; not the main thread's, 0.2 CPU s)
             class FakeProc:
                 def __init__(self, busy, work):
                     self.busy, self.work = busy, work
