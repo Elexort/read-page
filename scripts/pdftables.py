@@ -73,7 +73,7 @@ TICK = 0.5             # seconds between the words of the process's pace while n
 # onnxruntime's intra-op threads for one model process at most: the fewest within about 2 % of the best on GPT-3's 33
 # table pages in one process - 20 logical CPUs (8 P-cores with HT, 4 E-cores): 8 threads 8.07 s, 6 8.32 (+3 %), 10
 # 8.10, 20 8.21 s for 25 % more CPU than 8; 4 P-cores with HT: 8 threads 8.74 s, 4 9.02 (+3 %); 4 E-cores: 4 and 8
-# alike (2026-11-27, KNOWN-ISSUES 279). A page's work is two thirds one thread of Python, so threads buy little.
+# alike (2026-11-27, KNOWN-ISSUES 281). A page's work is two thirds one thread of Python, so threads buy little.
 THREADS_CAP = 8
 
 
@@ -85,7 +85,7 @@ def cpus():
     mask, which a job's affinity sets - `os.process_cpu_count()` ignores it there, 20 under a mask of
     4, 2026-11-21), else the machine's count - within a Linux cgroup's CPU quota, rounded up, which
     the affinity does not show (hostmem.cgroup_cpus: a container given two CPUs of 32 counted 32,
-    KNOWN-ISSUES 282)."""
+    KNOWN-ISSUES 284)."""
     n = _affinity_cpus()
     try:
         import hostmem

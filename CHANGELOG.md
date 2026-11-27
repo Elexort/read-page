@@ -8,23 +8,23 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
-- **The wait for one model process's answer ends at its time** (KNOWN-ISSUES 284): `--alternate`'s wait put another
+- **The wait for one model process's answer ends at its time** (KNOWN-ISSUES 286): `--alternate`'s wait put another
   process's answer back on the read's queue at once, took it again at once, and never looked at its time while one
   was there - a read held past its deadline. Another's answer now waits aside until the wait ends.
-- **Model processes that end while they load start no more after two** (KNOWN-ISSUES 285): a model that cannot load
+- **Model processes that end while they load start no more after two** (KNOWN-ISSUES 287): a model that cannot load
   in a process took the step's whole time in starts (19 in 10 s) and said nothing; the step now stops after two such
   ends, every page named, with "the model's process ended while its model loaded".
 - **A Linux container's CPU quota bounds the read's model processes, and its memory limit is found up the cgroup tree**
-  (KNOWN-ISSUES 282, 283): the CPUs a read counts were its affinity's, which a container's quota does not show (two CPUs
+  (KNOWN-ISSUES 284, 285): the CPUs a read counts were its affinity's, which a container's quota does not show (two CPUs
   of a 32-CPU host counted 32: 27 processes); they are within `cpu.max` (v1 `cfs_quota_us` over `cfs_period_us`),
   rounded up. The memory rule's cgroup room read the read's own cgroup alone, at the path `/proc/self/cgroup` names,
   which a v1 container without its own cgroup namespace does not have under its mount, and missed a parent's (a
   pod's) limit: both take the smallest from the read's cgroup up to the root. `READ_PAGE_TEST_CGROUP` fakes a cgroup
   root for the suites on any OS.
-- **A layout model process runs 8 onnxruntime threads at most** (KNOWN-ISSUES 279): a process alone (a short PDF, a
+- **A layout model process runs 8 onnxruntime threads at most** (KNOWN-ISSUES 281): a process alone (a short PDF, a
   read the memory keeps to one) had a thread for every CPU, and twenty took GPT-3's pages no faster than eight for
   25 % more CPU; pdftables' own default (`--alternate`) is the CPUs, 8 at most, where it was 4. The processes stay
-  counted by logical CPUs: by physical cores a four-core HT laptop was 11-39 % slower (row 280, measured and not
+  counted by logical CPUs: by physical cores a four-core HT laptop was 11-39 % slower (row 282, measured and not
   taken).
 - **A PDF's table pages in several layout model processes** (KNOWN-ISSUES 242): the pages that look like a table
   go to as many model processes as 85 % of the CPUs the read may use (1-3 all of them, from 4 one free), the pages

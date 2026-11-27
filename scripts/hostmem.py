@@ -9,7 +9,7 @@ do not fall as processes take memory, so the caller subtracts its processes itse
 never squeeze a machine's memory to see the rule work. alive(pid) tells whether a process still runs.
 
 cgroup_room() and cgroup_cpus(): a Linux cgroup's memory room and CPU quota, each the smallest from the read's cgroup
-up to the root (KNOWN-ISSUES 282, 283). READ_PAGE_TEST_CGROUP names a folder that stands for / (proc/self/cgroup and
+up to the root (KNOWN-ISSUES 284, 285). READ_PAGE_TEST_CGROUP names a folder that stands for / (proc/self/cgroup and
 sys/fs/cgroup in it): the suites point both at a faked cgroup on any OS, and free_memory() takes its room there too.
 """
 import json
@@ -192,7 +192,7 @@ def cgroup_room(root=None):
     memory.current, v1 memory.limit_in_bytes less memory.usage_in_bytes -, the smallest; None without a limit:
     a container's /proc/meminfo shows the host's memory. It read the read's own cgroup's file alone, at the path
     /proc/self/cgroup names: a v1 container without its own cgroup namespace, or a pod's limit, was not seen
-    (KNOWN-ISSUES 283)."""
+    (KNOWN-ISSUES 285)."""
     root = root or cgroup_root()
     if not root:
         return None
@@ -210,7 +210,7 @@ def cgroup_room(root=None):
 def cgroup_cpus(root=None):
     """The CPUs the CPU quotas of the read's cgroup and every cgroup above it give - v2 cpu.max "QUOTA PERIOD",
     v1 cpu.cfs_quota_us over cpu.cfs_period_us -, rounded up, the smallest; None without a quota: the affinity
-    of a container given two CPUs of 32 shows 32 (KNOWN-ISSUES 282)."""
+    of a container given two CPUs of 32 shows 32 (KNOWN-ISSUES 284)."""
     root = root or cgroup_root()
     if not root:
         return None

@@ -760,7 +760,7 @@ try:
             check("... and where the free memory holds one process alone (80 % of 600 MB), one does it all, with the "
                   "four CPUs for its onnxruntime", info.get("procs") == 1 and info.get("asked") == 6
                   and not info.get("left") and got_threads == ["4"], "%s %s" % (info, got_threads))
-            # KNOWN-ISSUES 279: a lone process's onnxruntime threads are capped - 20 threads took GPT-3's pages no faster
+            # KNOWN-ISSUES 281: a lone process's onnxruntime threads are capped - 20 threads took GPT-3's pages no faster
             # than 8 for 25 % more CPU - and pdftables' own default (no share from the read: --alternate) is the same
             os.environ["READ_PAGE_TEST_CPUS"] = "20"
             mod3.tables_reset()
@@ -769,7 +769,7 @@ try:
             mod3.tables_close(kill=True)
             os.environ["READ_PAGE_TEST_CPUS"] = "4"
             own = getattr(pt, "threads_for", None)
-            check("279: ... on 20 CPUs that one process gets 8 threads, not 20; pdftables' own default is 8 at most",
+            check("281: ... on 20 CPUs that one process gets 8 threads, not 20; pdftables' own default is 8 at most",
                   info.get("procs") == 1 and info.get("asked") == 6 and got_threads == ["8"] and own is not None
                   and own(0) == min(8, pt.cpus()) and own(20) == 8 and own(3) == 3,
                   "%s %s %s" % (info, got_threads, [own(0), own(20), own(3)] if own else "no threads_for"))
@@ -824,7 +824,7 @@ try:
                   "process that slow gets 1.5 times them, two three times slower twice",
                   paces[0] == 1.0 and abs(paces[1] - 1.5) < 0.01 and abs(paces[2] - 2.0) < 0.01, str(paces))
 
-            # KNOWN-ISSUES 282, 283: a Linux cgroup's CPU quota bounds the CPUs a read counts (a container given two
+            # KNOWN-ISSUES 284, 285: a Linux cgroup's CPU quota bounds the CPUs a read counts (a container given two
             # CPUs of 32 started 27 processes), and the memory rule's cgroup room is the smallest from the read's
             # cgroup up to the root, found too in a container without its own cgroup namespace. READ_PAGE_TEST_CGROUP
             # is a folder that stands for /, with proc/self/cgroup and sys/fs/cgroup in it, on any OS
@@ -854,7 +854,7 @@ try:
             quota = getattr(mod3.hostmem, "cgroup_cpus", None)
             got = ([room(r) for r in (v2_parent, v1_no_ns, v1_pod, no_limit)] if room else ["no cgroup_room"]) + (
                 [quota(r) for r in (v2_parent, v1_no_ns, no_limit)] if quota else ["no cgroup_cpus"])
-            check("282/283: a cgroup's room is the smallest up the tree (a parent's 3 GB less 1 used), found in a v1 "
+            check("284/285: a cgroup's room is the smallest up the tree (a parent's 3 GB less 1 used), found in a v1 "
                   "container without a namespace of its own (the mount's root) and under a pod's limit; its CPU "
                   "quota rounded up (1.5 -> 2, 0.5 -> 1), none where cpu.max says max",
                   got == [2 * G, G, G // 2, None, 2, 1, None], str(got))
@@ -863,7 +863,7 @@ try:
             under_quota = pt.cpus()
             os.environ["READ_PAGE_TEST_CGROUP"] = cg_many
             under_many = pt.cpus()
-            check("282: ... and the CPUs the read counts are within the quota, never more than its affinity",
+            check("284: ... and the CPUs the read counts are within the quota, never more than its affinity",
                   under_quota == 1 and under_many == own_cpus, "%s %s %s" % (under_quota, under_many, own_cpus))
             # the read's processes under them: a quota of one CPU (half a CPU's), and 600 MB of room in a cgroup
             # where the machine has more; the memory is the OS's own here (no READ_PAGE_TEST_MEMORY)
@@ -886,10 +886,10 @@ try:
                 got.append((info.get("procs"), info.get("asked"), bool(info.get("left"))))
             for k in ("READ_PAGE_TEST_CGROUP", "READ_PAGE_TEST_PACE"):
                 os.environ.pop(k, None)
-            check("282/283: ... so a read in a cgroup of one CPU runs one process, and one in a cgroup of 600 MB "
+            check("284/285: ... so a read in a cgroup of one CPU runs one process, and one in a cgroup of 600 MB "
                   "room one (80 % of it holds no 512 MB more), every page laid out", got == [(1, 6, False)] * 2, str(got))
 
-            # KNOWN-ISSUES 284: a process's own answer is waited for without a loop - another's, which came first,
+            # KNOWN-ISSUES 286: a process's own answer is waited for without a loop - another's, which came first,
             # waits aside and goes back to the queue after. Put back at once, it came out again at once, 100 times a
             # second, and the wait never ended: the queue was never empty, so its time was never looked at
             # (--alternate waits so). The wait runs in a thread here, as on 3b501bf it does not end
@@ -923,11 +923,11 @@ try:
             finally:
                 del r_q.put
                 mod3.tables_close(kill=True)
-            check("284: a wait for one process's answer ends at its time and puts another's back once",
+            check("286: a wait for one process's answer ends at its time and puts another's back once",
                   all(r and r.get("ready") is not None for r in r_ready) and not r_hung and r_out.get("mine") is None
                   and 0.9 < r_out.get("waited", 0) < 3 and r_n <= 2 and (r_left or {}).get("page") == 5,
                   "hung %s, %s %s, %d puts, left %s" % (r_hung, r_ready, r_out, r_n, r_left))
-            # KNOWN-ISSUES 285: processes that end while their model loads are started again once, as a page a
+            # KNOWN-ISSUES 287: processes that end while their model loads are started again once, as a page a
             # process ends at is given to another once: a model that cannot load stops the step after two, where
             # before a death that left another running started a new one until the time was up
             os.environ.update(RP_STUB_LOAD_EXIT=os.path.join(tmp, "load-exit-once"), READ_PAGE_TEST_CPUS="4",
@@ -946,7 +946,7 @@ try:
                 mod3.tables_close(kill=True)
                 for k in ("RP_STUB_LOAD_EXIT", "READ_PAGE_TEST_CPUS", "READ_PAGE_TEST_MEMORY"):
                     os.environ.pop(k, None)
-            check("285: processes that end while the model loads are started again once, then the step stops with "
+            check("287: processes that end while the model loads are started again once, then the step stops with "
                   "every page named", r_starts[0] <= 3 and info.get("asked") == 0
                   and info.get("left") == [1, 2, 3, 4, 5, 6] and "ended" in (info.get("error") or "")
                   and info.get("secs", 99) < 6, "%d starts %s" % (r_starts[0], info))

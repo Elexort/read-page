@@ -6244,7 +6244,7 @@ PDF_TABLES_SLOW = 1.1          # slowed less than this, the model keeps its 10 s
 # page each from one queue (one process took GPT-3's 33 pages in 8.4 s here, 17.1 s on an N100's four cores). The
 # CPUs: 85 % of those the read may use, rounded half up - 1-3 all of them, from 4 one stays free for the system
 # ((17 * cpus + 10) // 20: 4 -> 3, 8 -> 7, 20 -> 17) - never more than the pages; each process's onnxruntime gets
-# the CPUs over the processes, 8 at most (pdftables.THREADS_CAP, KNOWN-ISSUES 279). The memory, the one guard: our
+# the CPUs over the processes, 8 at most (pdftables.THREADS_CAP, KNOWN-ISSUES 281). The memory, the one guard: our
 # processes together take at most 80 % of the free physical memory by what a process really uses (its peak working
 # set), and on Windows at most 80 % of the commit left by what it reserves (its private commit) - the commit limit is
 # the danger, past it every program's allocations fail -, within a job's or a cgroup's room too
@@ -6276,7 +6276,7 @@ def tables_cpu_share(cpus):
     """85 % of the CPUs, rounded half up: 1-3 all of them, from 4 one free for the system. Logical CPUs:
     counted by physical cores (3 x 2 threads on four cores with HT) GPT-3's 33 pages took 11 % longer than
     by logical CPUs (7 x 1), 200 pages of a datasheet 39 % longer - a page's work is two thirds one thread
-    of Python, which an HT sibling runs better than a second onnxruntime thread (KNOWN-ISSUES 280)."""
+    of Python, which an HT sibling runs better than a second onnxruntime thread (KNOWN-ISSUES 282)."""
     return max(1, (17 * max(1, int(cpus)) + 10) // 20)
 
 
@@ -6502,7 +6502,7 @@ class TablesWorker:
         """This process's next answer by the moment `until` (tables_get). Another's that is still the
         read's waits aside and goes back to the queue after; one whose process has gone is dropped. (Put
         back at once, it came out again at once: a loop 100 times a second while the wait lasted,
-        KNOWN-ISSUES 284.)"""
+        KNOWN-ISSUES 286.)"""
         aside = []
         try:
             while True:
@@ -6715,7 +6715,7 @@ def pdf_tables(path, doc, pages):
             not begun goes back to the queue; one that could not get its memory gives its pages back.
             Two that end while their model loads start no more, as a page two end at is named: before,
             one that ended while another ran had a new one started until the time was up (KNOWN-ISSUES
-            285)."""
+            287)."""
             if w in pool:
                 tables_stop(w, kill=True)
             state["deaths"] += 1
@@ -6824,7 +6824,7 @@ def pdf_tables(path, doc, pages):
                                        hold=True) == 0:
                     state["cap"], state["fit_at"] = len(pool), now() + 0.25
                     continue
-                threads = pdftables.threads_for(max(1, cpus // max(plan, len(pool) + 1)))     # (8 at most: 279)
+                threads = pdftables.threads_for(max(1, cpus // max(plan, len(pool) + 1)))     # (8 at most: 281)
                 w = tables_start(threads)
                 if w is None:
                     if not pool:
