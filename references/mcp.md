@@ -44,7 +44,7 @@ files: C:\Users\me\AppData\Local\Temp\read-page\pages\example.com-9c1f… (conte
 outline (line, heading):
       1 ## Installation
       …
-── content.md: lines 1-126 of 389 ──
+── content.md: from line 1 of 389 ──
 (the text)
 ── next: line 127 of 389 ──
 read(dir="C:/Users/me/AppData/Local/Temp/read-page/pages/example.com-9c1f…", file="content.md", from=127, chars=7900)
