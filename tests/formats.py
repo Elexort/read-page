@@ -229,6 +229,12 @@ if os.environ.get("RP_STUB_NOLOAD"):
     raise ImportError("RP-STUB: no model here")
 if os.environ.get("RP_STUB_LOAD_SLEEP"):
     time.sleep(float(os.environ["RP_STUB_LOAD_SLEEP"]))
+if os.environ.get("RP_STUB_LOAD_EXIT"):          # "marker": the first process ends at its load at once, the rest 0.5 s in
+    if not os.path.exists(os.environ["RP_STUB_LOAD_EXIT"]):
+        open(os.environ["RP_STUB_LOAD_EXIT"], "w").close()
+        os._exit(9)
+    time.sleep(0.5)
+    os._exit(9)
 _use_layout = True
 GRID = %s
 MODEL = %s
@@ -882,6 +888,68 @@ try:
                 os.environ.pop(k, None)
             check("282/283: ... so a read in a cgroup of one CPU runs one process, and one in a cgroup of 600 MB "
                   "room one (80 % of it holds no 512 MB more), every page laid out", got == [(1, 6, False)] * 2, str(got))
+
+            # KNOWN-ISSUES 284: a process's own answer is waited for without a loop - another's, which came first,
+            # waits aside and goes back to the queue after. Put back at once, it came out again at once, 100 times a
+            # second, and the wait never ended: the queue was never empty, so its time was never looked at
+            # (--alternate waits so). The wait runs in a thread here, as on 3b501bf it does not end
+            mod3.tables_reset()
+            r_w1, r_w2 = mod3.tables_start(), mod3.tables_start()
+            r_q = mod3._TABLES["q"]
+            r_ready = [r_w1.get(time.time() + 60), r_w2.get(time.time() + 60)]
+            r_puts, real_put, r_out = [0], r_q.put, {}
+
+            def counting_put(*a, **kw):
+                r_puts[0] += 1
+                return real_put(*a, **kw)
+
+            def r_wait():
+                t_wait = time.time()
+                r_out["mine"] = r_w1.get(time.time() + 1.0)
+                r_out["waited"] = time.time() - t_wait
+            r_q.put = counting_put
+            try:
+                r_q.put({"page": 5, "_w": r_w2})
+                r_puts[0] = 0
+                r_th = threading.Thread(target=r_wait, daemon=True)
+                r_th.start()
+                r_th.join(5)
+                r_hung = r_th.is_alive()
+                r_n = r_puts[0]
+                if r_hung:                     # (it lets go of another's answer once that one is no process of the read's)
+                    mod3._TABLES["pool"].remove(r_w2)
+                    r_th.join(5)
+                r_left = r_q.get_nowait() if not r_q.empty() else None
+            finally:
+                del r_q.put
+                mod3.tables_close(kill=True)
+            check("284: a wait for one process's answer ends at its time and puts another's back once",
+                  all(r and r.get("ready") is not None for r in r_ready) and not r_hung and r_out.get("mine") is None
+                  and 0.9 < r_out.get("waited", 0) < 3 and r_n <= 2 and (r_left or {}).get("page") == 5,
+                  "hung %s, %s %s, %d puts, left %s" % (r_hung, r_ready, r_out, r_n, r_left))
+            # KNOWN-ISSUES 285: processes that end while their model loads are started again once, as a page a
+            # process ends at is given to another once: a model that cannot load stops the step after two, where
+            # before a death that left another running started a new one until the time was up
+            os.environ.update(RP_STUB_LOAD_EXIT=os.path.join(tmp, "load-exit-once"), READ_PAGE_TEST_CPUS="4",
+                              READ_PAGE_TEST_MEMORY=json.dumps({"phys": 64 << 30, "commit": 64 << 30}))
+            r_starts, real_start = [0], mod3.tables_start
+
+            def counting_start(*a, **kw):
+                r_starts[0] += 1
+                return real_start(*a, **kw)
+            mod3.tables_start = counting_start
+            try:
+                mod3.tables_reset()
+                info = mod3.pdf_tables(six_p, d6p, list(texts6))
+            finally:
+                mod3.tables_start = real_start
+                mod3.tables_close(kill=True)
+                for k in ("RP_STUB_LOAD_EXIT", "READ_PAGE_TEST_CPUS", "READ_PAGE_TEST_MEMORY"):
+                    os.environ.pop(k, None)
+            check("285: processes that end while the model loads are started again once, then the step stops with "
+                  "every page named", r_starts[0] <= 3 and info.get("asked") == 0
+                  and info.get("left") == [1, 2, 3, 4, 5, 6] and "ended" in (info.get("error") or "")
+                  and info.get("secs", 99) < 6, "%d starts %s" % (r_starts[0], info))
             for k in ("RP_STUB_SLEEP", "READ_PAGE_TEST_MEMORY", "READ_PAGE_TEST_CPUS"):
                 os.environ.pop(k, None)
             os.environ["RP_STUB_NOLOAD"] = "1"
@@ -938,7 +1006,7 @@ try:
             for k in ("RP_STUB_NOLOAD", "RP_STUB_FAIL", "RP_STUB_CRASH", "READ_PAGE_TEST_MODEL_PATH",
                       "RP_STUB_LOAD_SLEEP", "RP_STUB_SLEEP", "RP_STUB_BUSY", "RP_STUB_HANG", "READ_PAGE_TEST_CPUS",
                       "READ_PAGE_TEST_PACE", "READ_PAGE_TEST_MEMORY", "RP_STUB_NOMEM", "RP_STUB_PAGE_SLEEP",
-                      "RP_STUB_TABLE", "READ_PAGE_TEST_CGROUP"):
+                      "RP_STUB_TABLE", "READ_PAGE_TEST_CGROUP", "RP_STUB_LOAD_EXIT"):
                 os.environ.pop(k, None)
             mod3.tables_close(kill=True)
         zp = os.path.join(tmp, "three.zip")

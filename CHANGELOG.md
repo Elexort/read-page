@@ -8,6 +8,12 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The wait for one model process's answer ends at its time** (KNOWN-ISSUES 284): `--alternate`'s wait put another
+  process's answer back on the read's queue at once, took it again at once, and never looked at its time while one
+  was there - a read held past its deadline. Another's answer now waits aside until the wait ends.
+- **Model processes that end while they load start no more after two** (KNOWN-ISSUES 285): a model that cannot load
+  in a process took the step's whole time in starts (19 in 10 s) and said nothing; the step now stops after two such
+  ends, every page named, with "the model's process ended while its model loaded".
 - **A Linux container's CPU quota bounds the read's model processes, and its memory limit is found up the cgroup tree**
   (KNOWN-ISSUES 282, 283): the CPUs a read counts were its affinity's, which a container's quota does not show (two CPUs
   of a 32-CPU host counted 32: 27 processes); they are within `cpu.max` (v1 `cfs_quota_us` over `cfs_period_us`),

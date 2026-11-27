@@ -6499,15 +6499,21 @@ class TablesWorker:
             return False
 
     def get(self, until):
-        """This process's next answer by the moment `until` (tables_get); another's that is still
-        the read's goes back to the queue, one that has gone is dropped."""
-        while True:
-            a = tables_get(until)
-            if a is None or a.get("_w") is self:
-                return a
-            if a.get("_w") in _TABLES["pool"]:
+        """This process's next answer by the moment `until` (tables_get). Another's that is still the
+        read's waits aside and goes back to the queue after; one whose process has gone is dropped. (Put
+        back at once, it came out again at once: a loop 100 times a second while the wait lasted,
+        KNOWN-ISSUES 284.)"""
+        aside = []
+        try:
+            while True:
+                a = tables_get(until)
+                if a is None or a.get("_w") is self:
+                    return a
+                if a.get("_w") in _TABLES["pool"]:
+                    aside.append(a)
+        finally:
+            for a in aside:
                 self.q.put(a)
-                time.sleep(0.01)
 
     def kill(self):
         try:
@@ -6666,7 +6672,7 @@ def pdf_tables(path, doc, pages):
         # one started past them, its share of those running then
         likely_at = [pdf_table_page(None, t, drawings=False) for t in pages]
         plan = max(1, min(top, max(1, sum(likely_at) - 1), 2 if fits is None else len(pool) + max(1, fits)))
-        state = {"stop": "", "by_text": 0, "deaths": 0, "nomem": False, "most": len(pool),
+        state = {"stop": "", "by_text": 0, "deaths": 0, "load_deaths": 0, "nomem": False, "most": len(pool),
                  "cap": min(top, 2 if fits is None or fits >= 2 else 1), "ram": 0, "commit": 0,
                  "load": 0.0, "page_s": [], "fit_at": 0.0, "last": {}}
         todo, named, retried = [], [], set()
@@ -6706,12 +6712,19 @@ def pdf_tables(path, doc, pages):
 
         def gone(w, why):
             """A process ended: the page it was at goes to another once, then is named; one it had
-            not begun goes back to the queue; one that could not get its memory gives its pages back."""
+            not begun goes back to the queue; one that could not get its memory gives its pages back.
+            Two that end while their model loads start no more, as a page two end at is named: before,
+            one that ended while another ran had a new one started until the time was up (KNOWN-ISSUES
+            285)."""
             if w in pool:
                 tables_stop(w, kill=True)
             state["deaths"] += 1
             if getattr(w, "nomem", False):
                 why = "memory"                     # it said so before it went: its pages are not to blame
+            if not w.ready and why != "memory":
+                state["load_deaths"] += 1
+                if state["load_deaths"] >= 2:
+                    state["nomem"] = True          # (no more starts: the model does not load here)
             for k, p in enumerate(w.pages):
                 if k == 0 and w.ready and p in retried and why != "memory":
                     named.append(p + 1)
@@ -6744,7 +6757,9 @@ def pdf_tables(path, doc, pages):
             if a.get("gone"):
                 gone(w, "ended")
                 if not pool and state["deaths"] >= 2:
-                    info["error"] = info.get("error") or "the model's process ended"
+                    info["error"] = info.get("error") or (
+                        "the model's process ended while its model loaded" if state["load_deaths"] >= 2
+                        else "the model's process ended")
                     state["stop"] = "error"
                 return
             p = a.get("page")
@@ -6837,8 +6852,9 @@ def pdf_tables(path, doc, pages):
             if not todo and not any(w.pages for w in pool):
                 break                              # every page asked and answered
             if not pool:                           # none left to ask and none may start
-                info["error"] = info.get("error") or ("the model's processes found no memory" if state["nomem"]
-                                                      else "the model's process did not start")
+                info["error"] = info.get("error") or (
+                    "the model's process ended while its model loaded" if state["load_deaths"] >= 2 else
+                    "the model's processes found no memory" if state["nomem"] else "the model's process did not start")
                 state["stop"] = "error"
                 break
             a = tables_get(until)                  # the next answer, or the time's end
