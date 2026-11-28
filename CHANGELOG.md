@@ -8,6 +8,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **Digits alone after `--from` are a line number, said so** (KNOWN-ISSUES 302): `--from "2023"` and MCP's
+  `from="2023"` go to line 2023, as a model's `from="127"` should; references/answer.md and mcp.md say to add a word to
+  look for a number (`--from "2023 report"`).
 - **The docs of the answer say what the code does** (KNOWN-ISSUES 301): references/mcp.md's header named `cover` on
   every first line and a range that is gone, its images a marker on a line of its own; "no network" for a
   continuation, which fetches its block's pictures (SKILL.md: "the saved copy, not fetched again"); the list of what

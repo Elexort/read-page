@@ -82,7 +82,8 @@ properties say: `--from "[tab · Developer Plan Limits]"`, `--from "[img #3]"`. 
 whitespace folded, so a quote that ends inside a marker is found - the case when a harness cut the answer in the middle
 of a picture's or a tab's line: `--from "#3 · 100x80 3K · picture 3] im"`, `--from "[tab · hidden, but extr"`. When no
 line holds it, the answer says
-so and shows the outline (its line numbers are what `--from N` takes), and no text. It works on `content.md` and
+so and shows the outline (its line numbers are what `--from N` takes), and no text. A quote of digits alone is a
+line number (`--from 2023` goes to line 2023): add a word to look for a number (`--from "2023 report"`; KNOWN-ISSUES 302). It works on `content.md` and
 `page.md` alike.
 
 `--chars C` sets how much one answer holds, for a harness that shows more (Codex with an OpenAI model about 40 000

@@ -67,7 +67,8 @@ answer starts at the first line that holds it - whitespace folded, then without 
 the first at or after where the last answer of that file started - and a marker is found by its type
 and name, a picture by its number: `from="[tab · Developer Plan Limits]"`, `from="[img #3]"`; the line is
 matched as it stands too, so a quote that ends inside a marker (a client cut the result there) is found. No line
-holds it: the answer says so and shows the outline, and names no next line.
+holds it: the answer says so and shows the outline, and names no next line. Digits alone are a line number,
+`from="2023"` as `from=2023`: a word beside them looks for the number (`from="2023 report"`, KNOWN-ISSUES 302).
 
 `chars` (both tools) is the CLI's `--chars`: how much one answer holds, in characters, whole lines - 7 900 by
 default, which fits every client; 7 000 to 150 000, a value outside or not a number named on the `ignored:` line with
