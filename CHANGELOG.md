@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A table whose cells span rows or columns comes once, as a table** (KNOWN-ISSUES 338): defuddle keeps such a table
+  as its HTML, and the block rule did not know it for the rows page.md has, so it put them back beside it -
+  japanrailpass.net's price tables came twice, once through HTML tags. The table is written in defuddle's own Markdown
+  form (`scripts/mdtable.py`: a spanning cell's text in the first column of its span, the cells it spans over empty), and
+  no copy comes back: on 290 pages of the bench and the corpora with such tables, 149 of 170 HTML tables became Markdown
+  (the rest are code examples) and 134 copies stayed out.
 - **An article its page holds in a script is read** (KNOWN-ISSUES 334): Aliyun's developer articles keep the article as
   a Lake document (the format of Yuque's editor) in a JavaScript string, `GLOBAL_CONFIG.larkContent = '<!doctype
   lake>...'`, beside the empty element the site's viewer draws it into; the server's HTML and a headless browser whose

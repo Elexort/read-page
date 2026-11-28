@@ -116,6 +116,45 @@ fig = "![Speed of each reader](img/speed.png)\nFigure 2. FIGURE-CAPTION median s
 out, info = blockrule.restore(CONTENT, PAGE + "\n\n" + fig)
 check("a captioned figure goes back; a bare picture is not a block of text", "FIGURE-CAPTION" in out, "")
 
+# ------------------------------------------------ a table a converter kept as HTML (KNOWN-ISSUES 338)
+# defuddle writes a table one of whose cells spans rows or columns as its HTML, and the block rule did not know it for
+# the rows page.md has: japanrailpass.net's price tables came twice, as page.md's rows and as HTML
+try:
+    import mdtable                                           # noqa: E402
+except ImportError:                                          # the code before it: the checks below fail
+    mdtable = None
+JR_ROWS = (("7-day", "70,000 YEN", "35,000 YEN", "50,000 YEN", "25,000 YEN"),
+           ("14-day", "110,000 YEN", "55,000 YEN", "80,000 YEN", "40,000 YEN"))
+JR_HTML = ('<table><tbody><tr><th>Type</th><th colspan="2">Green</th><th colspan="2">Ordinary</th></tr>'
+           '<tr><td>Duration</td><td>Adult</td><td>Child</td><td>Adult</td><td>Child</td></tr>'
+           + "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % c for c in row) for row in JR_ROWS) + "</tbody></table>")
+JR_MD = ("| Type | Green |  | Ordinary |  |\n| --- | --- | --- | --- | --- |\n| Duration | Adult | Child | Adult | Child |\n"
+         + "\n".join("| %s |" % " | ".join(row) for row in JR_ROWS))
+JR_PAGE = ("Type | Green | Ordinary  \n---|---|---  \nDuration | Adult | Child | Adult | Child  \n"
+           + "\n".join("%s  " % " | ".join(row) for row in JR_ROWS))
+JR_NOTE = ("PRICES-NOTE Children are defined as those aged 6 to 11 at the time of use; for online purchases a child "
+           "of 11 on the payment date is a child even if 12 at the time of use.")
+JR_TEXT = "\n\n".join(["## JAPAN RAIL PASS prices", "Prices of Exchange Orders", JR_HTML, JR_NOTE])
+if mdtable is None:
+    check("338: a table defuddle kept as HTML is a Markdown table", False, "no mdtable module")
+else:
+    got = mdtable.markdown(JR_HTML)
+    check("338: a table defuddle kept as HTML is a Markdown table in defuddle's form: a spanning cell's text in the "
+          "first column of its span, the columns it spans over empty", got == JR_MD, repr(got)[:300])
+    span = mdtable.markdown("<table><tr><th rowspan='2'>Class</th><th>Price</th></tr><tr><td>Adult</td></tr>"
+                            "<tr><td>Green | <a href='/g'>car</a></td><td><b>70,000</b></td></tr></table>",
+                            "https://example.org/a/")
+    check("... a row span keeps the rows below it in their columns; a cell's links, marks and | are Markdown's",
+          span == "| Class | Price |\n| --- | --- |\n|  | Adult |\n| Green \\| [car](https://example.org/g) | **70,000** |",
+          repr(span))
+    fenced = "```html\n%s\n```" % JR_HTML
+    check("... a table inside a code block is code: left as it is", mdtable.tables(fenced) == fenced, "")
+    out, info = blockrule.restore(mdtable.tables(JR_TEXT), "\n\n".join(["## JAPAN RAIL PASS prices",
+                                                                        "Prices of Exchange Orders", JR_PAGE, JR_NOTE]))
+    check("338: the block rule takes it for page.md's table: each price once, no HTML (it put page.md's rows back "
+          "beside the HTML)", out.count("70,000 YEN") == 1 and out.count("110,000 YEN") == 1 and "<table" not in out
+          and not info.get("restored"), "%d, %d | %s" % (out.count("70,000 YEN"), out.count("110,000 YEN"), info))
+
 # ------------------------------------------------ what loses its id before defuddle
 import readpage                                              # noqa: E402
 CASES_IDS = [
@@ -303,7 +342,13 @@ TABS_LONG = ("<!doctype html><html><head><meta charset='utf-8'><title>Plans</tit
              "<div role='tabpanel' id='q1'><p>LONG-FREE " + " ".join([EN] * 3) + "</p></div>"
              "<div role='tabpanel' id='q2' hidden><p>LONG-DEV " + " ".join([EN] * 45) + "</p></div>"
              "<p>LONG-OUTRO " + " ".join([EN] * 3) + "</p></article></main></body></html>").encode("utf-8")
+# a price table whose header spans columns, inside the article (japanrailpass.net's, KNOWN-ISSUES 338)
+PRICES = ("<!doctype html><html><head><meta charset='utf-8'><title>Prices</title></head><body>" + NAV +
+          "<main><article><h1>Types and prices</h1><p>PRICES-INTRO " + EN * 3 + "</p><h2>JAPAN RAIL PASS prices</h2>"
+          "<p>Prices of Exchange Orders</p>" + JR_HTML + "<p>" + JR_NOTE + "</p><p>PRICES-END " + EN * 2 + "</p>"
+          "</article></main></body></html>").encode("utf-8")
 s = serve({"/guide": (200, {"Content-Type": "text/html; charset=utf-8"}, HTML),
+           "/prices": (200, {"Content-Type": "text/html; charset=utf-8"}, PRICES),
            "/tabs-long": (200, {"Content-Type": "text/html; charset=utf-8"}, TABS_LONG),
            "/spec": (200, {"Content-Type": "text/html; charset=utf-8"}, SPEC),
            "/svg": (200, {"Content-Type": "text/html; charset=utf-8"}, SVGPAGE),
@@ -368,6 +413,15 @@ try:
           and ("[diagram: WITH RECURSIVE cte-table-name AS ( select-stmt )]" in body or eng != "defuddle")
           and ("<svg" in body or eng != "defuddle"),
           "%s: %s" % (eng, [ln[:90] for ln in body.split("\n") if "diagram" in ln or "<svg" in ln or "path" in ln][:3]))
+    r = run_read(s.url("/prices"), env={"READ_PAGE_SKIP": "browser"})
+    body = r.file("content.md")
+    eng = str((r.manifest.get("content") or {}).get("engine") or "")
+    check("338: a read of a price table whose header spans columns: each price once in content.md, as a Markdown "
+          "table, no HTML (defuddle kept it as HTML and the block rule put page.md's rows beside it)",
+          body.count("70,000 YEN") == 1 and body.count("110,000 YEN") == 1 and "<table" not in body
+          and "PRICES-NOTE" in body, "%s: %d, %d, html %s | %s" % (
+              eng, body.count("70,000 YEN"), body.count("110,000 YEN"), "<table" in body,
+              [ln[:60] for ln in body.split("\n") if "YEN" in ln][:4]))
     r = run_read(s.url("/linky"), env={"READ_PAGE_SKIP": "browser"})
     page = r.file("page.md")
     check("page.md is the whole page, menu included, though the text's absolute links are longer",

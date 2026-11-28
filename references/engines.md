@@ -247,7 +247,10 @@ them the screens come one by one and `improve:` names Pillow. Nothing is scaled.
   lists, fragments and cookie banners stay out, and the header says `outside the text: N KB`. On
   the 60 extracted pages of a measured corpus 23 change: 22 of 59 ordinary ones gain 95 KB in all
   (+2.1 %), and RFC 9110, where trafilatura kept 5.5 KB of a 470 KB page, goes from 5.5 to 374 KB.
-  At worst 0.3 s a page.
+  At worst 0.3 s a page. defuddle keeps a table with a `colspan` or `rowspan` as its HTML, which the rule cannot
+  compare: `scripts/mdtable.py` writes it in defuddle's own table form first (a spanning cell's text in the first
+  column of its span, the rest of the span empty, so the words are `page.md`'s in their order), and no copy of it
+  comes back (on 290 pages with such tables: 149 of 170 became Markdown, the rest code examples; 134 copies stayed out).
 - **An article a script holds is drawn first** (`scripts/lake.py`). Aliyun's developer articles keep the article as a
   Lake document (the format of Yuque's editor) in a JavaScript string, `GLOBAL_CONFIG.larkContent = '<!doctype
   lake>...'`, beside the empty `<div id="lark-content">` the site's viewer draws it into; the server's HTML and a

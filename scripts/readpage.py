@@ -112,6 +112,7 @@ import engines                                                      # noqa: E402
 import hostmem                                                      # noqa: E402
 import intl                                                         # noqa: E402
 import lake                                                         # noqa: E402
+import mdtable                                                      # noqa: E402
 import netguard                                                     # noqa: E402
 import pdftables                                                    # noqa: E402
 import pictures                                                     # noqa: E402
@@ -3457,6 +3458,9 @@ def extract(html, url, c, workdir, inner=None, want_all=False, page_html="", aft
         if late:
             _DD["late"] = True
     dd = dd or ""
+    # a table defuddle kept as HTML (one of its cells spans rows or columns) in the text's own table form, which the
+    # block rule knows for page.md's: its rows came back beside it, each price of a price table twice (KNOWN-ISSUES 338)
+    dd = mdtable.tables(dd, base)
     cands = {}
     if dd.strip():
         cands["defuddle"] = dd
