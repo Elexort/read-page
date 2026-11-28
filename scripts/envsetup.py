@@ -531,8 +531,6 @@ def _append_handle(path):
             raise
     except (AttributeError, ImportError, OSError, ValueError):
         return open(path, "ab")
-    except (AttributeError, ImportError, OSError, ValueError):
-        return open(path, "ab")
 
 
 def _detached(cmd, cwd, log, attached_ok=True):
