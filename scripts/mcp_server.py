@@ -417,10 +417,13 @@ def inline_image(path):
     if kind == "svg":
         try:
             pymupdf = readpage.pymupdf_quiet()      # MuPDF silent: stdout is the protocol (310)
-            doc = pymupdf.open(stream=data, filetype="svg")
-            r = doc[0].rect
-            zoom = min(1.0, IMG_SIDE / max(r.width, r.height, 1.0))
-            data = doc[0].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=True).tobytes("png")
+            try:
+                doc = pymupdf.open(stream=data, filetype="svg")
+                r = doc[0].rect
+                zoom = min(1.0, IMG_SIDE / max(r.width, r.height, 1.0))
+                data = doc[0].get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), alpha=True).tobytes("png")
+            finally:
+                readpage.mupdf_said("svg.mupdf")    # MuPDF's store read and emptied: it grew with each broken SVG (320)
             kind = "png"
             w, h = readpage._img_dims(data)
             if w and h and max(w, h) <= IMG_SIDE and len(data) <= IMG_BYTES:

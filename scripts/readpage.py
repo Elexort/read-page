@@ -7331,17 +7331,18 @@ def pdf_broke(path, pages, why=""):
             "reason": "not a whole PDF: %s%s" % (where, opened)}
 
 
-def mupdf_said():
+def mupdf_said(event="pdf.mupdf"):
     """What MuPDF said of the document it just opened or failed to open - its errors and warnings, which pymupdf_quiet
-    keeps off the answer - into the trace as `pdf.mupdf`, its store emptied. A PDF that did not open says it too: an
-    older MuPDF (1.26) gives up on a PDF cut at half that 1.28 repairs, and its words say why (KNOWN-ISSUES 310)."""
+    keeps off the answer - into the trace as `event`, its store emptied. A PDF that did not open says it too: an
+    older MuPDF (1.26) gives up on a PDF cut at half that 1.28 repairs, and its words say why (KNOWN-ISSUES 310). The
+    MCP server calls it after each SVG it renders: the store grew with each broken one for as long as it ran (320)."""
     try:
         import pymupdf
         said = pymupdf.TOOLS.mupdf_warnings()
     except Exception:                                         # noqa: BLE001  (no PyMuPDF, or one without the store)
         return
     if said:
-        trace("pdf.mupdf", said=" | ".join(said.splitlines())[:300])
+        trace(event, said=" | ".join(said.splitlines())[:300])
 
 
 def pdf_drawn(doc):

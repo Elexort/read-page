@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The MCP server empties MuPDF's warnings store after each SVG** (KNOWN-ISSUES 320): the server makes an SVG a PNG
+  itself through PyMuPDF, and MuPDF kept every warning of it - a broken embedded picture's, about 270 bytes - in a store
+  that nothing read, so the server's memory grew with each broken SVG for as long as it ran. The store is read after
+  each render, whether it rendered or not (`pymupdf.TOOLS.mupdf_warnings()`, which empties it), and what MuPDF said goes
+  to the trace as `svg.mupdf`.
+
 ## 0.5.0 - 2026-11-28
 
 What 0.5.0 brings, for a user and for the agent that reads with it:

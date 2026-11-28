@@ -2193,24 +2193,38 @@ try:
         with open(svg, "wb") as fh:
             fh.write(b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><image width="40" height="40" '
                      b'href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ"/></svg>')
-        # what MuPDF said of it comes back after the KEPT mark; libjpeg's own warning ("Corrupt JPEG data: ..."), which
-        # the C library writes on stderr itself, no setting of PyMuPDF reaches: the server's stderr is its log
-        code = ("import sys, json; sys.path.insert(0, %r); import mcp_server, pymupdf; got = mcp_server.inline_image(%r); "
-                "sys.stderr.write(chr(10) + 'KEPT ' + json.dumps([got[1:2], pymupdf.TOOLS.mupdf_warnings()]))"
-                % (os.path.dirname(SCRIPT), svg))
-        child = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, timeout=120)
+        # the server renders it RENDERS times in one process, as it runs for hours: what MuPDF said of each render is in
+        # the trace (READ_PAGE_TRACE: RP_LOG lines on the server's stderr, its log), and what MuPDF's warnings store
+        # still holds comes back after the KEPT mark - the store grew by ~270 bytes a broken SVG for as long as the
+        # server ran, nothing read it (KNOWN-ISSUES 320). libjpeg's own warning ("Corrupt JPEG data: ..."), which the C
+        # library writes on stderr itself, no setting of PyMuPDF reaches: the server's stderr is its log
+        renders = 200
+        code = ("import sys, json; sys.path.insert(0, %r); import mcp_server, pymupdf; "
+                "got = [mcp_server.inline_image(%r)[1:2] for _ in range(%d)]; "
+                "sys.stderr.write(chr(10) + 'KEPT ' + json.dumps([got[0], len(set(got)), pymupdf.TOOLS.mupdf_warnings()]))"
+                % (os.path.dirname(SCRIPT), svg, renders))
+        child = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, timeout=120,
+                               env=dict(os.environ, READ_PAGE_TRACE="1"))
         before, _, kept = child.stderr.decode("utf-8", "replace").rpartition("\nKEPT ")
         try:
-            mime, told = json.loads(kept)
+            mime, kinds, store = json.loads(kept)
         except ValueError:
-            mime, told = [], ""
-        words = [w.strip() for w in told.splitlines() if w.strip()]
-        loud = [x.strip() for x in before.splitlines() if x.strip().startswith("MuPDF") or x.strip() in words]
+            mime, kinds, store = [], 0, None
+        lines = before.splitlines()
+        traced = [x.split(" said=", 1)[1] for x in lines if x.startswith("RP_LOG event=svg.mupdf ") and " said=" in x]
+        words = [w.strip() for w in (traced[0].split(" | ") if traced else []) if len(w.strip()) >= 12]
+        loud = [x.strip() for x in lines if not x.startswith("RP_LOG") and (x.strip().startswith("MuPDF")
+                                                                            or any(w in x for w in words))]
         check("310: the MCP server makes an SVG with a broken picture a PNG, and what MuPDF said of it reaches neither "
-              "its stdout, its protocol, nor its stderr (MuPDF's errors were lines there)", child.returncode == 0
-              and child.stdout == b"" and mime == ["image/png"] and bool(words) and not loud,
+              "its stdout, its protocol, nor its stderr (MuPDF's errors were lines there): the trace keeps it",
+              child.returncode == 0 and child.stdout == b"" and mime == ["image/png"] and bool(words) and not loud,
               "%r | %s | stderr: %s" % (child.stdout[:120], loud[:3],
-                                        " / ".join(x.strip() for x in before.splitlines() if x.strip())[-160:]))
+                                        " / ".join(x.strip() for x in lines if x.strip())[-160:]))
+        check("320: the MCP server empties MuPDF's warnings store after each render: %d renders of that SVG in one "
+              "process leave it empty, each render's words traced (it grew with each broken SVG for as long as the "
+              "server ran)" % renders, child.returncode == 0 and kinds == 1 and store == "" and len(traced) == renders,
+              "kinds of answer %r, the store holds %s, %d renders traced" % (
+                  kinds, "nothing" if store == "" else "%d lines" % len((store or "").splitlines()), len(traced)))
     except ImportError:
         check.skip("310: MuPDF's messages", "pymupdf is not installed here")
 
