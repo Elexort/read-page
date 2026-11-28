@@ -35,7 +35,8 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
 - **MCP `read` brings the pictures of the block it prints** (KNOWN-ISSUES 296): the call under `read_url`'s `next:`
   rendered the saved file as it was, so past the first block every marker said `not downloaded: not printed yet` and
   no file came. `read` of `content.md` or `page.md` now has the CLI read on from the folder first, as a CLI
-  continuation does (its window's pictures downloaded, their markers rewritten), in a thread of its own.
+  continuation does (its window's pictures downloaded, their markers rewritten), in a thread of its own - only where
+  a picture can come (none for a 404 or a refused one).
 - **`--chars` is 7 000 at the least, and no line of a text is cut by paging** (KNOWN-ISSUES 295): below about 2 500
   a line longer than the room beside the header and the command was shown in part and `next:` went past its rest (at
   1 000 every ordinary paragraph of an article). Measured: the longest line content.md has (1 998 characters, 6 000
@@ -45,7 +46,8 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   (KNOWN-ISSUES 294): `%` is read by cmd inside double quotes, so every Wikipedia page outside English as a browser
   copies it, and any query with a space, got the words. Such an address is named as the IRI that asks for the same
   thing (`…/wiki/Москва` for `…/wiki/%D0%9C…`) with `--dir` of the page's folder, which a continuation reads the saved
-  copy from; escapes an IRI cannot say (`%2F`, `%25`) still get the words.
+  copy from; escapes an IRI cannot say (`%2F`, `%25`) still get the words, and so does a file's path with escapes in
+  its name (`x%20y.html` is no `x y.html`).
 - **The command under `next:` reaches the interpreter that ran the read** (KNOWN-ISSUES 293): it named the
   interpreter's file (`python`), and after a read started by `py -3.13` - python.org's installer leaves `python` to the
   Store's alias - every shell answered "Python was not found". The name stands only where the PATH leads it to this

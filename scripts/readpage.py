@@ -11663,14 +11663,20 @@ CARRIED = (("allow_external", "--allow-external"), ("force_external", "--force-e
            ("deny_images", "--deny-images"), ("download", "--download"))
 
 
+_AGENT_PYTHON = {}
+
+
 def agent_python():
     """The interpreter as the command under next: names it, so that a shell reaches the one that ran the first
     process (ownenv.python_command): its name where PATH leads that name to it, else its plain path, else `py -X.Y`;
     the environment's child is handed it (READ_PAGE_PYTHON_NAME, ownenv.use: "-" for none), else this process's own.
     "" when no shell could name it: the answer gives the words (KNOWN-ISSUES 293)."""
     handed = os.environ.get("READ_PAGE_PYTHON_NAME")
-    got = handed if handed is not None and ownenv.HANDED.match(handed) else ownenv.python_command(sys.executable)
-    return "" if got == "-" else got
+    key = (handed, sys.executable, os.environ.get("PATH", ""))
+    if key not in _AGENT_PYTHON:                          # a PATH scan each time: an answer's every hint asked it
+        got = handed if handed is not None and ownenv.HANDED.match(handed) else ownenv.python_command(sys.executable)
+        _AGENT_PYTHON[key] = "" if got == "-" else got
+    return _AGENT_PYTHON[key]
 
 
 def slashed(path):
@@ -11752,7 +11758,8 @@ def cli_command(args, frm, chars, view, workdir=""):
     folder = in_letters(slashed(args.dir)) if getattr(args, "dir", "") else ""
     script = in_letters(slashed(__file__))
     python = agent_python()                               # "" when no shell could reach the interpreter by a name
-    if target and UNQUOTABLE.search(target) and (folder or workdir):
+    if target and UNQUOTABLE.search(target) and (folder or workdir) and re.match(r"(?i)https?://", target):
+        # a web address alone: a file's name is its bytes, `x%20y.html` no `x y.html`
         iri = iri_form(target)
         here = folder or in_letters(slashed(workdir))
         if iri and here and not UNQUOTABLE.search(here):

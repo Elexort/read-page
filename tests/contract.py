@@ -480,6 +480,16 @@ try:
                   p.returncode == 0 and "from cache" in said.split("\n")[0]
                   and "── content.md: from line %s of " % n_e in said,
                   "rc %s %s" % (p.returncode, (said.split("\n")[0] or p.stderr.decode("utf-8", "replace")[-120:])[:100]))
+    # ... and a web address alone: a file's name is its bytes, `x%20y.html` is not `x y.html`, so a path keeps its
+    # escapes and gets the words (KNOWN-ISSUES 294)
+    pct_file = os.path.join(tempfile.mkdtemp(prefix="rp-pct-"), "x%20y.html")
+    with open(pct_file, "wb") as fh_:
+        fh_.write(ROUTES["/long"][2])
+    pf = run_read(pct_file)
+    n_pf = next_line(pf.text)
+    check("... a file whose name holds escapes keeps them: the words, never another file's name",
+          bool(n_pf) and last_rows(pf.text, 1) == ["the same command with --from %d --chars 7900 --file content.md"
+                                                   % n_pf], str(last_rows(pf.text, 1))[:120])
     # PowerShell takes “ ” and „ for `"`, and Windows forbids `"` in a file name, so a name holds them: in PowerShell
     # 5.1 and 7 the command split the path there and read its second half as a host (KNOWN-ISSUES 292)
     curly = os.path.join(tempfile.mkdtemp(prefix="rp-curly-"), "Report “Final” „de“.html")

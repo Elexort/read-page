@@ -842,14 +842,17 @@ def window_fetch(d, rel, start, quote, chars):
     reads on from the folder (--dir, the saved copy), downloads its window's pictures and rewrites their markers; its
     answer is not used, read() renders its own from the files. They said "not downloaded: not printed yet" as they
     were printed, and only the first window's came (KNOWN-ISSUES 296). Not for a file of this machine, nor when the
-    read denied its pictures (the CLI's next: carries --deny-images), nor when every picture has its file."""
+    read denied its pictures (the CLI's next: carries --deny-images), nor when no picture without its file could
+    come (refused for good, a 404, or failed a moment ago: readpage.retryable, retry_due) - then no child starts."""
     man = readpage.load_manifest(d) or {}
     url = str((man.get("url") or {}).get("requested") or "")
     if not url.startswith(("http://", "https://")) or "images" in readpage.SKIP \
             or (man.get("signals") or {}).get("images_denied"):
         return
-    if not [e for e in man.get("images") or [] if isinstance(e, dict) and not e.get("file")]:
-        return
+    if not [e for e in man.get("images") or [] if isinstance(e, dict) and not e.get("file")
+            and readpage.retryable(e.get("why")) and readpage.retry_due(e)
+            and str(e.get("url") or "").startswith(("http://", "https://"))]:
+        return                                  # nothing a window could bring: no child
     argv = ["--json", "--dir", d, "--file", rel, "--chars", str(chars)]
     argv += ["--from=" + quote] if quote else ["--from", str(max(1, start))]
     run_cli(argv + ["--", url])

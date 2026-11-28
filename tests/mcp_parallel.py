@@ -332,6 +332,22 @@ try:
     on_marks = re.findall(r"\[img #\d+ · [^\]]*\]", mcp_said(on_p))
     check("read(dir, from=next): the pictures of its block come, none says not printed yet",
           bool(on_marks) and not [m for m in on_marks if "not downloaded" in m], str(on_marks[:2])[:160])
+    # ... with a child only where a picture can come: not for one the server refused for good (KNOWN-ISSUES 296)
+    spawned = []
+    for why in ("404", "not printed yet"):
+        lone = tempfile.mkdtemp(prefix="rp-mcp-why-")
+        with open(os.path.join(lone, "content.md"), "w", encoding="utf-8") as fh_:
+            fh_.write("A line.\n[img #1 · not downloaded: %s · a] a.png\n" % why)
+        with open(os.path.join(lone, "manifest.json"), "w", encoding="utf-8") as fh_:
+            json.dump({"generator": "read-page", "status": "ok", "url": {"requested": s.url("/none")},
+                       "images": [{"n": 1, "url": s.url("/a.png"), "why": why, "in": "text"}]}, fh_)
+        try:
+            mcp.run_cli = lambda argv: (spawned.append(why), (1, "", "no child in this check"))[1]
+            mcp.tool_read({"dir": lone, "file": "content.md"})
+        finally:
+            mcp.run_cli = real_run_cli
+    check("... a child for a picture still to come, none for one refused for good (404)",
+          spawned == ["not printed yet"], str(spawned))
     try:
         mcp.run_cli = with_screens
         busy = mcp.tool_read_url({"url": s.url("/fill"), "inline_images": True, "screenshots": 3, "refresh": True})
