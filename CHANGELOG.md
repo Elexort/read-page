@@ -8,6 +8,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A short page whose code shows a loading line is `ok`** (KNOWN-ISSUES 297): row 259's rule took `Loading
+  configuration...` in a page's code - a tool's output in its documentation - for the page's own loading message, and
+  answered `empty` with the sign-in advice. The message is looked for outside fenced code alone.
 - **MCP `read` brings the pictures of the block it prints** (KNOWN-ISSUES 296): the call under `read_url`'s `next:`
   rendered the saved file as it was, so past the first block every marker said `not downloaded: not printed yet` and
   no file came. `read` of `content.md` or `page.md` now has the CLI read on from the folder first, as a CLI

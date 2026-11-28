@@ -313,6 +313,13 @@ r_.update({
     "/loading-ja": (200, H, page("東京", "<main><article><h1>東京</h1>" + "".join(
         "<h2>第%d節</h2><p>%s</p>" % (i, JA_PARA) for i in range(1, 13))
         + "<div id='more'><p>読み込み中...</p></div></article></main>")),
+    # a short page of a tool's documentation whose code shows the tool's output: the code is its text (KNOWN-ISSUES 297)
+    "/loading-code": (200, H, page("mytool sync", "<main><article><h1>mytool sync</h1><p>Run the sync command once after "
+                                   "you install the tool. It reads your configuration file, fetches the remote index "
+                                   "and writes a local copy, so later commands work offline. The output looks like "
+                                   "this:</p><pre><code>$ mytool sync\nLoading configuration...\nFetched 1 204 entries\n"
+                                   "Done.</code></pre><p>If the index cannot be reached, the command keeps the copy "
+                                   "you already have and says so.</p></article></main>")),
 })
 
 # a paywall written in JavaScript: the article is in the HTML, the schema says it is not free
@@ -498,6 +505,9 @@ try:
         check("%s: an article with a loading line after it is ok, its words counted by character (290)" % path,
               status(r) == "ok" and not (r.manifest.get("signals") or {}).get("loading"),
               "%s | %s" % (status(r), reason(r)[:90]))
+    r = run_read(s.public.url("/loading-code"), env=NO_BROWSER)
+    check("a short page whose code shows `Loading configuration...` is ok: code is its text (297)",
+          status(r) == "ok" and not (r.manifest.get("signals") or {}).get("loading"), "%s | %s" % (status(r), reason(r)[:90]))
 
     # ------------------------------------------------ a deep address that lands on the site's home page (KNOWN-ISSUES 260)
     home = ("<!doctype html><html><head><meta charset='utf-8'><title>Home</title></head><body><main><h1>Welcome</h1>"
