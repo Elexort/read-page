@@ -6556,7 +6556,12 @@ def tables_unhold():
 
 
 PDF_TABLE_CAPTION = pdftables.CAPTION
-PDF_TABLE_NUMBER = re.compile(r"(?m)^\s*[-+−–±$€£]?\s?\(?\d[\d.,]*\)?\s?[%‰KMBkmb]?\s*$")
+# a line that is one number; its thousands may be grouped by a space, a no-break or a thin one ("452 939", the SI's
+# and many statistics offices' way): IRENA's onshore wind and eight more of its 69 pages, tables the model lays out,
+# were not asked and stayed one cell a line, and no other page of the corpus's 38 PDFs (690 pages) is chosen by it
+# (KNOWN-ISSUES 361). A year beside a number ("2016 467 316") is no such number
+PDF_TABLE_NUMBER = re.compile(r"(?m)^\s*[-+−–±$€£]?\s?\(?(?:\d{1,3}(?:[    ]\d{3})+(?:[.,]\d+)?|\d[\d.,]*)\)?"
+                              r"\s?[%‰KMBkmb]?\s*$")
 PDF_TABLE_NUMBERS = 12         # lines that are one short number: a table's cells, one a line
 PDF_TABLE_RULES = 8            # horizontal rulings among the page's drawings
 # What the model would take too long over for a read's time (2026-11-20, 398 pages of 29 PDFs and

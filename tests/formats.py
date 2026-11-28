@@ -499,6 +499,28 @@ try:
         got = mod3.pdf_tables(prose, dp, [p.get_text() for p in dp])
         check("... and the model is not asked: its process is not even started",
               got == {} and not mod3._TABLES.get("pool") and mod3._TABLES.get("worker") is None, str(got))
+        # a table whose numbers group their thousands by a space ("452 939", "1 291 368"; a no-break or a thin space
+        # too) and that has no caption and no rulings: its page was not asked, and stayed one cell a line - IRENA's
+        # onshore wind and eight more of its 69 pages, each a table the model lays out (KNOWN-ISSUES 361). Years
+        # glued to a number ("2016 467 316") and two years ("2016 2017") are no such number
+        gdoc = pymupdf.open()
+        gpg = gdoc.new_page()
+        cells = ["World"] + ["%d %03d" % (400 + i * 7, (i * 137) % 1000) for i in range(9)] + \
+                ["1 %03d %03d" % (i * 11, (i * 211) % 1000) for i in range(5)]
+        for i, cell in enumerate(cells):
+            gpg.insert_text((72, 60 + i * 16), cell, fontsize=9)
+        gtext = gpg.get_text()
+        npg = gdoc.new_page()
+        for i in range(8):
+            npg.insert_text((72, 60 + i * 32), "%d 2017" % (2000 + i), fontsize=9)
+            npg.insert_text((72, 76 + i * 32), "2016 467 %03d" % i, fontsize=9)
+        ntext = npg.get_text()
+        spaces = "".join("4%s291%s368\n" % (sp, sp) for sp in (" ", " ", " "))
+        check("a page whose numbers group their thousands by a space is asked of the model (it was not: one cell a "
+              "line); a no-break or thin space groups them too, and years beside a number are no such number",
+              mod3.pdf_table_page(gdoc[0], gtext, []) and not mod3.pdf_table_page(gdoc[1], ntext, [])
+              and len(mod3.PDF_TABLE_NUMBER.findall(spaces)) == 3, "%d lines | %r" % (len(gtext.split("\n")), gtext[:60]))
+        gdoc.close()
         said = mod3.tables_advice({"pages": [1], "left": [2, 3], "asked": 1, "secs": 1.0, "of": 3})
         check("a PDF's tables: the advice names the pages left and --download, which gives the model the time",
               "pages 2-3" in said and "--download" in said and "about 3 s" in said
