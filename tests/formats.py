@@ -2051,13 +2051,14 @@ try:
         with open(p, "wb") as fh:
             fh.write(raw_xlsx("A1:XFD1048576", [(1, [("A", "FAR-FIRST-CELL"), ("B", "beside it")]),
                                                 (1048576, [("XFD", "FAR-LAST-CELL")])]))
-        name = ("304: an XLSX whose sheet says A1:XFD1048576, two rows a million apart, reads in seconds and says its "
-                "columns past 1024 are not read (it padded every row to 16 384 cells: minutes)")
+        name = ("304: an XLSX whose sheet says A1:XFD1048576, two rows a million apart, reads in seconds, the far cell "
+                "joined to its row's last and said (it padded every row to 16 384 cells: minutes)")
         try:
             r = run_read(p, env=env, timeout=90)
             note = str((r.manifest.get("signals") or {}).get("document_note") or "")
             check(name, r.manifest.get("status") == "ok" and r.seconds < 30 and "FAR-FIRST-CELL | beside it" in
-                  r.file("content.md") and "past 1024 are not read" in note and "XFD" in note,
+                  r.file("content.md") and r.file("content.md").rstrip().endswith("| FAR-LAST-CELL")
+                  and "past column 1024 of 1 row(s) joined" in note,
                   "%.1f s, %s | %s" % (r.seconds, note[:160], said(r)))
         except subprocess.TimeoutExpired:
             check(name, False, "still reading at 90 s")

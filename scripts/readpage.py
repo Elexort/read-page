@@ -5136,38 +5136,44 @@ def _xlsx_lines(ws, until, said):
     sheet's size from its <dimension ref> and pads every row to it, a missing row too: a sheet that says A1:XFD1048576
     made each of its million rows 16 384 cells - minutes in this process, which nothing timed - and one that says less
     than it holds (A1, which some writers put) was read up to that size (KNOWN-ISSUES 304). So the size is set aside
-    (reset_dimensions), a row is read up to XLSX_WIDTH columns (`said` gets a note when the sheet says it runs past
-    them), a row with no value is passed over at C's speed, and the converter's clock (`until`, a now()) is looked at
-    every XLSX_CLOCK_ROWS rows: past it _XlsxLate, `said` naming the sheet and the row."""
-    try:
-        stated = int(ws.max_column or 0)       # its <dimension>'s last column, before the size is set aside
-    except (TypeError, ValueError, AttributeError):
-        stated = 0
+    (reset_dimensions): a row is its own cells, a missing row none; a row with no value is passed over at C's speed;
+    a row's cells past XLSX_WIDTH join its last one, as the ODS reader's do (`said` counts those rows); and the
+    converter's clock (`until`, a now()) is looked at every XLSX_CLOCK_ROWS rows: past it _XlsxLate, `said` naming the
+    sheet and the row. (Every row padded to XLSX_WIDTH, as max_col does, read a sheet of ten columns at half the
+    speed it had.)"""
     reset = getattr(ws, "reset_dimensions", None)
     if reset is not None:
         reset()
-    if stated > XLSX_WIDTH:
-        try:
-            from openpyxl.utils import get_column_letter
-            last = get_column_letter(stated)
-        except (ImportError, ValueError):
-            last = str(stated)
-        said.append("sheet %s: its columns past %d are not read (it says it runs to column %s)"
-                    % (ws.title, XLSX_WIDTH, last))
-    n = 0
-    for row in ws.iter_rows(values_only=True, max_col=XLSX_WIDTH):
+    n, wide = 0, [0]
+
+    def note_wide():
+        if wide[0]:
+            said.append("sheet %s: the cells past column %d of %d row(s) joined to the row's last"
+                        % (ws.title, XLSX_WIDTH, wide[0]))
+    for row in ws.iter_rows(values_only=True):
         n += 1
         if until is not None and not n % XLSX_CLOCK_ROWS and now() > until:
+            note_wide()
             said.append("the time ran out in sheet %s at its row %d: what comes after it is not read; --download "
                         "has no time limit" % (ws.title, n))
             raise _XlsxLate()
-        if row.count(None) == len(row):
+        if not row or row.count(None) == len(row):
             continue
+        rest = ""
+        if len(row) > XLSX_WIDTH:
+            far = row[XLSX_WIDTH:]
+            if far.count(None) != len(far):
+                rest = " ".join(str(v) for v in far if v is not None)
+                wide[0] += 1
+            row = row[:XLSX_WIDTH]
         cells = ["" if v is None else str(v) for v in row]
+        if rest:
+            cells[-1] = (cells[-1] + " " + rest).strip()
         while cells and not cells[-1]:
             cells.pop()
         if cells:
             yield " | ".join(cells)
+    note_wide()
 
 
 def _xlsx_cut(sheets, sheet, out, broke):

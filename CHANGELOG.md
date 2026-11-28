@@ -59,12 +59,13 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   named by its address's `.xml` was no track. Elements are known by their local names, attributes in either quote, a
   paragraph's time is its own or its spans', relative to a timed `<div>`; `xml` is read as the TTML or YouTube XML
   it holds.
-- **An XLSX is read without the size its sheets state, a row up to 1 024 columns, within the converter's time**
+- **An XLSX is read without the size its sheets state, a row as its own cells, within the converter's time**
   (KNOWN-ISSUES 304): openpyxl pads every row of a read-only sheet to its `<dimension ref>` and stops at it, so a 4 KB
   file whose sheet said `A1:XFD1048576` held the read for minutes in its own process (16 384 cells a row, no clock),
-  and a sheet that said `A1` gave its first cell alone. A sheet's size is set aside, a row read up to 1 024 columns
-  (a note says when a sheet says it runs past them), an empty row passed over at C's speed, and the converter's 10 s
-  looked at every 256 rows; where they run out the note names the sheet and the row. The two-row file reads in 2.5 s.
+  and a sheet that said `A1` gave its first cell alone. A sheet's size is set aside, a row is its own cells - its
+  cells past 1 024 columns joined to its last, the rows counted in a note -, an empty row passed over at C's speed,
+  and the converter's 10 s looked at every 256 rows; where they run out the note names the sheet and the row. The
+  two-row file reads in 0.6 s, a sheet of ten columns at the speed it had.
 - **Planned for 0.5.1: a quote with `$` or a backtick after a cut** (KNOWN-ISSUES 303): SKILL.md's `--from "<words of
   the last line before the gap>"` hands a shell what it expands inside double quotes when a model quotes the whole
   line; a new wording is measured with Haiku first, as rows 279-280 were.
