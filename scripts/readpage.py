@@ -5331,9 +5331,21 @@ def pymupdf_quiet():
     return pymupdf
 
 
+OCR_RENDER_PIXELS = 25000000            # a rendered page's pixels at most: a large page gets fewer dots an inch
+
+
+def render_dpi(width_pt, height_pt, dpi=OCR_RENDER_DPI):
+    """The resolution a page of these points is rendered at: `dpi`, or less where the page would be over
+    OCR_RENDER_PIXELS - a page of 200 x 200 in, the size PDF allows, was 30 000 x 30 000 pixels at 150 dpi, 2.7 GB in
+    the read's own process (KNOWN-ISSUES 337), and is 25 dpi now; an A0 drawing is 127."""
+    px = max(1.0, width_pt / 72.0 * dpi) * max(1.0, height_pt / 72.0 * dpi)
+    return dpi if px <= OCR_RENDER_PIXELS else max(1, int(dpi * (OCR_RENDER_PIXELS / px) ** 0.5))
+
+
 def render_pdf_pages(path, workdir, pages=3, dpi=OCR_RENDER_DPI):
     """PNG of the first pages, for a model that can look. Returns the file paths. PyMuPDF opens the document by a
-    path it takes as UTF-8, and the pictures are written by Python, which writes any path (KNOWN-ISSUES 175)."""
+    path it takes as UTF-8, and the pictures are written by Python, which writes any path (KNOWN-ISSUES 175). A
+    large page at fewer dots an inch (render_dpi)."""
     try:
         pymupdf = pymupdf_quiet()           # MuPDF's messages off stdout (336)
         with lib_path(path) as at:
@@ -5342,7 +5354,7 @@ def render_pdf_pages(path, workdir, pages=3, dpi=OCR_RENDER_DPI):
             for i, page in enumerate(doc, 1):
                 if i > pages:
                     break
-                data = page.get_pixmap(dpi=dpi).tobytes("png")
+                data = page.get_pixmap(dpi=render_dpi(page.rect.width, page.rect.height, dpi)).tobytes("png")
                 fn = os.path.join(workdir, "page-%02d.png" % i)
                 with open(fn, "wb") as fh:
                     fh.write(data)

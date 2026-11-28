@@ -8,6 +8,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A scan's large page is rendered within 25 million pixels** (KNOWN-ISSUES 337): pages were rendered at 150 dpi
+  whatever their size, and a page of 200 × 200 in was 2.7 GB in the read's own process; such a page gets fewer dots
+  an inch (an A0 drawing 127).
 - **MuPDF's messages go to stderr, off the answer and the MCP protocol** (KNOWN-ISSUES 336): MuPDF writes its errors
   to file descriptor 1, so a damaged PDF's "MuPDF error: ..." stood before the answer's first line and `--json` did
   not parse, and in the MCP server an SVG with a broken picture wrote lines into the JSON-RPC stream. PyMuPDF is

@@ -2063,6 +2063,27 @@ try:
     except ImportError:
         check.skip("336: MuPDF's messages", "pymupdf is not installed here")
 
+    # a scan's page was rendered at 150 dpi whatever its size: a page of 200 x 200 in, which PDF allows, was 900 million
+    # pixels in the read's own process (KNOWN-ISSUES 337); here a page of 60 x 60 in, 81 million at 150 dpi
+    try:
+        import pymupdf
+        big = pymupdf.open()
+        big.new_page(width=4320, height=4320).draw_rect(pymupdf.Rect(100, 100, 4220, 4220), color=(0, 0, 0))
+        p = os.path.join(tmpc, "big-scan.pdf")
+        big.save(p)
+        big.close()
+        r = run_read(p, env=env)
+        shots = [os.path.join(r.dir, x) for x in (r.manifest.get("files") or {}).get("pages") or []]
+        dims = []
+        for s_ in shots:
+            with open(s_ if os.path.isabs(s_) else os.path.join(r.dir, s_), "rb") as fh:
+                head = fh.read(24)
+            dims.append(struct.unpack(">II", head[16:24]) if head[:8] == b"\x89PNG\r\n\x1a\n" else (0, 0))
+        check("337: a scan's page of 60 x 60 in is rendered within 25 million pixels (at 150 dpi it was 81 million)",
+              dims and all(0 < w_ * h_ <= 25000000 for w_, h_ in dims), "%s | %s" % (dims, said(r)))
+    except ImportError:
+        check.skip("337: a large scanned page", "pymupdf is not installed here")
+
     def excel_ods(sheets, before=(), head=""):
         """An ODS in Excel's order: content.xml right after the styles, before the rest; `before`: members
         [(name, text)] written ahead of content.xml, as LibreOffice writes its settings.xml and meta.xml;
