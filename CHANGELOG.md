@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A hidden panel too long for the text: one marker of it, and no false fragment** (KNOWN-ISSUES 299): the block rule
+  brought page.md's copy of the panel's marker back beside the text before it, with nothing under it, and the panel's
+  words counted as the page's alone, so a whole text was `maybe a fragment` and the answer showed page.md. A marker
+  whose own block stays in page.md stays with it, and the long panels' words count as the text's.
 - **A bare file's name with no such file here is a wrong call, never a host** (KNOWN-ISSUES 298): `notes.md` from
   the wrong folder was read as `https://notes.md`, a request to a stranger's site (`.md`, `.py`, `.zip` are TLDs) or a
   DNS request that names the file. A name with no `/` and a file's extension is `no such file: notes.md (a file

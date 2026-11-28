@@ -11121,8 +11121,11 @@ def read(args):
     # ---------------------------------------------------------------- artefacts
     manifest["page"] = page_meta(html, url)
     # words, not characters: a page with 10 000 short comments used to look like a fragment; a marker of a tab
-    # or a section (tabs.py) is no word of the page's
-    text_words = len(tabs.unmarked(text or "").split())
+    # or a section (tabs.py) is no word of the page's. A hidden panel too long for the text stays in page.md, its
+    # marker in the text naming its line there: its words count as the text's, else a whole text read as a fragment
+    # (a 6.4 KB panel beside 2 KB of text: 32 %, and the answer showed page.md; KNOWN-ISSUES 299)
+    text_words = len(tabs.unmarked(text or "").split()) + sum(
+        len(str(x.get("text") or "").split()) for x in (tabs_info or {}).get("long") or [])
     cover = round(min(1.0, text_words / visible_words), 3) if visible_words else None
     # "fragment" means more content exists that we did not take. A low cover alone is not enough:
     # nav-heavy pages (github trending, k8s docs) keep 10-30 % of the visible text legitimately.

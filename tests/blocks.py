@@ -293,7 +293,18 @@ LINKY = ("<!doctype html><html><head><meta charset='utf-8'><title>Linky</title><
     "<li><a href='/n/%d'>NAV-ITEM %d</a></li>" % (i, i) for i in range(8)) + "</ul></nav><main><article><h1>Linky</h1>"
          + "".join("<p>LINKY-%d %s <a href='/docs/reference/section/%d/subsection/details'>see %d</a>.</p>" % (i, EN, i, i)
                    for i in range(60)) + "</article></main></body></html>").encode("utf-8")
+# a hidden panel too long for the text, beside little else: its marker came back from page.md with nothing under it,
+# and its words, counted as the page's alone, made the whole text a fragment (32 %; KNOWN-ISSUES 299)
+TABS_LONG = ("<!doctype html><html><head><meta charset='utf-8'><title>Plans</title></head><body><main><article>"
+             "<h1>Plans</h1><p>LONG-INTRO " + " ".join([EN] * 4) + "</p><div role='tablist'>"
+             "<button role='tab' aria-selected='true' aria-controls='q1'>Free Plan</button>"
+             "<button role='tab' aria-selected='false' aria-controls='q2'>Developer Plan</button>"
+             "<button role='tab' aria-selected='false' aria-controls='q3'>Batch Plan</button></div>"
+             "<div role='tabpanel' id='q1'><p>LONG-FREE " + " ".join([EN] * 3) + "</p></div>"
+             "<div role='tabpanel' id='q2' hidden><p>LONG-DEV " + " ".join([EN] * 45) + "</p></div>"
+             "<p>LONG-OUTRO " + " ".join([EN] * 3) + "</p></article></main></body></html>").encode("utf-8")
 s = serve({"/guide": (200, {"Content-Type": "text/html; charset=utf-8"}, HTML),
+           "/tabs-long": (200, {"Content-Type": "text/html; charset=utf-8"}, TABS_LONG),
            "/spec": (200, {"Content-Type": "text/html; charset=utf-8"}, SPEC),
            "/svg": (200, {"Content-Type": "text/html; charset=utf-8"}, SVGPAGE),
            "/linky": (200, {"Content-Type": "text/html; charset=utf-8"}, LINKY),
@@ -326,6 +337,17 @@ try:
           "%s: %s" % (eng, [ln[:90] for ln in body.split("\n") if "· Go]" in ln][:1]))
     check("a read: the manifest counts them", ((r.manifest.get("signals") or {}).get("tabs") or {}).get("tabs") == 3,
           str((r.manifest.get("signals") or {}).get("tabs")))
+    r = run_read(s.url("/tabs-long"), env={"READ_PAGE_SKIP": "browser"})
+    body = r.file("content.md")
+    dev = [ln for ln in body.split("\n") if "· Developer Plan]" in ln]
+    check("a hidden panel too long for the text: one marker of it in content.md, the one that says where it is - no "
+          "copy of page.md's beside the text before it (KNOWN-ISSUES 299)",
+          len(dev) == 1 and "too long for here" in dev[0] and "LONG-DEV" not in body, str([x[:70] for x in dev]))
+    sig = r.manifest.get("signals") or {}
+    check("... and its words count as the text's: no fragment, the answer is content.md",
+          not sig.get("fragment") and "maybe a fragment" not in r.text.split("\n")[0]
+          and "── content.md: from line 1 of " in r.text,
+          "cover %s; %s" % ((r.manifest.get("content") or {}).get("cover"), r.text.split("\n")[0][:90]))
     r = run_read(s.url("/spec"), env={"READ_PAGE_SKIP": "browser"})
     body = r.file("content.md")
     eng = str((r.manifest.get("content") or {}).get("engine") or "")

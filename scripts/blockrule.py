@@ -163,11 +163,14 @@ def restore(content, page, base="", out=()):
             rs = runs(ws)
             kept.append(sum(1 for r in rs if r in have) / len(rs) >= 0.5)
 
+    def stays(i):
+        rs = runs(pw[i]) if away else []
+        return bool(rs) and sum(1 for r in rs if r in away) / len(rs) >= 0.5
+
     back, seen = [False] * len(pb), set()
     for i, k in enumerate(kinds):
         if kept[i] is False and k in BACK:
-            rs = runs(pw[i]) if away else []
-            if rs and sum(1 for r in rs if r in away) / len(rs) >= 0.5:
+            if stays(i):
                 continue                       # a block of a text that stays in page.md
             key = " ".join(pw[i])
             if key not in seen:                # a paragraph the page repeats goes back once
@@ -175,6 +178,14 @@ def restore(content, page, base="", out=()):
                 back[i] = True
     for i in range(len(pb)):                   # a marker goes with the text beside it, kept or put back
         if kept[i] is False and kinds[i] == "marker":
+            own = i + 1
+            while own < len(pb) and kept[own] is None:
+                own += 1
+            if own < len(pb) and kinds[own] != "marker" and stays(own):
+                # the marker of a text that stays in page.md (a hidden panel too long for the text) stays with it:
+                # the text's own marker says where it is, and this one came back beside a neighbour's text with
+                # nothing under it (KNOWN-ISSUES 299)
+                continue
             near = []
             for step in (1, -1):
                 j = i + step
