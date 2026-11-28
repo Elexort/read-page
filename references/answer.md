@@ -56,8 +56,10 @@ line (a model copied the decoration) is left out and named on the `ignored:` lin
 The outline takes at most 2.5 KB: every heading when they fit, else the deepest levels that fit.
 When those give fewer than 12 rows and there are finer headings (a book's title over its chapters),
 the next level down is listed thinned evenly, the coarser rows kept, and a last row says how many
-are between them; a text without headings gets a row per block, thinned the same way. Either way
-the outline reaches the end of the text.
+are between them; a text with fewer than two headings gets a row per block, thinned the same way, under
+`outline (line, first words):` - each row is where a block starts and its first words, a sheet's row or a
+paragraph's start, not a heading (under `(line, heading)` a model took a sheet's rows for the document's
+structure, KNOWN-ISSUES 360). Either way the outline reaches the end of the text.
 
 Every answer fits the smallest output an agent harness passes on (7 900 characters, 9 980 bytes, 495
 lines), as the harnesses' code had it on 2026-11-26: Cline's SDK runtime (its CLI, and the VS Code

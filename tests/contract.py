@@ -265,7 +265,9 @@ try:
     for path in ("/long", "/flat", "/ru", "/zh"):
         first = run_read(srv.url(path))
         fits(path, first)
-        check(path + ": an outline and the next line", "outline (line, heading):" in first.text
+        # /flat has no headings: its outline is where its blocks start, with their first words (KNOWN-ISSUES 360)
+        check(path + ": an outline and the next line", ("outline (line, first words):" if path == "/flat" else
+                                                         "outline (line, heading):") in first.text
               and next_line(first.text) is not None, "")
         check(path + ": the command under next: names the file it continues",
               last_rows(first.text, 1)[0].endswith(" --file content.md"), last_rows(first.text, 1)[0][-90:])
@@ -316,6 +318,16 @@ try:
     check("a long text without headings has block rows to its end",
           len(starts) >= 12 and max(starts) >= 0.85 * len(saved),
           "%d rows, last at line %s of %d" % (len(starts), max(starts) if starts else None, len(saved)))
+    # those rows are no headings, and the outline said they were: a sheet of one heading had its rows there
+    # (`59 | Jun.14 | 1,9 | ...`), which a model took for the document's structure (KNOWN-ISSUES 360)
+    import answer                                              # noqa: E402
+    sheet = "## VPI\n\n| Monat | % |\n| --- | --- |\n" + "".join("| M%04d | %d,%d |\n" % (i, i % 9, i % 7)
+                                                                 for i in range(3000))
+    said_sheet, _ = answer.render({"status": "ok"}, sheet, "content.md", 1, lambda n, t, v: "next %d" % n)
+    check("an outline of a text with fewer than two headings says its rows are first words, not headings (it said "
+          "\"(line, heading)\" over a sheet's rows)", "outline (line, first words):" in flat.text and "outline (line, "
+          "heading):" not in flat.text and "outline (line, first words):" in said_sheet and "outline (line, heading):"
+          not in said_sheet, " / ".join(x for x in said_sheet.split("\n")[:4])[:160])
 
     # a continuation needs no network: the server is gone, the saved copy answers
     lone = serve({"/long": ROUTES["/long"]})
