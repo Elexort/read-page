@@ -248,6 +248,16 @@ them the screens come one by one and `improve:` names Pillow. Nothing is scaled.
   the 60 extracted pages of a measured corpus 23 change: 22 of 59 ordinary ones gain 95 KB in all
   (+2.1 %), and RFC 9110, where trafilatura kept 5.5 KB of a 470 KB page, goes from 5.5 to 374 KB.
   At worst 0.3 s a page.
+- **An article a script holds is drawn first** (`scripts/lake.py`). Aliyun's developer articles keep the article as a
+  Lake document (the format of Yuque's editor) in a JavaScript string, `GLOBAL_CONFIG.larkContent = '<!doctype
+  lake>...'`, beside the empty `<div id="lark-content">` the site's viewer draws it into; the server's HTML and a
+  headless browser whose viewer did not run had the menus and the footer alone, where a user's browser showed the
+  article. The read puts the document, its escapes undone and its cards (code, pictures, tables, rules) made the tags
+  they stand for, into that empty element of the HTML and of the browser's DOM, before any extractor or `page.md`
+  sees the page; a viewer that drew it already leaves nothing to draw. 16 articles of developer.aliyun.com
+  (2026-11-28; 16 of the 23 that answered held one, the others are server-made Markdown) went from 29-30 words of
+  footer to their articles, 23-1 415 words by defuddle. Yuque's own pages fetch their documents with a request of
+  their own: nothing in their HTML to draw.
 - **Internal hosts never go to a third party and never use TLS impersonation** - plain curl fails
   fast and nothing leaves the machine. A redirect that would leave the public internet is refused.
 - **Pin more than one fingerprint.** Sites add rules against the freshest Chrome profile: on 2026-10-30

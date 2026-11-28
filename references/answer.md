@@ -140,6 +140,10 @@ tables and they were put back where they stood; `outside the text: 6.2 KB … - 
 after the engine is not a status: `content.cover`, the text's words over the words the page shows
 (menus, footers and links counted), is under 0.35 with a text over 200 characters, so the text may
 be part of what the page holds and the answer shows `page.md`, the whole page (`signals.fragment`).
+A page whose script holds its article for a viewer to draw - a Lake document, Yuque's format, in a script string, as
+Aliyun's developer articles keep theirs - has it drawn where that viewer draws it, for the extractors, `page.md` and
+the page's words alike (`signals.script_document`), and a text that holds that document is no fragment, however much of
+the page is the site's.
 A whole text holds more but seldom all of the page's words: on the acceptance bench 7 of 40 whole
 texts were under 70 % (a news article 49 %, gov.uk's tax rates 50 %, a GitHub issue 44 %) and its 3
 fragments under 30 %, and "49% of the page" on a whole text was read as "half the content" - so the

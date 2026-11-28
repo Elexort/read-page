@@ -111,6 +111,7 @@ import docreaders                                                   # noqa: E402
 import engines                                                      # noqa: E402
 import hostmem                                                      # noqa: E402
 import intl                                                         # noqa: E402
+import lake                                                         # noqa: E402
 import netguard                                                     # noqa: E402
 import pdftables                                                    # noqa: E402
 import pictures                                                     # noqa: E402
@@ -3740,6 +3741,17 @@ def shipped_state(html):
         if len(body) >= 1000 and (re.match(r"\s*[\[{]", body) or _STATE_GLOBAL.search(body[:400])):
             n += len(body)
     return n
+
+
+def script_document(html, doc_from=None):
+    """(html, drawn): the page with the document its script holds for a viewer to draw put where that viewer draws it
+    (lake.py: Aliyun's developer articles, a Lake document in a script string; KNOWN-ISSUES 334). `doc_from`: the HTML
+    with the script, when `html` is a copy without it (the browser's visible DOM)."""
+    try:
+        return lake.drawn(html, doc_from)
+    except Exception as e:                                    # noqa: BLE001  (a page's script is never the read's end)
+        debuglog.exc("lake: drawn", e)
+        return html, False
 
 
 def browser_error_page(html, inner, landed):
@@ -8049,7 +8061,7 @@ def archived_text(url, c, workdir):
         write_bytes(path, body)
         text, _note = doc_text(path, kind, c, workdir)
         return text, "document", text, "", ats, aeng
-    html, _ = smart_decode(body, ct)
+    html = script_document(smart_decode(body, ct)[0])[0]      # an archived Lake article too (KNOWN-ISSUES 334)
     text, eng, _cands, page = extract(html, url, c, workdir)
     return text, eng, page, html, ats, aeng
 
@@ -10902,6 +10914,7 @@ def read(args):
     tabs_info = None                       # the markers of the extraction whose text this is (tabs.py)
     browser_weighed = False                # the browser's text was weighed against the server's (KNOWN-ISSUES 330)
     route_skipped = False                  # a #/ route's landing page, left for the browser
+    drawn_doc = False                      # the document the page's script holds was drawn into it (lake.py, 334)
     browser_inside = ""                    # where the browser reached inside, when its text was dropped
     visible_words = None
     rendered_pages = []
@@ -11047,7 +11060,9 @@ def read(args):
             manifest["chain"]["tried"].append(engine)
         else:
             raw_name = "raw.html"
-            html = body_text
+            # an article its script holds for a viewer to draw is drawn into its place first: every extractor, page.md
+            # and the page's words see it where a user's browser shows it (KNOWN-ISSUES 334)
+            html, drawn_doc = script_document(body_text)
             vis_text = visible_text(html)
             visible, visible_words = len(vis_text), len(vis_text.split())
             if visible < 400:
@@ -11061,7 +11076,7 @@ def read(args):
                         manifest["signals"]["meta_refresh"] = hop
                         manifest["chain"]["tried"].append("meta-refresh")
                         f = nxt
-                        html = smart_decode(body_bytes(f), f.get("ct"))[0]
+                        html, drawn_doc = script_document(smart_decode(body_bytes(f), f.get("ct"))[0])
                         vis_text = visible_text(html)
                         visible, visible_words = len(vis_text), len(vis_text.split())
             # a wall says it in a header, its markup, its title/heading, or is a short page with
@@ -11224,6 +11239,10 @@ def read(args):
             shot_entries, shot_needed, shot_why = r.get("shots") or [], r.get("shots_needed") or 0, r.get("shots_why") or ""
         elif r:
             manifest["chain"]["tried"].append(r["engine"])
+            # a viewer that did not draw its document in this browser: drawn here, into the DOM and its visible copy
+            r["html"], drawn_browser = script_document(r["html"])
+            if r.get("visible"):
+                r["visible"] = script_document(r["visible"], doc_from=r["html"])[0]
             vis2 = visible_text(r["html"])
             visible2, words2 = len(vis2), len(vis2.split())
             t2, eng2, cands2, page2 = extract(r["html"], r.get("final") or url, c, workdir, inner=r.get("inner"),
@@ -11255,6 +11274,7 @@ def read(args):
                                    if hash_route else "the HTTP text was weak" if text_reason else "screenshots only"))
             if take:
                 text, engine, page_text, html, visible = t2, eng2, page2, r["html"], visible2
+                drawn_doc = drawn_browser
                 tabs_info = tabs2
                 visible_words = words2
                 source, source_code = "browser", r.get("status")
@@ -11302,6 +11322,7 @@ def read(args):
         if t3:
             if len(t3) > len(text):
                 text, engine, page_text, html = t3, eng3 + "(" + str(ats) + ")", page3, a_html
+                drawn_doc = False                  # the signal is the live page's drawing (KNOWN-ISSUES 334)
                 source, source_code = "archive", 200
                 manifest["signals"].pop("partial", None)
                 if aeng.endswith(":partial"):
@@ -11366,6 +11387,7 @@ def read(args):
         if t3:
             if len(t3) > len(text) or still_down:
                 text, engine, page_text, html = t3, eng3 + "(" + str(ats) + ")", page3, a_html
+                drawn_doc = False                  # the signal is the live page's drawing (KNOWN-ISSUES 334)
                 source, source_code = "archive", 200
                 manifest["signals"].pop("partial", None)
                 if aeng.endswith(":partial"):
@@ -11429,6 +11451,10 @@ def read(args):
                    if c.get("engine") not in ("full", "crude"))
     agree = bool(len(clean) >= 2 and clean[-1] / max(1, clean[-2]) < 1.8)
     fragment = bool(cover is not None and cover < 0.35 and len(text) > 200)
+    if fragment and html and lake.held(html, text) >= lake.WHOLE:
+        # the page's script holds its document (lake.py), and the text has it: the rest of the page is the site's -
+        # a short article among Aliyun's menus is 8-37 % of the page's words (KNOWN-ISSUES 334)
+        fragment = False
     js_shell = bool(html and len(text) < 400 and (visible or 0) > 500)
     if blocked_http and source != "http":
         manifest["signals"]["note"] = "the HTTP tier was blocked; the %s produced this text" % (
@@ -11499,6 +11525,8 @@ def read(args):
     elif browser_weighed and source == "http":
         manifest["content"]["source"] = "server"            # the browser ran, and its text was no fuller
     manifest["signals"].update({"fragment": fragment, "js_shell": js_shell})
+    if drawn_doc:
+        manifest["signals"]["script_document"] = "lake"   # drawn into the page from its script (KNOWN-ISSUES 334)
     marked = dict((k, v) for k, v in ((tabs_info or {}).get("counts") or {}).items() if v)
     if marked:
         manifest["signals"]["tabs"] = marked        # tab sets, panels extracted, not extracted, too long; sections, selects

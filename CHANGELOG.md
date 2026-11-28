@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **An article its page holds in a script is read** (KNOWN-ISSUES 334): Aliyun's developer articles keep the article as
+  a Lake document (the format of Yuque's editor) in a JavaScript string, `GLOBAL_CONFIG.larkContent = '<!doctype
+  lake>...'`, beside the empty element the site's viewer draws it into; the server's HTML and a headless browser whose
+  viewer did not run had the menus and the footer alone, and the answer was `maybe a fragment` with page.md, which held
+  no more. The document is drawn into that element first (`scripts/lake.py`: its escapes undone, its code, pictures,
+  tables and rules the tags they stand for), for every extractor, page.md and the page's words alike
+  (`signals.script_document`), and a text that holds it is no fragment. 16 articles of developer.aliyun.com went from
+  0-15 % of their document's words, shown as page.md, to 98-100 %, shown as content.md. A fragment after the browser
+  ran still gets page.md as its advice: row 340.
 - **The MCP server empties MuPDF's warnings store after each SVG** (KNOWN-ISSUES 320): the server makes an SVG a PNG
   itself through PyMuPDF, and MuPDF kept every warning of it - a broken embedded picture's, about 270 bytes - in a store
   that nothing read, so the server's memory grew with each broken SVG for as long as it ran. The store is read after
