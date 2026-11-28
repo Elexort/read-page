@@ -133,15 +133,16 @@ def _u16_slice(s, start, end=None):
     return part.decode("utf-16-le", "ignore")
 
 
-def harness_cut(out, spec=None):
+def harness_cut(out, spec=None, folder=None):
     """READ_PAGE_TEST_CUT, a hook for testing the skill (references/answer.md, For testing the skill): an answer cut
     after it is built the way a harness cuts what a command printed, so that a model can be taught to go on under each
     cut. `middle:N` Cline's SDK runtime: over N UTF-16 units, about half of N kept at each end and
     `...[truncated K chars]...` between (its truncateMiddleByChars); `head:N` Zed: over N bytes, "Command output too
     long. The first K bytes:" and those bytes, cut at a line's end; `tail:N` OpenCode: over N bytes, a
     `...output truncated...` line and the last N bytes from a line's start; `file:N` Claude Code: over N bytes the
-    whole answer in a file of the temp folder, and a note naming it with its first 2 000 characters. An answer under
-    N, or a value that names no cut, is returned as it is. `spec` None: the environment's."""
+    whole answer in a file - in the page's `folder`, which the cache's prune takes with it (one in the temp folder for
+    each cut was left there: KNOWN-ISSUES 300), else in the temp folder - and a note naming it with its first 2 000
+    characters. An answer under N, or a value that names no cut, is returned as it is. `spec` None: the environment's."""
     spec = os.environ.get("READ_PAGE_TEST_CUT", "") if spec is None else spec
     m = re.match(r"\s*(middle|head|tail|file)\s*:\s*(\d+)\s*$", spec or "")
     if not m or not out:
@@ -168,7 +169,8 @@ def harness_cut(out, spec=None):
         nl = part.find(b"\n")
         part = part[nl + 1:] if 0 <= nl < len(part) - 1 else part
         return "...output truncated...\n\n" + part.decode("utf-8", "ignore")
-    fd, path = tempfile.mkstemp(prefix="read-page-cut-", suffix=".txt")
+    fd, path = tempfile.mkstemp(prefix="read-page-cut-", suffix=".txt",
+                                dir=folder if folder and os.path.isdir(folder) else None)
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(out)
     return "Output too large (%.1fKB). Full output saved to: %s\n\nPreview (first 2KB):\n%s\n...\n" % (

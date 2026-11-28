@@ -970,7 +970,10 @@ def test_cut(res):
     if not os.environ.get("READ_PAGE_TEST_CUT") or not isinstance(res, dict):
         return res
     said = "".join(b.get("text") or "" for b in res.get("content") or [] if b.get("type") == "text")
-    cut = answer.harness_cut(said)
+    # file:N keeps the whole answer in the page's folder, the one its files: line names (KNOWN-ISSUES 300)
+    named = re.search(r"(?m)^files: (.+?) \(", said)
+    folder = ownenv.fs_path(named.group(1).strip()) if named else ""
+    cut = answer.harness_cut(said, folder=folder if folder and os.path.isdir(folder) else None)
     return res if cut == said else dict(res, content=[text(cut)])
 
 

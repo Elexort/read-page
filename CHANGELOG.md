@@ -8,6 +8,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **`READ_PAGE_TEST_CUT=file:N` keeps the cut answer in the page's folder** (KNOWN-ISSUES 300): the test hook left a
+  `read-page-cut-*.txt` in the temp folder at every cut; the file now goes where the page's files are, which the
+  cache's prune takes.
 - **A hidden panel too long for the text: one marker of it, and no false fragment** (KNOWN-ISSUES 299): the block rule
   brought page.md's copy of the panel's marker back beside the text before it, with nothing under it, and the panel's
   words counted as the page's alone, so a whole text was `maybe a fragment` and the answer showed page.md. A marker

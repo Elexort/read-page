@@ -645,6 +645,13 @@ try:
     check("... and the line above its text names no end, which a model whose next: was cut off would take for the end "
           "of what it saw (KNOWN-ISSUES 279)",
           tops(zed.text) == ["── content.md: from line 1 of %d ──" % len(lines_of(zed))], str(tops(zed.text))[:120])
+    filed = run_read(srv.url("/plainlong"), "--chars", "40000", env={"READ_PAGE_TEST_CUT": "file:30000"})
+    f_m = re.match(r"Output too large \([\d.]+KB\)\. Full output saved to: (.+)\n", filed.text)
+    f_at = f_m.group(1).strip() if f_m else ""
+    check("... file:30000 on the CLI: the whole answer kept in the page's folder, which the cache's prune takes, not "
+          "left in the temp folder at every cut (KNOWN-ISSUES 300)",
+          bool(f_at) and os.path.isfile(f_at) and os.path.normcase(os.path.dirname(os.path.abspath(f_at)))
+          == os.path.normcase(os.path.abspath(filed.dir)), f_at[-80:])
     js = run_read(srv.url("/plainlong"), "--json", env={"READ_PAGE_TEST_CUT": "middle:2000"})
     check("... --json is never cut", js.text.lstrip().startswith("{") and "...[truncated" not in js.text, js.text[:40])
 

@@ -408,7 +408,7 @@ Not for reading, and not in SKILL.md: tools for seeing what a harness does to an
   | `middle:8000` | Cline's SDK runtime | over N UTF-16 units, about half of N kept at each end, `...[truncated K chars]...` between (Cline's `truncateMiddleByChars`) |
   | `head:16384` | Zed | over N bytes, `Command output too long. The first K bytes:` and those K bytes (K <= N), cut at a line's end |
   | `tail:51200` | OpenCode | over N bytes, a `...output truncated...` line and the last N bytes, from a line's start |
-  | `file:30000` | Claude Code | over N bytes, the whole answer in a file of the temp folder, and `Output too large (37.6KB). Full output saved to: <path>` with its first 2 000 characters |
+  | `file:30000` | Claude Code | over N bytes, the whole answer in a file of the page's folder (the cache's prune takes it; the temp folder where there is none), and `Output too large (37.6KB). Full output saved to: <path>` with its first 2 000 characters |
 
   An answer under N, or a value that names no cut, is printed as it is; `--json`, `--probe`, `--probe-units` and
   MCP's `probe` are never cut.
