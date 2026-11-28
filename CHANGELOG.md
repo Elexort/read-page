@@ -55,6 +55,8 @@
 - **A uv of the machine's in the pin's place is named** (KNOWN-ISSUES 360): where the pinned uv does not download, the
   one on PATH is used as before, now as a problem the report names with its version and the fix - it said "Nothing is
   missing".
+- **A `setup.json` that cannot be written no longer stops the work before its end** (KNOWN-ISSUES 361): the command
+  said "the work stopped after 10 of 10 steps" with everything installed; the work ends, not ok, and names the problem.
 
 ## 0.5.0 - 2026-11-28
 

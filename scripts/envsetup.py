@@ -2324,11 +2324,12 @@ class Work:
             self.step("ocr data", self.ocr_data)
         self.step("check", self.check)
         ready = bool(self.parts.get("engines", {}).get("ok")) and getattr(self, "env_py", "")
+        saved = True
         if ready:
             self.info.update(schema=STATE_SCHEMA, skill=self.skill, problems=self.problems,
                              parts=self.parts, built=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                              seconds=round(time.time() - self.t0))
-            _write_json(os.path.join(self.d, "setup.json"), self.info)
+            saved = self.save_info()
             try:
                 self.tidy()
             except Exception as e:                             # noqa: BLE001
@@ -2348,13 +2349,28 @@ class Work:
                      % (took // 60, took % 60, human(size + (alone or 0)), self.d, self.cache_note(total, alone)))
             self.info["disk"] = {"folder": size + (alone or 0), "cache": total, "cache_alone": alone}
             if ready:
-                _write_json(os.path.join(self.d, "setup.json"), self.info)
+                saved = self.save_info() and saved
             for p in self.problems:
                 self.say("not done: %s - %s%s" % (p["part"], p["why"], (" - " + p["fix"]) if p.get("fix") else ""))
         if getattr(self, "ytlock", None):
             _unlock(self.ytlock)
             self.ytlock = None                   # (the worker's own end lets go of it too, where go() did not get here)
-        self.state(done=True, ok=bool(ready) and not any(not v["ok"] for v in self.parts.values()))
+        self.state(done=True, ok=bool(ready) and saved and not any(not v["ok"] for v in self.parts.values()))
+
+    def save_info(self):
+        """setup.json, which reads go by: True when it was written. Past _write_json's tries (on Windows a reader that
+        holds the file - an antivirus scanning it) the error left go() before its last state, and the command said the
+        work had stopped after 10 of 10 steps, everything installed (KNOWN-ISSUES 361); the work goes on to its end now,
+        and says it as a problem."""
+        try:
+            _write_json(os.path.join(self.d, "setup.json"), self.info)
+            return True
+        except OSError as e:
+            self.log("setup.json was not written: %s" % e)
+            if not any(p.get("part") == "setup.json" for p in self.problems):
+                self.lack("setup.json", "it was not written (%s): reads go on with what it said before" % e,
+                          "readpage.py --setup again")
+            return False
 
 
 def node_wheel_requirement():

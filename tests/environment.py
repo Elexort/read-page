@@ -4146,6 +4146,50 @@ attempt("a uv of the machine's in the pin's place is a problem the report names,
         lambda: (ok360 and prob360 and "0.4.30" in prob360[0]["why"] and envsetup.UV_VERSION in prob360[0]["why"]
                  and envsetup.UV_VERSION in prob360[0]["fix"], "%s | %s" % (note360[:100], prob360)))
 
+# ---------------------------------------------------------------- setup.json that cannot be written (row 361)
+# The end of the work wrote setup.json with no guard: past _write_json's tries (a reader holding the file on Windows) the
+# error left go() before its last state - "the work stopped after 10 of 10 steps", exit 1, everything installed.
+class ReadyWork(envsetup.Work):
+    """A --setup's work whose every step answers yes (the engines' gives a Python): its end is the real one."""
+
+    def step(self, name, fn, need=None):
+        with self.lock:
+            self.parts[name] = {"ok": True, "note": "", "seconds": 0.0}
+        if name == "engines":
+            self.env_py = sys.executable
+        return True
+
+    def tidy(self):
+        pass
+
+
+d361 = scratch("rp-env-nosave-")
+w361 = ReadyWork(d361, "r361", "test")
+real_wj361 = envsetup._write_json
+
+
+def wj361(path, data):
+    if os.path.basename(path) == "setup.json":
+        raise PermissionError(13, "The process cannot access the file because it is being used by another process", path)
+    return real_wj361(path, data)
+
+
+envsetup._write_json = wj361
+err361 = ""
+try:
+    w361.go()
+except Exception as e_:                                  # noqa: BLE001
+    err361 = "%s: %s" % (type(e_).__name__, e_)
+finally:
+    envsetup._write_json = real_wj361
+    if getattr(w361, "ytlock", None):
+        envsetup._unlock(w361.ytlock)
+st361 = real_read_json(os.path.join(d361, "setup.state"))
+attempt("a setup.json that cannot be written does not end the work before its last state: it is done, not ok, and the "
+        "problem is named (the command said the work had stopped, after 10 of 10 steps)",
+        lambda: (not err361 and st361.get("done") is True and st361.get("ok") is False
+                 and [p for p in w361.problems if p.get("part") == "setup.json"], err361 or str(st361.get("ok"))))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)
