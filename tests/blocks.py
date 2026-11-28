@@ -116,6 +116,45 @@ fig = "![Speed of each reader](img/speed.png)\nFigure 2. FIGURE-CAPTION median s
 out, info = blockrule.restore(CONTENT, PAGE + "\n\n" + fig)
 check("a captioned figure goes back; a bare picture is not a block of text", "FIGURE-CAPTION" in out, "")
 
+# ------------------------------------------------ a table a converter kept as HTML (KNOWN-ISSUES 338)
+# defuddle writes a table one of whose cells spans rows or columns as its HTML, and the block rule did not know it for
+# the rows page.md has: japanrailpass.net's price tables came twice, as page.md's rows and as HTML
+try:
+    import mdtable                                           # noqa: E402
+except ImportError:                                          # the code before it: the checks below fail
+    mdtable = None
+JR_ROWS = (("7-day", "70,000 YEN", "35,000 YEN", "50,000 YEN", "25,000 YEN"),
+           ("14-day", "110,000 YEN", "55,000 YEN", "80,000 YEN", "40,000 YEN"))
+JR_HTML = ('<table><tbody><tr><th>Type</th><th colspan="2">Green</th><th colspan="2">Ordinary</th></tr>'
+           '<tr><td>Duration</td><td>Adult</td><td>Child</td><td>Adult</td><td>Child</td></tr>'
+           + "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % c for c in row) for row in JR_ROWS) + "</tbody></table>")
+JR_MD = ("| Type | Green |  | Ordinary |  |\n| --- | --- | --- | --- | --- |\n| Duration | Adult | Child | Adult | Child |\n"
+         + "\n".join("| %s |" % " | ".join(row) for row in JR_ROWS))
+JR_PAGE = ("Type | Green | Ordinary  \n---|---|---  \nDuration | Adult | Child | Adult | Child  \n"
+           + "\n".join("%s  " % " | ".join(row) for row in JR_ROWS))
+JR_NOTE = ("PRICES-NOTE Children are defined as those aged 6 to 11 at the time of use; for online purchases a child "
+           "of 11 on the payment date is a child even if 12 at the time of use.")
+JR_TEXT = "\n\n".join(["## JAPAN RAIL PASS prices", "Prices of Exchange Orders", JR_HTML, JR_NOTE])
+if mdtable is None:
+    check("338: a table defuddle kept as HTML is a Markdown table", False, "no mdtable module")
+else:
+    got = mdtable.markdown(JR_HTML)
+    check("338: a table defuddle kept as HTML is a Markdown table in defuddle's form: a spanning cell's text in the "
+          "first column of its span, the columns it spans over empty", got == JR_MD, repr(got)[:300])
+    span = mdtable.markdown("<table><tr><th rowspan='2'>Class</th><th>Price</th></tr><tr><td>Adult</td></tr>"
+                            "<tr><td>Green | <a href='/g'>car</a></td><td><b>70,000</b></td></tr></table>",
+                            "https://example.org/a/")
+    check("... a row span keeps the rows below it in their columns; a cell's links, marks and | are Markdown's",
+          span == "| Class | Price |\n| --- | --- |\n|  | Adult |\n| Green \\| [car](https://example.org/g) | **70,000** |",
+          repr(span))
+    fenced = "```html\n%s\n```" % JR_HTML
+    check("... a table inside a code block is code: left as it is", mdtable.tables(fenced) == fenced, "")
+    out, info = blockrule.restore(mdtable.tables(JR_TEXT), "\n\n".join(["## JAPAN RAIL PASS prices",
+                                                                        "Prices of Exchange Orders", JR_PAGE, JR_NOTE]))
+    check("338: the block rule takes it for page.md's table: each price once, no HTML (it put page.md's rows back "
+          "beside the HTML)", out.count("70,000 YEN") == 1 and out.count("110,000 YEN") == 1 and "<table" not in out
+          and not info.get("restored"), "%d, %d | %s" % (out.count("70,000 YEN"), out.count("110,000 YEN"), info))
+
 # ------------------------------------------------ what loses its id before defuddle
 import readpage                                              # noqa: E402
 CASES_IDS = [
@@ -183,6 +222,25 @@ TABS = ("<!doctype html><html><head><meta charset='utf-8'><title>Rate limits</ti
         + "</code></pre></div><p>TABS-END The limits above are what the service enforces today; they may change "
         "with notice, and the console shows the ones of your own account at any time.</p></article></main>"
         "<footer><p>&copy; 2026 Example Inc.</p></footer></body></html>")
+FILE_LINK = ("<div class='frame frame-default frame-type-uploads'><div role='heading' aria-level='4' class='h4'>%s</div>"
+             "<ul class='ce-uploads'><li><a href='/fileadmin/pages/214/%s' target='_blank' class='ce-uploads-link'>"
+             "<span class='ce-uploads-fileName i-download'></span><span class='ce-uploads__text'>%s</span></a></li></ul>"
+             "</div>")
+FILES = ("<!doctype html><html><head><meta charset='utf-8'><title>VPI</title></head><body><main><article><h1>VPI und HVPI"
+         "</h1><p>FILES-INTRO Der Verbraucherpreisindex misst die Preisentwicklung eines Warenkorbs, der die Ausgaben "
+         "der privaten Haushalte abbildet, und wird jeden Monat veröffentlicht.</p>"
+         "<p><button aria-expanded='false' aria-controls='share-1'>Share</button></p><div id='share-1' class='collapse'>"
+         "<a href='https://www.facebook.com/sharer'>Facebook</a> <a href='https://x.com/share'>X</a></div>"
+         "<div class='accordion__card' id='gtc-hd'><h3 class='accordion__header mb-0' id='ah-2'>"
+         "<button class='accordion__toggle collapsed' data-bs-toggle='collapse' data-bs-target='#ab-2' "
+         "aria-expanded='false' aria-controls='ab-2'><span class='accordion-text'>Historische Daten</span></button></h3>"
+         "<div id='ab-2' class='accordion__body collapse' role='region' aria-labelledby='ah-2'>"
+         + FILE_LINK % ("Historische Publikationstermine", "VPI_1977_bis_2025.ods", "Historische Publikationstermine (.ods)")
+         + FILE_LINK % ("Harmonisierter Verbraucherpreisindex (HVPI)", "3_HVPI_2015.ods",
+                        "Harmonisierter Verbraucherpreisindex, Basis 2015 (.ods)")
+         + "</div></div><h2>Methodik</h2><p>FILES-AFTER Die Gewichte des Warenkorbs werden jedes Jahr aus der "
+         "Volkswirtschaftlichen Gesamtrechnung neu berechnet, und die Preise erheben Mitarbeiter in zwanzig Städten."
+         "</p></article></main></body></html>")
 if tabs is None:
     check("tabs.py marks tabs, sections and selects", False, "no tabs module")
 else:
@@ -232,6 +290,28 @@ else:
              "<a href='/c'>C</a></details></main></body></html>")
     check("a page with none of them is left as it is: a menu folded under a button, an icon's popover",
           tabs.mark(plain)[0] == plain, tabs.mark(plain)[1]["counts"])
+    # a collapsed section that holds only links lost them: statistik.at's "Historische Daten", two .ods files, came as
+    # a heading with nothing under it and no marker - its region is links by half or more, which the rule took for a
+    # menu folded away, and defuddle drops the site's file lists (KNOWN-ISSUES 339). A toggle that heads no heading
+    # and folds away links (a share menu) is still no section
+    marked_f, finfo = tabs.mark(FILES)
+    mdf = tabs.unescape_markers(engines.html2text_full(marked_f))
+    check("339: an accordion's section whose region is a list of files is a section: its marker in its heading",
+          "### [section · hidden, but extracted · Historische Daten]" in mdf
+          and "Basis 2015" in " ".join(finfo.get("links") or []),
+          "%s | %s" % ([ln for ln in mdf.split("\n") if "Historische Daten" in ln][:1], finfo.get("links")))
+    check("... a toggle that heads no heading and folds away links is a menu: no marker", "[section · hidden, but "
+          "extracted · Share]" not in mdf and "Share" in mdf, [ln for ln in mdf.split("\n") if "Share" in ln][:2])
+    text_f = "\n\n".join(b for b in blockrule.blocks(mdf) if ".ods" not in b and "Publikationstermine" not in b
+                         and "(HVPI)" not in b)
+    try:
+        out_f, _info_f = blockrule.restore(text_f, mdf, keep=finfo.get("links") or [])
+    except TypeError as e:                                   # a block rule with no `keep`
+        out_f = "TypeError: %s" % e
+    a, b, c = (out_f.find("[section · hidden, but extracted · Historische Daten]"),
+               out_f.find("VPI_1977_bis_2025.ods"), out_f.find("3_HVPI_2015.ods"))
+    check("339: the block rule puts such a section's links back under its marker, when the extractor dropped them",
+          0 <= a < b < c and out_f.find("FILES-AFTER") > c, "%s | %s" % ((a, b, c), out_f[:120]))
     # a section's or a panel's tree walked from the head of a list took 11.5 s for 80 000 items (a fast machine),
     # a minute on a weak laptop: the read's whole time, spent before any extractor ran
     # Walked once, four times the items take about four times as long (sixteen when walked so), on any machine
@@ -303,7 +383,14 @@ TABS_LONG = ("<!doctype html><html><head><meta charset='utf-8'><title>Plans</tit
              "<div role='tabpanel' id='q1'><p>LONG-FREE " + " ".join([EN] * 3) + "</p></div>"
              "<div role='tabpanel' id='q2' hidden><p>LONG-DEV " + " ".join([EN] * 45) + "</p></div>"
              "<p>LONG-OUTRO " + " ".join([EN] * 3) + "</p></article></main></body></html>").encode("utf-8")
+# a price table whose header spans columns, inside the article (japanrailpass.net's, KNOWN-ISSUES 338)
+PRICES = ("<!doctype html><html><head><meta charset='utf-8'><title>Prices</title></head><body>" + NAV +
+          "<main><article><h1>Types and prices</h1><p>PRICES-INTRO " + EN * 3 + "</p><h2>JAPAN RAIL PASS prices</h2>"
+          "<p>Prices of Exchange Orders</p>" + JR_HTML + "<p>" + JR_NOTE + "</p><p>PRICES-END " + EN * 2 + "</p>"
+          "</article></main></body></html>").encode("utf-8")
 s = serve({"/guide": (200, {"Content-Type": "text/html; charset=utf-8"}, HTML),
+           "/prices": (200, {"Content-Type": "text/html; charset=utf-8"}, PRICES),
+           "/files": (200, {"Content-Type": "text/html; charset=utf-8"}, FILES.encode("utf-8")),
            "/tabs-long": (200, {"Content-Type": "text/html; charset=utf-8"}, TABS_LONG),
            "/spec": (200, {"Content-Type": "text/html; charset=utf-8"}, SPEC),
            "/svg": (200, {"Content-Type": "text/html; charset=utf-8"}, SVGPAGE),
@@ -368,6 +455,24 @@ try:
           and ("[diagram: WITH RECURSIVE cte-table-name AS ( select-stmt )]" in body or eng != "defuddle")
           and ("<svg" in body or eng != "defuddle"),
           "%s: %s" % (eng, [ln[:90] for ln in body.split("\n") if "diagram" in ln or "<svg" in ln or "path" in ln][:3]))
+    r = run_read(s.url("/prices"), env={"READ_PAGE_SKIP": "browser"})
+    body = r.file("content.md")
+    eng = str((r.manifest.get("content") or {}).get("engine") or "")
+    check("338: a read of a price table whose header spans columns: each price once in content.md, as a Markdown "
+          "table, no HTML (defuddle kept it as HTML and the block rule put page.md's rows beside it)",
+          body.count("70,000 YEN") == 1 and body.count("110,000 YEN") == 1 and "<table" not in body
+          and "PRICES-NOTE" in body, "%s: %d, %d, html %s | %s" % (
+              eng, body.count("70,000 YEN"), body.count("110,000 YEN"), "<table" in body,
+              [ln[:60] for ln in body.split("\n") if "YEN" in ln][:4]))
+    r = run_read(s.url("/files"), env={"READ_PAGE_SKIP": "browser"})
+    body = r.file("content.md")
+    eng = str((r.manifest.get("content") or {}).get("engine") or "")
+    a, b, c, d = (body.find("[section · hidden, but extracted · Historische Daten]"), body.find("VPI_1977_bis_2025.ods"),
+                  body.find("3_HVPI_2015.ods"), body.find("FILES-AFTER"))
+    check("339: a read: a collapsed section's two .ods links are in content.md under its marker, once each (the text "
+          "had its heading with nothing under it)", 0 <= a < b < c < d and body.count("3_HVPI_2015.ods") == 1
+          and body.count("VPI_1977_bis_2025.ods") == 1, "%s: %s | %s" % (
+              eng, (a, b, c, d), [ln[:70] for ln in body.split("\n") if "Historische" in ln or ".ods" in ln][:4]))
     r = run_read(s.url("/linky"), env={"READ_PAGE_SKIP": "browser"})
     page = r.file("page.md")
     check("page.md is the whole page, menu included, though the text's absolute links are longer",

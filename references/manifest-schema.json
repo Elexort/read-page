@@ -180,6 +180,10 @@
         "js_shell": {
           "type": "boolean"
         },
+        "script_document": {
+          "enum": ["lake"],
+          "description": "the page's script held its document for a viewer to draw, and the read drew it where that viewer does: `lake`, a Lake document (Yuque's format) in a script string, put into the page's empty Lake container (Aliyun's developer articles). A text that holds that document is no fragment, however much of the page is the site's"
+        },
         "soft_404": {
           "type": "boolean"
         },

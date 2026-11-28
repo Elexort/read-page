@@ -140,6 +140,10 @@ tables and they were put back where they stood; `outside the text: 6.2 KB … - 
 after the engine is not a status: `content.cover`, the text's words over the words the page shows
 (menus, footers and links counted), is under 0.35 with a text over 200 characters, so the text may
 be part of what the page holds and the answer shows `page.md`, the whole page (`signals.fragment`).
+A page whose script holds its article for a viewer to draw - a Lake document, Yuque's format, in a script string, as
+Aliyun's developer articles keep theirs - has it drawn where that viewer draws it, for the extractors, `page.md` and
+the page's words alike (`signals.script_document`), and a text that holds that document is no fragment, however much of
+the page is the site's.
 A whole text holds more but seldom all of the page's words: on the acceptance bench 7 of 40 whole
 texts were under 70 % (a news article 49 %, gov.uk's tax rates 50 %, a GitHub issue 44 %) and its 3
 fragments under 30 %, and "49% of the page" on a whole text was read as "half the content" - so the
@@ -148,9 +152,12 @@ share is named only where it decides something, and `content.cover` keeps it for
 early, and the advice says how to get the rest. `signals.paywall` (and an advice saying so) is a page that says it is paywalled - schema.org's
 `isAccessibleForFree: false` in its JSON-LD or microdata, with the `cssSelector` of the hidden part when it names one -
 while the status stays `ok`: the text is what the server sent, the whole article a script hides or only the part open
-to everyone, and the page cannot tell which; a container named `paywall` is no such word (free pages carry them). A
-paywalled page whose text is also under a third of its words is the part open to everyone and no more: the block rule
-has put back every paragraph `page.md` has, so the rest of `page.md` is the site's menus and links. Its first line
+to everyone, and the page cannot tell which; a container named `paywall` is no such word (free pages carry them). On
+such a page the block rule puts back what the extractor dropped before or inside the text - the open part's own
+standfirst, a caption, an embed - and nothing past its last block: there `page.md` is the site's, the paywall's
+prompt, other articles' teasers, the imprint (on 91 paywalled pages, 147 blocks of theirs stayed out and two authors'
+notes with them). A paywalled page whose text is also under a third of its words is the part open to everyone and no
+more, and the rest of `page.md` is the site's menus and links. Its first line
 says `paywalled: the rest of the article is not in the page` in place of `maybe a fragment`, and the answer shows
 `content.md`, with no `next:` line leading on through the menus (Spiegel's and Le Monde's paywalled articles, the
 bench's two paywalled fragments: a model read on through `page.md` and could not tell whether the article was hidden
@@ -363,7 +370,10 @@ or by role. A tab set is `role=tablist` with its `role=tab`s and their panels (`
 the tabpanels in order); a set of links is navigation and stays as it is. The shown tab is the one `aria-selected`,
 else `data-state=active`, else the one panel not hidden, else the first. A section is a closed `<details>` with a
 summary, or a button with `aria-expanded` whose `aria-controls` region the page holds as text - not a menu of links or
-a form folded away (a responsive menu, a feedback popover). A table whose header cell holds two to eight buttons and
+a form folded away (a responsive menu, a feedback popover). A button that is a heading's is an accordion's, and its
+region is a section whatever it holds: a list of files there is the page's (statistik.at's "Historische Daten"), and
+its links come under the marker even when the extractor dropped them; on 1 602 saved pages the 8 regions of links in a
+heading were all content, the 49 behind other toggles menus. A table whose header cell holds two to eight buttons and
 nothing else has tabs of its own (Groq's plans: the shown tab is named above the table, the others below it). A select
 names its chosen option and five others. A panel keeps its place and its attributes, but those that hide it; the
 engines are weighed without the markers and without the text they did not see before, so no engine is chosen by them.

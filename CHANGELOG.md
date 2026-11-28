@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- **After a cut, `--from` takes a few words of the line, with no `$` in them** (KNOWN-ISSUES 303): SKILL.md said to go
+  on with `--from "<words of the last line before the gap>"`, and a model that quotes a whole line hands its shell a `$`
+  or a backtick inside double quotes, which bash and PowerShell expand before the skill sees the words: the quote is not
+  found. SKILL.md now asks for a few words in a row of that line, as they stand, that hold no `$`, backtick or quote.
+  Measured with Haiku under the harnesses' cuts as rows 279-280 were: on a page whose cut falls in a line of `${...}`
+  the old wording missed 1 quote of 6 and the new one none; a first new wording, "letters and digits", made the model
+  take a `$` or a comma out of the middle of its quote, and missed 2 of 7.
+- **A paywalled article gets no teasers of other articles from page.md** (KNOWN-ISSUES 336): on Bloomberg Law's article
+  the block rule put back the paywall's prompt and five other articles' summaries, which read as the article's and
+  raised `cover` over a third, so `paywalled: the rest of the article is not in the page` did not come. On a page that
+  says it is paywalled nothing past the text's last block comes back now - there page.md is the site's -, while the
+  open part's own standfirst or caption before or inside the text still does: measured on 91 paywalled pages, where
+  no blocks at all would have lost the open part's own paragraphs on 12 of them.
+- **A collapsed section's list of files is in the text, under its marker** (KNOWN-ISSUES 339): statistik.at's VPI/HVPI
+  page folds "Historische Daten" - two .ods files, the HVPI on base 2015 among them - into an accordion whose region is
+  all links, which the rule for a menu folded away passed over, and defuddle dropped the list: the text had the heading
+  with nothing under it and no marker. A button that is a heading's is an accordion's, and its region is a section
+  whatever it holds; such a list goes back from page.md under the marker (`tabs.py` hands its text to the block rule).
+  On 1 602 saved pages the 8 regions of links in a heading were all content, the 49 behind other toggles menus.
+- **A table whose cells span rows or columns comes once, as a table** (KNOWN-ISSUES 338): defuddle keeps such a table
+  as its HTML, and the block rule did not know it for the rows page.md has, so it put them back beside it -
+  japanrailpass.net's price tables came twice, once through HTML tags. The table is written in defuddle's own Markdown
+  form (`scripts/mdtable.py`: a spanning cell's text in the first column of its span, the cells it spans over empty), and
+  no copy comes back: on 290 pages of the bench and the corpora with such tables, 149 of 170 HTML tables became Markdown
+  (the rest are code examples) and 134 copies stayed out.
+- **An article its page holds in a script is read** (KNOWN-ISSUES 334): Aliyun's developer articles keep the article as
+  a Lake document (the format of Yuque's editor) in a JavaScript string, `GLOBAL_CONFIG.larkContent = '<!doctype
+  lake>...'`, beside the empty element the site's viewer draws it into; the server's HTML and a headless browser whose
+  viewer did not run had the menus and the footer alone, and the answer was `maybe a fragment` with page.md, which held
+  no more. The document is drawn into that element first (`scripts/lake.py`: its escapes undone, its code, pictures,
+  tables and rules the tags they stand for), for every extractor, page.md and the page's words alike
+  (`signals.script_document`), and a text that holds it is no fragment. 16 articles of developer.aliyun.com went from
+  0-15 % of their document's words, shown as page.md, to 98-100 %, shown as content.md. A fragment after the browser
+  ran still gets page.md as its advice: row 340.
+- **The MCP server empties MuPDF's warnings store after each SVG** (KNOWN-ISSUES 320): the server makes an SVG a PNG
+  itself through PyMuPDF, and MuPDF kept every warning of it - a broken embedded picture's, about 270 bytes - in a store
+  that nothing read, so the server's memory grew with each broken SVG for as long as it ran. The store is read after
+  each render, whether it rendered or not (`pymupdf.TOOLS.mupdf_warnings()`, which empties it), and what MuPDF said goes
+  to the trace as `svg.mupdf`.
 - **yt-dlp's three days are pypi.org's dates, and its files are held to pypi.org's digests** (KNOWN-ISSUES 350, 351):
   the release - and every package it brings in beyond the lock - is chosen in pypi.org's own JSON, the newest final
   release out three days that its requirement allows, then installed by its exact version from whatever index is set,

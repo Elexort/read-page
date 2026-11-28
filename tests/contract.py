@@ -1236,8 +1236,13 @@ rest = " ".join(next((p for p in skill.split("\n- ") if p.startswith("The rest o
 WHOLE_AGAIN = ("that came back whole", "(7 900, the default, if none did)", "keep that size for the rest")
 check("SKILL.md: the rest of a text is the command under next:, EOF its end, --chars its size; after a cut the last "
       "--chars that came back whole, 7 900 if none did (KNOWN-ISSUES 280)",
-      all(w in rest for w in ("`next:`", "`EOF`", "`--chars`", "20 000", "--from \"<words of the last line")
+      all(w in rest for w in ("`next:`", "`EOF`", "`--chars`", "20 000", "--from \"<a few words in a row of the last line")
           + WHOLE_AGAIN) and "half" not in rest and "--to" not in skill, rest[:120])
+# a model that quoted the whole last line handed its shell a $ or a backtick inside double quotes, which bash and
+# PowerShell expand before the skill sees the words; words with none, as they stand - a model told "letters and
+# digits" took a $ or a comma out of the middle of its quote, and the words were no longer the line's (KNOWN-ISSUES 303)
+check("SKILL.md: --from \"...\" after a cut takes a few words in a row, as they stand, that hold no $, backtick or "
+      "quote (KNOWN-ISSUES 303)", "words as they stand that hold no `$`, backtick or quote" in rest, rest[:200])
 import mcp_server                                              # noqa: E402
 read_says = " ".join(next((t["description"] for t in mcp_server.TOOLS if t["name"] == "read"), "").split())
 check("the MCP read tool's description says the same of a cut: the last chars that came back whole (KNOWN-ISSUES 280)",

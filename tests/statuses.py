@@ -11,8 +11,10 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import tempfile
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -324,6 +326,8 @@ r_.update({
 
 # a paywall written in JavaScript: the article is in the HTML, the schema says it is not free
 ART = {"@context": "https://schema.org", "@type": "NewsArticle", "headline": "Story"}
+TEASER = ("Lawyers and staff left in the lurch by the sudden end of a large firm could heed the career of a partner who "
+          "moved to a rival two years ago and built a practice of forty people there, according to people familiar.")
 r_.update({
     "/pw-ld": (200, H, ld(dict(ART, isAccessibleForFree=False))),
     "/pw-string": (200, H, ld(dict(ART, isAccessibleForFree="False"))),
@@ -343,6 +347,22 @@ r_.update({
                                   % (json.dumps(dict(ART, isAccessibleForFree=False)), "<li><a href='/p'>Section of the "
                                      "site menu and its sub pages</a></li>" * 400, LONG_EN[:700],
                                      "<li><a href='/p'>Section of the site menu and its sub pages</a></li>" * 400))),
+    # an open part beside the site's menus, then the paywall's prompt and other articles' teasers, which the extractor
+    # drops and page.md has: the block rule put the teasers back, `cover` rose over a third, and row 261's line did not
+    # come (Bloomberg Law's article, the 0.5.0 stress round's task 7; KNOWN-ISSUES 336)
+    "/pw-teasers": (200, H, page("Story", "<script type='application/ld+json'>%s</script><header><nav><ul>%s</ul></nav>"
+                                          "<p class='dek'>PW-DEK The standfirst of the story itself, above it in the "
+                                          "page's header, says in thirty words or so what the article is about and why "
+                                          "it matters to the reader today.</p>"
+                                          "</header><main><article><h1>Story</h1><p>PW-OPEN %s</p><p>%s</p></article>"
+                                          "<section class='paywall-prompt'><h2>Log in to keep reading</h2><p>Already a "
+                                          "subscriber? Log in to keep reading or access the research tools.</p></section>"
+                                          "</main><footer><section class='more-stories'>%s</section><ul>%s</ul></footer>"
+                                  % (json.dumps(dict(ART, isAccessibleForFree=False)), "<li><a href='/p'>Section of the "
+                                     "site menu and its sub pages</a></li>" * 60, LONG_EN[:420], LONG_EN[420:800],
+                                     "".join("<div class='teaser'><h3><a href='/other/%d'>Another story %d</a></h3><p>"
+                                             "PW-TEASER-%d %s</p></div>" % (i, i, i, TEASER) for i in range(6)),
+                                     "<li><a href='/p'>Section of the site menu and its sub pages</a></li>" * 20))),
     "/pw-free": (200, H, ld(dict(ART, isAccessibleForFree=True))),
     "/pw-event": (200, H, ld({"@context": "https://schema.org", "@type": "MusicEvent", "name": "Concert",
                               "isAccessibleForFree": False})),
@@ -352,6 +372,64 @@ r_.update({
                               + LONG_EN + "</p></article>")),
     "/pw-class": (200, H, page("Story", "<div class='paywall'></div><div class='meteredContent'></div><article><h1>Story"
                                         "</h1><p>" + LONG_EN + "</p></article>")),
+})
+
+
+# an article its script holds for a viewer to draw: Aliyun's developer articles keep it as a Lake document (Yuque's
+# format) in a JavaScript string, beside an empty <div id="lark-content"> the site's viewer draws it into; the server's
+# HTML, and a headless browser whose viewer did not draw it, had the site's menus and footer alone (KNOWN-ISSUES 334)
+def js_string(s):
+    """The source of a JavaScript string in single quotes, written as the site writes it: quotes and slashes escaped,
+    every character past ASCII a \\u escape."""
+    out = []
+    for ch in s:
+        out.append("\\" + ch if ch in "\\'\"/" else "\\n" if ch == "\n" else
+                   "\\u%04X" % ord(ch) if ord(ch) > 127 else ch)
+    return "".join(out)
+
+
+def lake_card(name, value, kind="block"):
+    return '<card type="%s" name="%s" value="data:%s"></card>' % (kind, name, urllib.parse.quote(json.dumps(value)))
+
+
+LAKE_DOC = ('<!doctype lake><meta name="doc-version" content="1" /><meta name="viewport" content="adapt" />'
+            '<p data-lake-id="p0"><a href="https://so.example/anaconda">anaconda</a><span class="lake-fontsize-12">，'
+            'windows系统，安装完ssl后，请求https地址，一直报以下错误：</span></p>'
+            + lake_card("codeblock", {"mode": "plain", "code": "Traceback (most recent call last):\n  File \"F:\\work\\"
+                                      "csdn.py\", line 3, in <module>\n    import ssl\nImportError: DLL load failed: "
+                                      "找不到指定的模块。"})
+            + '<p data-lake-id="p1">网上的方法尝试了很多，大多都是在Linux系统下的配置。</p><p data-lake-id="p2">最后发现在'
+            'windows系统中是因为anaconda安装时少配了一个环境变量。</p>'
+            + lake_card("image", {"src": "https://img.example/lake/path-dialog.png", "name": "环境变量对话框"})
+            + '<p data-lake-id="p3">需要配置一下三个系统环境变量：</p>'
+            + lake_card("codeblock", {"mode": "plain", "code": "F:\\gongju\\Anaconda3\nF:\\gongju\\Anaconda3\\Scripts\n"
+                                      "F:\\gongju\\Anaconda3\\Library\\bin"})
+            + lake_card("table", {"html": "<table class=\"lake-table\"><tbody><tr><td><p>版本</p></td><td><p>"
+                                          "Anaconda3 2023.03</p></td></tr><tr><td><p>系统</p></td><td><p>Windows 10"
+                                          "</p></td></tr></tbody></table>"})
+            + lake_card("hr", {})
+            + '<p data-lake-id="p4">配置完成后重启命令行，import ssl 不再报错。LAKE-END</p>')
+LAKE_MENU = "".join("<li><a href='/group/%d'>云计算产品与服务%d</a></li>" % (i, i) for i in range(160))
+
+
+def lake_page(inner="", script=True):
+    """An article page of that kind: the menus, the title, the empty viewer's element (or `inner` in it, as a viewer
+    that drew it leaves it), the footer, and the script with the document."""
+    doc = ("<script>window.GLOBAL_CONFIG = {\"larkContent\": ''};\nGLOBAL_CONFIG.larkContent = '%s';</script>"
+           % js_string(LAKE_DOC)) if script else ""
+    return page("python3在windows系统下报ImportError: DLL load failed-开发者社区",
+                "<header><nav><ul>%s</ul></nav></header>%s<div class='content-wrapper'><h1 class='article-title'>"
+                "python3在windows系统下报ImportError: DLL load failed: 找不到指定的模块。</h1><div class='article-desc'>"
+                "<b>简介：</b><span>python3在windows系统下报ImportError</span></div><div class='article-content'>"
+                "<div class='article-inner' id='lark-content'>%s</div></div></div><footer><ul>%s</ul><p>LAKE-FOOTER "
+                "© 2009-现在 版权所有</p></footer>" % (LAKE_MENU, doc, inner, LAKE_MENU))
+
+
+r_.update({
+    "/lake": (200, H, lake_page()),
+    # the viewer drew it (a browser where it ran): the document is in its element already
+    "/lake-drawn": (200, H, lake_page(inner="<p>需要配置一下三个系统环境变量：</p><pre><code>F:\\gongju\\Anaconda3\n"
+                                            "F:\\gongju\\Anaconda3\\Library\\bin</code></pre><p>LAKE-END</p>")),
 })
 
 try:
@@ -557,6 +635,17 @@ try:
     check("... the advice says the rest is not in the page, and what page.md holds instead",
           "the rest of the article is not in the page" in (r.manifest.get("advice") or "")
           and "menus and links" in (r.manifest.get("advice") or ""), (r.manifest.get("advice") or "")[:200])
+    r = run_read(s.public.url("/pw-teasers"), env=NO_BROWSER)
+    content, first = r.file("content.md"), r.text.split("\n")[0]
+    check("336: a paywalled page: the open part is the text, and no teaser of another article comes back from page.md "
+          "past its end (the block rule put 6 back, and their headings)", "PW-OPEN" in content
+          and "PW-TEASER" not in content and "Another story" not in content,
+          "%d teasers | %s" % (content.count("PW-TEASER"), first[:110]))
+    check("... so the first line says the rest of the article is not in the page (the teasers took cover over a third)",
+          "· paywalled: the rest of the article is not in the page ·" in first,
+          "%s | cover %s" % (first[:120], (r.manifest.get("content") or {}).get("cover")))
+    check("... and the open part's own standfirst before the text still comes back (Mediapart's, NRC's, L'Express's)",
+          "PW-DEK" in content, content[:120])
     r = run_read(s.public.url("/pw-ld"), env=NO_BROWSER)
     check("a paywalled page keeps its text: content.md has the article, not a stub",
           "servers lie about what they send" in r.file("content.md"), r.file("content.md")[:60])
@@ -567,6 +656,35 @@ try:
         check("%s is no paywall" % what, status(r) == "ok" and not (r.manifest.get("signals") or {}).get("paywall")
               and "paywall" not in (r.manifest.get("advice") or ""),
               "%s | %s" % (status(r), (r.manifest.get("signals") or {}).get("paywall")))
+
+    # ------------------------------------------------ an article its script holds for a viewer to draw (Lake)
+    r = run_read(s.public.url("/lake"), "--deny-images", env=NO_BROWSER)
+    content, first, sig = r.file("content.md"), r.text.split("\n")[0], r.manifest.get("signals") or {}
+    check("334: an article the page holds as a Lake document in a script string is read - its paragraphs, code, "
+          "picture and table, the escapes undone - and the manifest says it was drawn from the script",
+          status(r) == "ok" and "最后发现在windows系统中是因为anaconda安装时少配了一个环境变量" in content
+          and "ImportError: DLL load failed: 找不到指定的模块。" in content and "Anaconda3\\Library\\bin" in content
+          and "环境变量对话框" in content and "Anaconda3 2023.03" in content and "LAKE-END" in content
+          and "\\u" not in content and '\\"' not in content and "<card" not in content
+          and sig.get("script_document") == "lake", "%s | %s | %r" % (status(r), sig.get("script_document"), content[:160]))
+    check("... its code blocks are code: the traceback and the three PATH entries, each in a block of its own",
+          bool(re.search(r"```[^\n]*\nTraceback \(most recent call last\):\n  File \"F:\\work\\csdn\.py\"", content))
+          and bool(re.search(r"```[^\n]*\nF:\\gongju\\Anaconda3\nF:\\gongju\\Anaconda3\\Scripts\n", content)),
+          [ln for ln in content.split("\n") if "Traceback" in ln or "gongju" in ln][:4])
+    check("... the text holds the whole document, so it is no fragment however long the site's menus are, and the "
+          "answer shows content.md", "maybe a fragment" not in first and sig.get("fragment") is False
+          and "── content.md:" in r.text, "%s | cover %s" % (first[:120], (r.manifest.get("content") or {}).get("cover")))
+    page_md = r.file("page.md")
+    at = [page_md.find(x) for x in ("找不到指定的模块。", "最后发现在windows系统中", "LAKE-FOOTER")]
+    check("... and page.md has it where the viewer draws it, between the title and the footer",
+          -1 not in at and at == sorted(at), str(at))
+    r = run_read(s.public.url("/lake-drawn"), "--deny-images", env=NO_BROWSER)
+    content = r.file("content.md")
+    check("334: a page whose viewer drew its document already is read as it is: the article once, nothing drawn twice",
+          status(r) == "ok" and content.count("Library\\bin") == 1 and content.count("LAKE-END") == 1
+          and not (r.manifest.get("signals") or {}).get("script_document"),
+          "%d, %d | %s" % (content.count("Library\\bin"), content.count("LAKE-END"),
+                           (r.manifest.get("signals") or {}).get("script_document")))
 
     # ------------------------------------------------ an archived PDF goes through the document path
     spec = importlib.util.spec_from_file_location("rp_status_a8", SCRIPT)
@@ -667,7 +785,6 @@ try:
           m.get("status") == "too_large" and "cap" in limit, "%s: %s" % (m.get("status"), limit[:70]))
 
     # ------------------------------------------------ no data: payload anywhere
-    import re
     for flags in ((), ("--deny-images",)):
         r = run_read(s.public.url("/inline"), *flags)
         blob = r.text + "".join(r.file(n) for n in ("content.md", "page.md", "manifest.json"))
