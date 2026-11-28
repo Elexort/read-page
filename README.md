@@ -55,6 +55,13 @@ calls for it. You need **Python 3.8 or newer** and **git**. Three steps:
 button, unpack it into that place and name the folder `read-page`. Not sure where your agent
 looks: ask it "where do you load skills from?".
 
+Or, with Node.js 22.20 or newer, the [skills CLI](https://github.com/vercel-labs/skills) does step 1 for you:
+`npx skills add Elexort/read-page -g` (`-a claude-code -y` names the agent and skips its questions). It puts the
+folder, named `read-page`, in `$HOME/.agents/skills` - the shared folder that Codex, Cline, Cursor, Gemini CLI,
+OpenCode and GitHub Copilot read - and links it into the skills folder of an agent that has its own (Claude Code:
+`$HOME/.claude/skills/read-page`); without `-g` it installs into the current project. It is Vercel Labs' tool, not
+this skill's: `DISABLE_TELEMETRY=1` turns off its usage statistics.
+
 **2. Let it install its engines** - optional: it reads without them, and much better with them.
 Tell your agent *"set up the read-page skill"*, or run it yourself (the path of step 1):
 

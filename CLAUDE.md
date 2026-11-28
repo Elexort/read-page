@@ -60,6 +60,12 @@ git-ignored, so a contributor may keep a file of their own under that name.
   told `-X utf8`, then `tests/cjk.py` once more told so: what it writes is UTF-8 bytes in a GBK world), on
   every free runner (Linux, Windows, macOS; x64 and arm64). `tools/ci_install.py` is what the jobs run; a matrix
   row's `expect` lists what its platform lacks for want of wheels (a floor), and any other gap is red.
+  README's other way in, `npx skills add Elexort/read-page -g` (the skills CLI of Vercel Labs, Node 22.20 or newer),
+  has the job `skills-cli` (Linux, shell steps of its own): it takes the command from README itself, runs it with a
+  throwaway HOME and asserts what README says it leaves - the folder `read-page` in `$HOME/.agents/skills` with
+  SKILL.md, `scripts/readpage.py` and `references/`, Claude Code's link to it, every file of `main`. The CLI installs
+  `main` (the default branch), not the pushed commit; the paths are the CLI's (docs/agents.md of its repository), so
+  a red run after its release may be the CLI's change: read what the step printed, then README's line.
   `tools/ci_proxy.py`, `tools/ci_acp.py` and `tools/ci_container.sh` change the machine they run on (a trusted root
   certificate, patched copies of programs, the package sources): off GitHub Actions they refuse unless given
   `--on-this-machine` (the container script runs in a container alone), and `ci_proxy.py stop` and

@@ -232,6 +232,65 @@ jobs:
         shell: bash
         run: python -X utf8 tools/ci_install.py bare
 
+  skills-cli:
+    # README's other way to step 1: `npx skills add Elexort/read-page -g`, the skills CLI of Vercel Labs (it needs Node
+    # 22.20 or newer). It clones the default branch, so what it installs is `main`, as the clone of README's table is.
+    # The command is taken from README itself and run with a throwaway HOME, naming the agents so that nothing is
+    # asked (`-y`), and what README says it does is asserted: the folder `read-page` in the shared `$HOME/.agents/skills`
+    # with SKILL.md, scripts/readpage.py and references/ in it, a link to it in Claude Code's own folder, nothing left
+    # in the project folder, every file of main there, and the skill running through the link. A tree is printed
+    # first, so that a red run shows what the CLI did.
+    name: skills CLI (linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DISABLE_TELEMETRY: "1"
+      DO_NOT_TRACK: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          check-latest: true
+
+      - name: README's `npx skills add` into a throwaway HOME, and what it leaves there
+        shell: bash
+        run: |
+          set -euo pipefail
+          line=$(grep -o 'npx skills add Elexort/read-page[^`]*' README.md | head -1)
+          test -n "$line" || { echo "README names no npx skills add command"; exit 1; }
+          read -r -a cmd <<< "$line"
+          export HOME="$(mktemp -d)"
+          project="$(mktemp -d)"
+          cd "$project"
+          node --version
+          echo "+ ${cmd[*]} -a claude-code -a codex -a cline -a cursor -a gemini-cli -a opencode -a github-copilot -y"
+          "${cmd[@]}" -a claude-code -a codex -a cline -a cursor -a gemini-cli -a opencode -a github-copilot -y
+          echo "--- what is under HOME (the CLI's own cache aside)"
+          find "$HOME" -maxdepth 4 -not -path "$HOME/.npm*" -not -path "$HOME/.cache*" | sort | head -60
+
+          shared="$HOME/.agents/skills/read-page"
+          claude="$HOME/.claude/skills/read-page"
+          for d in "$shared" "$claude"; do
+            test -f "$d/SKILL.md" || { echo "no SKILL.md in $d"; exit 1; }
+            test -f "$d/scripts/readpage.py" || { echo "no scripts/readpage.py in $d"; exit 1; }
+            test -f "$d/references/answer.md" || { echo "no references/ in $d"; exit 1; }
+            grep -q '^name: read-page$' "$d/SKILL.md" || { echo "SKILL.md of $d is not read-page's"; exit 1; }
+          done
+          test -d "$shared" -a ! -L "$shared" || { echo "$shared is not the folder itself"; exit 1; }
+          test -L "$claude" || { echo "$claude is no link"; exit 1; }
+          test "$(readlink -f "$claude")" = "$(readlink -f "$shared")" || { echo "$claude does not lead to $shared"; exit 1; }
+          test -z "$(ls -A "$project")" || { echo "the CLI wrote into the project folder:"; ls -A "$project"; exit 1; }
+
+          git clone -q --depth 1 https://github.com/Elexort/read-page "$RUNNER_TEMP/main"
+          diff -r -x .git "$RUNNER_TEMP/main" "$shared" || { echo "the installed folder is not main's"; exit 1; }
+
+          out=$(python3 -X utf8 "$claude/scripts/readpage.py" --version)
+          echo "$out"
+          echo "$out" | grep -E '^read-page [0-9]+\.[0-9]+\.[0-9]+ ' > /dev/null || { echo "no version from the installed skill"; exit 1; }
+          echo "README's npx skills add left the skill where it says"
+
   container:
     # A bare Linux: the image, Python and git, nothing else - no browser libraries. musl (Alpine) has
     # no wheels for some engines. --setup must not crash, and what it cannot do must be named, with the fix.

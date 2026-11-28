@@ -35,6 +35,14 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **README's `npx skills add Elexort/read-page -g` is checked in CI**: README names it now, as the other way to put the
+  folder where the agent looks (the skills CLI of Vercel Labs, Node 22.20 or newer; `-a <agent> -y` names the agent and
+  skips its questions). It installs `main` into `$HOME/.agents/skills/read-page` - the shared folder that Codex, Cline,
+  Cursor, Gemini CLI, OpenCode and GitHub Copilot read - and links it into the folder of an agent with its own (Claude
+  Code: `$HOME/.claude/skills/read-page`), as a read of the CLI's code and docs and a run in a project folder showed.
+  `install.yml`'s job `skills-cli` runs README's own command with a throwaway HOME and asserts that: SKILL.md,
+  `scripts/readpage.py` and `references/` in the shared folder, Claude Code's link to it, nothing in the project
+  folder, every file of `main`, and `readpage.py --version` through the link.
 - **SECURITY.md** (on dev only: `tools/publish.py` does not carry it to main): private vulnerability reporting is on for
   the repository; the file says to use the Security tab's "Report a vulnerability" and that the skill's scripts and
   its `--setup` are in scope. README's License section has the one line, linking to it.
