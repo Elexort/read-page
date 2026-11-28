@@ -364,7 +364,15 @@ def main():
     check("big page: ok", rc5 == 0 and mb.get("status") == "ok", why(mb))
     check("big page: large flag", bool((mb.get("content") or {}).get("large")), str((mb.get("content") or {}).get("chars")))
     said = subprocess.run(PY + [big_url, "--dir", big_dir], capture_output=True).stdout
-    check("big page: an outline with line numbers", b"outline (line, heading):" in said, "")
+    # its 20 sections' headings are the outline where the extractor keeps them (defuddle, readability); trafilatura -
+    # CI's only one - drops them, and a text with fewer than two headings has an outline of first words (KNOWN-ISSUES
+    # 321): either is an outline whose rows are line numbers
+    head_b = said.split("\n── ".encode("utf-8"), 1)[0].split(b"\n")
+    at = [i for i, x in enumerate(head_b) if x in (b"outline (line, heading):", b"outline (line, first words):")]
+    rows_b = [x.strip() for x in head_b[at[0] + 1:] if x.strip()] if at else []
+    check("big page: an outline with line numbers", len(rows_b) >= 3
+          and all(x.split()[0].isdigit() or x.startswith("…".encode("utf-8")) for x in rows_b),
+          "%s, %d rows" % (head_b[at[0]].decode("utf-8") if at else "no outline", len(rows_b)))
     check("big page: the answer names the next line", b"--from " in said and len(said) <= BUDGET_BYTES,
           "%d bytes" % len(said))
 
