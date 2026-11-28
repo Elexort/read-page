@@ -8,6 +8,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **Planned for 0.5.1: a quote with `$` or a backtick after a cut** (KNOWN-ISSUES 303): SKILL.md's `--from "<words of
+  the last line before the gap>"` hands a shell what it expands inside double quotes when a model quotes the whole
+  line; a new wording is measured with Haiku first, as rows 279-280 were.
 - **Digits alone after `--from` are a line number, said so** (KNOWN-ISSUES 302): `--from "2023"` and MCP's
   `from="2023"` go to line 2023, as a model's `from="127"` should; references/answer.md and mcp.md say to add a word to
   look for a number (`--from "2023 report"`).
