@@ -92,7 +92,8 @@ git-ignored, so a contributor may keep a file of their own under that name.
   PyPI's JSON and nodejs.org's `SHASUMS256.txt` (`tests/environment.py` compares every pin with its source when
   online). A pin moves only after the suites ran green with it. What one layout model process takes
   (`TABLES_PROC_RAM`, `TABLES_PROC_COMMIT` in readpage.py: a read counts from them how many it starts) was measured
-  with the onnxruntime, pymupdf4llm and pymupdf-layout of the lock (`TABLES_PROC_MEASURED`): when one of those pins
+  with the onnxruntime, pymupdf4llm and pymupdf-layout of the lock (`TABLES_PROC_MEASURED`; Linux's commit by a process's
+  VmData, in a Linux environment of the lock's): when one of those pins
   moves, measure the figures again and move their versions (`tests/environment.py` fails until then). yt-dlp
   alone is not pinned: the newest release that has been out three days, never older than the one
   installed (`YTDLP_FLOATS` is what floats with it). No source of `--setup` is used in plain http

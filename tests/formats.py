@@ -2084,6 +2084,23 @@ try:
     except ImportError:
         check.skip("337: a large scanned page", "pymupdf is not installed here")
 
+    # on Linux a process's commit is what the kernel charges it - its private writable mappings, VmData and VmStk -,
+    # not its peak resident size: a model process that said 401 MB took 1 238 of VmData (KNOWN-ISSUES 340)
+    if sys.platform.startswith("linux"):
+        import mmap
+        reserved = mmap.mmap(-1, 256 << 20, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)   # untouched: no resident page
+        mem7 = module().pdftables.own_memory()
+        with open("/proc/self/status") as fh:
+            vm7 = sum(int(v.split()[0]) * 1024 for k, _s, v in (ln.partition(":") for ln in fh)
+                      if k in ("VmData", "VmStk") and v.split())
+        reserved.close()
+        check("340: on Linux what a process says it commits is its VmData and VmStk, 256 MB it reserved and never "
+              "touched among them (it was its peak resident size)", abs(mem7.get("commit", 0) - vm7) < (16 << 20)
+              and mem7.get("commit", 0) > mem7.get("ram", 0) + (200 << 20),
+              "%s against %d MB" % ({k: v >> 20 for k, v in mem7.items()}, vm7 >> 20))
+    else:
+        check.skip("340: a process's commit as Linux charges it", "Linux only")
+
     def excel_ods(sheets, before=(), head=""):
         """An ODS in Excel's order: content.xml right after the styles, before the rest; `before`: members
         [(name, text)] written ahead of content.xml, as LibreOffice writes its settings.xml and meta.xml;

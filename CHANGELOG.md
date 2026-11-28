@@ -8,6 +8,11 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **On Linux a model process's commit is what the kernel charges it** (KNOWN-ISSUES 340): it said its peak resident
+  size, while Linux charges its private writable mappings, touched or not, against the commit limit that row 242
+  guards under strict overcommit - 554 MB of VmData against 490 said with the lock's engines, 1 238 against 401
+  with newer ones. A process says its VmData and VmStk there, counts as 640 MB of commit before it says, and a
+  cgroup's room is counted by what is resident. The two figures of a process's growth say which run they come from.
 - **A cut workbook names 50 lost sheets at most, and its list is found in linear time** (KNOWN-ISSUES 339): a meta.xml
   that said 999 999 sheets made a marker of each - 56 MB from a 10 KB file -, and a settings.xml list with no end was
   searched again from each opening, quadratic: an 11 KB file had the reader stopped with its text. The rest is

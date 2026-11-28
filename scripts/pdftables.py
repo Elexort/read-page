@@ -171,8 +171,10 @@ def calm_onnx(threads=0):
 
 def own_memory():
     """What this process takes, in bytes: {"ram": its peak working set, "commit": its private commit} on Windows
-    (GetProcessMemoryInfo), its peak resident size for both elsewhere (Linux and macOS charge no untouched memory).
-    {} when the OS will not say."""
+    (GetProcessMemoryInfo); on Linux its peak resident size and its private writable mappings, VmData and VmStk - what
+    the kernel charges against its commit limit, touched or not, its threads' stacks among them: a process that said
+    401 MB took 1 238 of VmData with one set of engines, 554 against 490 with the lock's (KNOWN-ISSUES 340); on macOS,
+    which has no commit limit, its peak resident size for both. {} when the OS will not say."""
     try:
         if os.name == "nt":
             import ctypes
@@ -196,7 +198,17 @@ def own_memory():
         import resource
         peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
         peak = peak if sys.platform == "darwin" else peak * 1024            # bytes on macOS, KB on Linux
-        return {"ram": int(peak), "commit": int(peak)}
+        commit = peak
+        if sys.platform.startswith("linux"):
+            try:
+                with open("/proc/self/status", encoding="ascii", errors="replace") as fh:
+                    got = [int(v.split()[0]) * 1024 for k, _s, v in (ln.partition(":") for ln in fh)
+                           if k in ("VmData", "VmStk") and v.split() and v.split()[0].isdigit()]
+                if got:
+                    commit = sum(got)
+            except OSError:
+                pass
+        return {"ram": int(peak), "commit": int(commit)}
     except Exception:                                          # noqa: BLE001
         return {}
 

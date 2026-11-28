@@ -6340,12 +6340,15 @@ PDF_TABLES_SLOW = 1.1          # slowed less than this, the model keeps its 10 s
 # page, and several reads count together through a note in the cache.
 PDF_TABLES_MEM_SHARE = 0.8
 # What one model process takes, rounded up, with numpy's OpenBLAS on one thread (pdftables.main): its peak working
-# set and private commit at the end of GPT-3's 33 pages 450 and 442 MB, after its first page 255-277 and 239-259 MB
-# (2026-11-27, here and on an emulated N100; 0.9 GB of commit before OpenBLAS's threads were one). A read takes the
-# larger of these and what its processes say: one grows over its pages. They hold for the onnxruntime and the
-# layout model `--setup` installs; tests/environment.py fails when scripts/setup-lock.txt names other versions.
+# set and private commit at the end of GPT-3's 33 pages in one process 450 and 442 MB, after its first page 255-277
+# and 239-259 MB (2026-11-27, Windows here and on an emulated N100; 0.9 GB of commit before OpenBLAS's threads were
+# one). Linux charges a process's commit by its private writable mappings, touched or not (pdftables.own_memory):
+# 554 MB of VmData at GPT-3's last table page with 8 onnxruntime threads, 383 with one, its peak resident size 490
+# (2026-11-28, WSL, the lock's engines; KNOWN-ISSUES 340). A read takes the larger of these and what its processes say:
+# one grows over its pages. They hold for the onnxruntime and the layout model `--setup` installs; tests/environment.py
+# fails when scripts/setup-lock.txt names other versions.
 TABLES_PROC_RAM = 512 << 20
-TABLES_PROC_COMMIT = 512 << 20
+TABLES_PROC_COMMIT = (640 << 20) if sys.platform.startswith("linux") else 512 << 20
 TABLES_PROC_MEASURED = {"onnxruntime": "1.20.1", "pymupdf4llm": "1.28.2", "pymupdf-layout": "1.28.2"}
 TABLES_NOTE = "tables-procs"   # .json and .lock in the cache root: every read's model processes, what each takes
 PDF_TABLES_CROWDED = 1.5       # their pace past which no more processes start: they wait for the CPU already
@@ -6439,8 +6442,11 @@ def tables_fit(ram, commit, hold=False):
             still_ram += max(0, max(TABLES_PROC_RAM, r) - (r if took else 0))
             still_commit += max(0, max(TABLES_PROC_COMMIT, c) - (c if took else 0))
         counts = []
+        # a Windows job's memory limit charges commit; a Linux cgroup's charges what is resident (KNOWN-ISSUES 340)
+        job = os.name == "nt" and not os.environ.get("READ_PAGE_TEST_CGROUP")
         for free, each, still in ((m.get("phys"), ram, still_ram), (m.get("commit"), commit, still_commit),
-                                  (m.get("room"), max(ram, commit), max(still_ram, still_commit))):
+                                  (m.get("room"), max(ram, commit) if job else ram,
+                                   max(still_ram, still_commit) if job else still_ram)):
             if free is not None and each > 0:
                 counts.append(int(max(0.0, PDF_TABLES_MEM_SHARE * free - still) // each))
         got["n"] = min(counts) if counts else None
