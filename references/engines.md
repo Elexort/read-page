@@ -757,7 +757,11 @@ Where the installers fetch from can be redirected - by variables, a `uv.toml`, a
 `setup.json` for the report. An address shows as its scheme, host and port alone (`envsetup.redact`): nothing of a
 user, a password - an `@` or a `/` in it too -, a token in the path (Gemfury, Cloudsmith) or the query (`?apikey=`);
 in every line of the log, a step's note and an installer's last words included, and in the report, which redacts
-an older `setup.json`'s lines as well. No source is used in plain `http://` (`refuse_plain_http`): an index (uv's
+an older `setup.json`'s lines as well. `setup-detail.log`, where the installers' whole output goes, keeps none of
+it either (`envsetup.redact_log`): every address as above, a setting's or a header's secret (npm's `_authToken=`, an
+`Authorization:`), a proxy's `user:password@` written with no scheme - Playwright prints its download host whole
+before every download, uv a token in an index's path when a fetch fails, and the setup's own lines send the agent to
+that log (KNOWN-ISSUES 353). No source is used in plain `http://` (`refuse_plain_http`): an index (uv's
 variables, `PIP_INDEX_URL`, pip's `index-url` - pip's own `trusted-host` is no licence here), an entry of a list
 (`UV_EXTRA_INDEX_URL`, `UV_INDEX`, `UV_FIND_LINKS`), our Python's mirror or list (`UV_PYTHON_INSTALL_MIRROR`,
 `UV_PYTHON_DOWNLOADS_JSON_URL`, which holds the hashes uv checks the Python against), the browser's host (Playwright's

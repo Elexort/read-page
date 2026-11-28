@@ -20,6 +20,12 @@
   `python/cpython-*` and `cache/dl` as its own leftovers, said to delete the whole folder to remove it, and on Windows
   handed the agent an `icacls ... /inheritance:r` for it (for `D:\`, the whole drive). Tests: a home-like folder of the
   user's with `envs/`, `node/` and `python/` is refused untouched; an empty, a new and a marked folder are taken.
+- **`setup-detail.log` keeps no secret** (KNOWN-ISSUES 353): the installers' whole output went into it as it came -
+  Playwright prints its download host, user, password and token, before every download; uv a token in an index's path
+  when a fetch fails - and the setup's own lines send the agent to that log. Every line written there (by `--setup` and
+  by the background yt-dlp update) now shows an address as its scheme, host and port, and leaves out a setting's or a
+  header's secret (`_authToken=`, `Authorization:`) and a proxy's `user:password@`. Tests: a stand-in installer printing
+  a proxy address with its password and the other forms.
 
 ## 0.5.0 - 2026-11-28
 

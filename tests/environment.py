@@ -3842,6 +3842,38 @@ attempt("... and never a drive's root or the home folder itself, whatever they h
         lambda: ("root of a drive" in envsetup.foreign_home(fg_root)
                  and "home folder" in envsetup.foreign_home(os.path.expanduser("~")), envsetup.foreign_home(fg_root)[:140]))
 
+# ---------------------------------------------------------------- setup-detail.log keeps no secret (row 353)
+# The detail log kept an installer's own words whole - Playwright prints its download host, user and password and all,
+# before every download; uv a token in an index's path when a fetch fails - and the setup's own lines send the agent to it.
+d353, w353 = work_in("rp-env-detail-")
+secrets353 = ("proxyuser", "Pr0xyPa55", "pwuser", "Pa55w0rd", "TOKENPATH123", "TOKEN0SECRET0123", "npm_SECRETtoken123",
+              "ghp_SECRET456", "bareuser", "BarePa55")
+said353 = os.path.join(d353, "installer-said.txt")
+with open(said353, "w", encoding="utf-8") as fh_:
+    fh_.write("ProxyError: Unable to connect to proxy http://proxyuser:Pr0xyPa55@proxy.example:3128 (407)\n"
+              "Downloading Chrome Headless Shell 153.0 from https://pwuser:Pa55w0rd@mirror.example/TOKENPATH123/builds/x.zip\n"
+              "  cause: error sending request for url (https://127.0.0.1:9/TOKEN0SECRET0123/simple/idna/)\n"
+              "npm error //registry.example.com/:_authToken=npm_SECRETtoken123\n"
+              "> Authorization: Bearer ghp_SECRET456\n"
+              "https-proxy = bareuser:BarePa55@proxy.example:3128\n"
+              "at load (C:\\x\\npm\\node_modules\\@xmldom\\xmldom\\lib\\dom.js:12)\n")
+installer353 = [sys.executable, "-c", "import sys; sys.stdout.write(open(sys.argv[1], encoding='utf-8').read())", said353]
+w353.sh(installer353, timeout=60)
+w353.detail.flush()
+with io.open(os.path.join(d353, "setup-detail.log"), encoding="utf-8") as fh_:
+    log353 = fh_.read()
+attempt("setup-detail.log keeps no secret an installer prints - a proxy's password in an address and bare, a user and a "
+        "password, a token in a path, npm's _authToken, an Authorization header - and still names each host and path",
+        lambda: (not [s for s in secrets353 if s in log353]
+                 and all(x in log353 for x in ("proxy.example:3128", "https://mirror.example", "https://127.0.0.1:9",
+                                               "registry.example.com", "node_modules\\@xmldom\\xmldom")),
+                 str([s for s in secrets353 if s in log353])))
+bg353 = io.StringIO()
+attempt("... and the background yt-dlp update's lines in it neither (its command and its output)",
+        lambda: (lambda r_: (not [s for s in secrets353 if s in bg353.getvalue()] and r_[0] == 0
+                             and "Pr0xyPa55" in r_[2], str([s for s in secrets353 if s in bg353.getvalue()])))(
+            envsetup._bg_run(bg353, installer353, 60, None, d353)))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)

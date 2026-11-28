@@ -800,6 +800,25 @@ def redact(text):
                     m.group(1) + (_host_part(m.group(2)) or "(not shown)"), str(text))
 
 
+# what an installer may print beside an address: a setting's secret (npm's `_authToken=`, `password=`, an `apikey: `), an
+# HTTP header's credentials, a proxy's `user:password@host` written with no scheme
+_SECRET_PAIR = re.compile(r"(?i)\b(_?auth(?:token)?|_password|password|passwd|token|secret|api[_-]?key|access[_-]?key|"
+                          r"private[_-]?token)(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;&\"']+)")
+_SECRET_HEADER = re.compile(r"(?i)\b(authorization|proxy-authorization)(\s*:\s*)(?:(bearer|basic|token|digest)\s+)?(\S+)")
+_BARE_USERINFO = re.compile(r"(?<![\w/@.%+\\-])[\w.%+-]+:[^\s@/:\\]+@(?=[A-Za-z0-9\[])")     # (no \: a path)
+
+
+def redact_log(text):
+    """An installer's own words as setup-detail.log keeps them: every address as redact() has it, a setting's or a
+    header's secret and a proxy's user and password left out (KNOWN-ISSUES 353) - Playwright prints its download host
+    whole before every download, uv a token in an index's path when a fetch fails; the setup's own lines send the agent
+    to this log."""
+    out = _SECRET_HEADER.sub(lambda m: m.group(1) + m.group(2) + (m.group(3) + " " if m.group(3) else "") + "(not shown)",
+                             redact(text))
+    out = _SECRET_PAIR.sub(lambda m: m.group(1) + m.group(2) + "(not shown)", out)
+    return _BARE_USERINFO.sub("(not shown)@", out)
+
+
 def _truthy(v):
     return str(v or "").strip().lower() in ("1", "true", "yes", "on")
 
@@ -1479,7 +1498,7 @@ class Work:
 
     def log(self, line):
         with self.lock:
-            self.detail.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), line))
+            self.detail.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), redact_log(line)))
             self.detail.flush()
 
     def state(self, **kw):
@@ -1545,7 +1564,7 @@ class Work:
             out, rc = (e.output or b"").decode("utf-8", "replace") + "\n(timed out)", -1
         except OSError as e:
             out, rc = str(e), -1
-        self.detail.write(out[-20000:] + "\n")
+        self.detail.write(redact_log(out[-20000:]) + "\n")      # an installer's own words, secrets left out
         self.detail.flush()
         if rc != 0 and not getattr(self, "cert_noted", False) and CERT_FAILURE.search(out):
             self.cert_noted = True              # once: every step behind such a proxy fails the same way
@@ -2607,7 +2626,7 @@ def ytdlp_update(d, uv, py, env, sh, now=None, lock=None, fetch=None):
     else:
         try:
             with open(os.path.join(d, "ytdlp.failed"), "w", encoding="utf-8") as fh:
-                fh.write("%s\n" % out[-200:])
+                fh.write("%s\n" % redact_log(out[-200:]))
         except OSError:
             pass
     said = out if NO_DATES_WHY in out else ""          # the cause and what helps, whole
@@ -2645,27 +2664,34 @@ def _ytdlp_worker(d):
         log = open(os.path.join(d, "setup-detail.log"), "a", encoding="utf-8", errors="replace")
 
         def sh(cmd, timeout=600, env=env):
-            log.write("%s (yt-dlp, background) $ %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), " ".join(cmd)))
-            try:
-                p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   timeout=timeout, env=env, cwd=d)
-                out, rc = p.stdout.decode("utf-8", "replace"), p.returncode
-            except (OSError, subprocess.SubprocessError) as e:
-                out, rc = str(e), -1
-            log.write(out[-4000:] + "\n")
-            log.flush()
-            return rc, " | ".join(ln.strip() for ln in out.strip().splitlines()[-3:])[-300:], out   # (the whole: _sh3)
+            return _bg_run(log, cmd, timeout, env, d)
         for attempt in range(3):
             ok, note = ytdlp_update(d, uv, py, env, sh, lock=lock)
             if ok and "kept" not in note:
                 break
             if attempt < 2:                            # no pause after the last try: it serves nothing
                 time.sleep(20)
-        log.write("%s yt-dlp: %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), note))
+        log.write("%s yt-dlp: %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), redact_log(note)))
         log.close()
     finally:
         _unlock(fh)
     return 0
+
+
+def _bg_run(log, cmd, timeout, env, cwd):
+    """One command of the background yt-dlp update, its line and its output written to the detail log as redact_log has
+    them: (exit code, its last lines, the whole output - for _sh3)."""
+    log.write("%s (yt-dlp, background) $ %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"),
+                                                   redact_log(" ".join(str(c) for c in cmd))))
+    try:
+        p = subprocess.run([str(c) for c in cmd], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=timeout, env=env, cwd=cwd)
+        out, rc = p.stdout.decode("utf-8", "replace"), p.returncode
+    except (OSError, subprocess.SubprocessError) as e:
+        out, rc = str(e), -1
+    log.write(redact_log(out[-4000:]) + "\n")
+    log.flush()
+    return rc, " | ".join(ln.strip() for ln in out.strip().splitlines()[-3:])[-300:], out
 
 
 def _running(exe):
