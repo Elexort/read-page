@@ -667,10 +667,23 @@ try:
           and "环境变量对话框" in content and "Anaconda3 2023.03" in content and "LAKE-END" in content
           and "\\u" not in content and '\\"' not in content and "<card" not in content
           and sig.get("script_document") == "lake", "%s | %s | %r" % (status(r), sig.get("script_document"), content[:160]))
+    # a code line's indent is the extractor's to keep: defuddle and trafilatura 2.2 keep it, trafilatura 2.0 - the newest
+    # a Python 3.9 installs, CI's oldest job - takes it away from every code block (KNOWN-ISSUES 356); the HTML the
+    # document is drawn as keeps it, which the check after this one holds to
     check("... its code blocks are code: the traceback and the three PATH entries, each in a block of its own",
-          bool(re.search(r"```[^\n]*\nTraceback \(most recent call last\):\n  File \"F:\\work\\csdn\.py\"", content))
+          bool(re.search(r"```[^\n]*\nTraceback \(most recent call last\):\n[ \t]*File \"F:\\work\\csdn\.py\", line 3, "
+                         r"in <module>\n[ \t]*import ssl\n", content))
           and bool(re.search(r"```[^\n]*\nF:\\gongju\\Anaconda3\nF:\\gongju\\Anaconda3\\Scripts\n", content)),
-          [ln for ln in content.split("\n") if "Traceback" in ln or "gongju" in ln][:4])
+          [ln for ln in content.split("\n") if "Traceback" in ln or "gongju" in ln or "File" in ln][:5])
+    try:
+        sys.path.append(os.path.join(os.path.dirname(HERE), "scripts"))
+        import lake
+        drawn_doc = lake.to_html(LAKE_DOC)
+    except ImportError:                                      # the code before row 334: no module, the check fails
+        drawn_doc = ""
+    check("334: the Lake document's code card is a code block in the HTML drawn into the page, each line's indent kept",
+          "<pre><code>Traceback (most recent call last):\n  File &quot;F:\\work\\csdn.py&quot;, line 3, in &lt;module&gt;\n"
+          "    import ssl\n" in drawn_doc, repr(drawn_doc[drawn_doc.find("<pre>"):][:160]))
     check("... the text holds the whole document, so it is no fragment however long the site's menus are, and the "
           "answer shows content.md", "maybe a fragment" not in first and sig.get("fragment") is False
           and "── content.md:" in r.text, "%s | cover %s" % (first[:120], (r.manifest.get("content") or {}).get("cover")))
