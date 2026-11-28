@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **SKILL.md answers what the stress round asked of the answer's words** (KNOWN-ISSUES 323, 324): `advice:` comes on
+  any status, `--from N` goes to an outline's line, and `+ N blocks of page.md` are paragraphs the extractor missed,
+  put back (6 162 -> 6 301 characters); references/answer.md says what a `reader:` engine is, and why a page's
+  pictures and size grow between its calls (by design: each answer brings its lines' pictures).
 - **The first line says when the text is the browser's** (KNOWN-ISSUES 322): an `--alternate` read named the
   extractor alone, whether the browser's text was taken or not, and an agent could not tell whether the browser had
   run. `content.source` is `browser` or `server` wherever the browser's text was weighed, and the first line says

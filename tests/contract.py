@@ -1204,6 +1204,12 @@ check("the first line names the browser's text, or the server's kept against it,
 # the install path (KNOWN-ISSUES 321)
 check("SKILL.md says what SKILL_DIR is, by its command", re.search(r"`SKILL_DIR` is this file's folder", skill) is not None
       and skill.find("`SKILL_DIR` is") < skill.find('"SKILL_DIR/scripts/readpage.py"'), "")
+# what agents of the stress round asked: advice comes on any status, --from takes a line number, and what "+ N blocks of
+# page.md" after the engine is (KNOWN-ISSUES 323)
+flat = " ".join(skill.split())
+check("SKILL.md: advice on any status, --from N for an outline's line, + N blocks of page.md said",
+      "`advice:`, on any status, names the next step" in flat and "`--from N` goes to line N" in flat
+      and "`+ N blocks of page.md`: paragraphs the extractor missed, put back" in flat, "")
 example = re.search(r"(?s)```\nread-page · ok · .*?\n```", skill)
 ex_rows = example.group(0).split("\n")[1:-1] if example else []
 check("SKILL.md's example answer ends as an answer does: `── next: line N of T ──`, then the command alone",

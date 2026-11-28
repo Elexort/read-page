@@ -129,7 +129,9 @@ so a file tool that stops at 2 000 still sees every word.
 
 `(browser)` after the engine: the text is the browser's rendering of the page (`--alternate`, or a page its scripts
 build); `(server; browser's text no better)`: the browser ran and its text was no fuller, so the server's stands
-(`content.source`; an `--alternate` read named the extractor alone, KNOWN-ISSUES 322).
+(`content.source`; an `--alternate` read named the extractor alone, KNOWN-ISSUES 322). `reader:firecrawl` (or
+`jina`, `exa`, `tavily`, `defuddle.md`) as the engine: the public address went to that remote service, as
+`--allow-external` allows when the local engines' text was weak or none - `chain.tried` lists what ran before it.
 `+ 3 blocks of page.md` after the engine: the extractor dropped those paragraphs, code blocks or
 tables and they were put back where they stood; `outside the text: 6.2 KB … - page.md` is what only
 `page.md` has (menus, link lists, fragments). `maybe a fragment: the text is 12% of the page's words`
@@ -303,7 +305,9 @@ placeholder. `--from "[img #5]"` goes to a picture's line, whatever its marker s
 What is downloaded follows what is printed: every picture of `content.md` and `page.md` is
 numbered and listed in the manifest from the first call (with its line), and an answer downloads
 the pictures of the lines it prints that have no file yet (6 s) - the first block's, a `--from`
-block's, `page.md`'s when `page.md` is printed. A picture not printed yet says
+block's, `page.md`'s when `page.md` is printed. So the `files:` line's count of pictures grows as a text is read on,
+and the text's size a little with it, as markers gain their sizes and files (KNOWN-ISSUES 324): the lines do not move.
+A picture not printed yet says
 `not downloaded: not printed yet`; one the 6 s cut is fetched again the next time its lines are
 printed, and one the network failed (a dead host, a server error) once more, by an answer printed
 30 s or more later - not by every answer from the cache. With `--download` every picture of the

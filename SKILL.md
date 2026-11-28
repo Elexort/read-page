@@ -44,13 +44,14 @@ python -X utf8 "SKILL_DIR/scripts/readpage.py" URL --allow-external --from 127 -
 ```
 
 - The rest of a long text, when you need it: run the command under `next:` (the saved copy, not fetched again); `EOF`
-  marks the end. For more at once raise `--chars` in it (7 900 fits every tool): to your tool's output limit if
-  you know it, else to about 20 000. If an answer comes back cut (a gap, a note like `truncated` or `omitted`) or
-  saved to a file, go on where the text you saw breaks off - `--from "<words of the last line before the gap>"`,
-  or the same `--from` if its start is missing - with the last `--chars` that came back whole (7 900, the
-  default, if none did), and keep that size for the rest.
-- `content.md` is the main text; `--file page.md` gives the whole page (menus, every link with its
-  address, the site's layout), `--screenshots [N]` how it looks, N screens.
+  marks the end; `--from N` goes to line N (the outline names them). For more at once raise `--chars` in it (7 900
+  fits every tool): to your tool's output limit if you know it, else to about 20 000. If an answer comes back cut (a
+  gap, a note like `truncated` or `omitted`) or saved to a file, go on where the text you saw breaks off - `--from
+  "<words of the last line before the gap>"`, or the same `--from` if its start is missing - with the last `--chars`
+  that came back whole (7 900, the default, if none did), and keep that size for the rest.
+- `content.md` is the main text (`+ N blocks of page.md`: paragraphs the extractor missed, put back); `--file
+  page.md` gives the whole page (menus, every link with its address, the site's layout), `--screenshots [N]` how it
+  looks, N screens.
 - Markers stand where a page has a picture or tab, `[type · state · name]`:
   `[img #3 · 100x80 3K · alt] img/03-alt.png` (open it or `--ocr 3` for its text), a tab `shown`,
   `hidden, but extracted` or `loads on click, not extracted`.
@@ -69,7 +70,7 @@ python -X utf8 "SKILL_DIR/scripts/readpage.py" URL --allow-external --from 127 -
 | `too_large` | `--download` |
 | `error` | retry later; a cut or damaged file: get it again |
 
-Every status but `ok` has a `reason:` line; `advice:` names the next step. `missing:` and
+Every status but `ok` has a `reason:` line; `advice:`, on any status, names the next step. `missing:` and
 `improve:` name a tool the machine lacks: on the user's yes `readpage.py --setup` installs all
 (~0.5 GB download, no admin), naming what it cannot. Exit code 0: an answer; 2: a wrong
 call.
