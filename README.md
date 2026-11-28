@@ -533,7 +533,7 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (315 rows: 261 fixed, 5 planned, 49 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (316 rows: 261 fixed, 6 planned, 49 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License
