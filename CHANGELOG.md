@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **An ODS's tree holds 100 000 elements, an open row 1 024 cells** (KNOWN-ISSUES 338): the streaming reader built
+  what was open whole until it ended - a row of 800 000 cells took 365 MB, 300 000 named ranges 173 MB, and up to its
+  512 MB of XML some 2.7 GB, with no limit on macOS. Past 1 024 cells a row keeps their text alone, joined to its last
+  cell; past 100 000 elements the tree keeps no more, and says so. The row takes 30 MB, in the same time.
 - **A scan's large page is rendered within 25 million pixels** (KNOWN-ISSUES 337): pages were rendered at 150 dpi
   whatever their size, and a page of 200 × 200 in was 2.7 GB in the read's own process; such a page gets fewer dots
   an inch (an A0 drawing 127).

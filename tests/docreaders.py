@@ -491,6 +491,25 @@ md, info = hostile("stored.ods", "ods", secs=60, wall=120, mb=800)
 check("ods: a sheet of 300 000 cells it stores itself is read whole; the 250 000 are what repeats copy",
       fine(info, 60, 300) and "| 299988 |" in md and "| 299999 |" in md and "cut" not in info.get("note", ""),
       show(info, md))
+# what a sheet's tree holds is bounded, not only what its rows store: an open row was built whole until it ended - one
+# of 800 000 styled cells, 68 MB of XML in a 225 KB file, took 365 MB -, and an element that is no table (named
+# ranges) whole, up to SHEET_BYTES; with no memory limit (macOS) and no clock (--download) GB (KNOWN-ISSUES 338)
+ods("wide-row.ods", ['<table:table table:name="Wide"><table:table-row>'] + [
+    '<table:table-cell table:style-name="ce1" office:value-type="float" office:value="1"/>' * 1000] * 800 + [
+    '<table:table-cell office:value-type="string"><text:p>WIDE-ROW-LAST-CELL</text:p></table:table-cell>'
+    '</table:table-row></table:table>'])
+md, info = hostile("wide-row.ods", "ods", secs=BUDGET, wall=BUDGET + 30, mb=150)
+check("338: a row of 800 000 cells keeps 1 024 of them in the tree, the rest's text joined to its last (it held all: "
+      "365 MB)", fine(info, BUDGET, 100) and "WIDE-ROW-LAST-CELL" in md, show(info, md[-80:]))
+ods("named-ranges.ods", ["<table:named-expressions>"] + [
+    "".join('<table:named-range table:name="R%d" table:base-cell-address="S.A1" table:cell-range-address="S.A1:S.B2"/>'
+            % (k * 1000 + j) for j in range(1000)) for k in range(300)] + [
+    '</table:named-expressions><table:table table:name="After"><table:table-row><table:table-cell office:value-type='
+    '"string"><text:p>AFTER-THE-NAMED-RANGES</text:p></table:table-cell></table:table-row></table:table>'])
+md, info = hostile("named-ranges.ods", "ods", secs=BUDGET, wall=BUDGET + 30, mb=150)
+check("338: 300 000 named ranges before a sheet are held 100 000 at most, the sheet after them read and the rest said "
+      "left out (they were held whole: 173 MB)", fine(info, BUDGET, 120) and "AFTER-THE-NAMED-RANGES" in md
+      and "left out" in info.get("note", ""), show(info, md[-80:]))
 odt("big.odt", "".join("<text:p>%s</text:p>" % ("a word of the long text " * 20) for _k in range(70000)))
 md, info = hostile("big.odt", "odt", secs=60, wall=120, mb=800)
 check("an ODT over its 32 MB is said to be cut at its size limit, not to be XML that breaks",
