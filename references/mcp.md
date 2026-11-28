@@ -78,7 +78,7 @@ sets the size)`, and the call goes on.
 
 | File | Result |
 |---|---|
-| text (`content.md`, `page.md`, `manifest.json`, `raw.html`) | the block that starts at line `from`, inside the same budget, naming the next line. A line longer than a whole answer (a minified `raw.html`) shows its head and says so |
+| text (`content.md`, `page.md`, `manifest.json`, `raw.html`) | the block that starts at line `from`, inside the same budget, naming the next line; the pictures of a `content.md` or `page.md` block are downloaded first, as a CLI continuation's are (a child `readpage.py` reads on from the folder; none for a page whose pictures were denied, KNOWN-ISSUES 296). A line longer than a whole answer (a minified `raw.html`) shows its head and says so |
 | image (`img/03-alt.png`, `raw.jpg`) | a native `image` block and a caption `[WxH size] name` |
 | audio / video / other binary | metadata only (name, type, size); audio is attached only with `READ_PAGE_MCP_MEDIA=audio` |
 
@@ -200,7 +200,8 @@ so images go as blocks, everything else as text with a path.
   will usually disconnect. One protocol era only.
 - A JSON-RPC batch (a top-level array) is not part of 2025-06-18; it is answered with `-32600`
   instead of crashing the loop (0.4.0 fixed a client hang here).
-- Calls at once: every `read_url` runs `readpage.py` in a child process, at most four at a
+- Calls at once: every `read_url` runs `readpage.py` in a child process, and so does a `read` of `content.md` or
+  `page.md` whose block may have a picture with no file yet, at most four calls at a
   time, and its answer goes out whole on one line under a lock; two calls for the same page do not
   write one folder at once (the second waits and gets the cached answer). Threads in one process
   were not an option: `redirect_stdout` is global and caught another call's manifest.

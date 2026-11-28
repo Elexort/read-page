@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **MCP `read` brings the pictures of the block it prints** (KNOWN-ISSUES 296): the call under `read_url`'s `next:`
+  rendered the saved file as it was, so past the first block every marker said `not downloaded: not printed yet` and
+  no file came. `read` of `content.md` or `page.md` now has the CLI read on from the folder first, as a CLI
+  continuation does (its window's pictures downloaded, their markers rewritten), in a thread of its own.
 - **`--chars` is 7 000 at the least, and no line of a text is cut by paging** (KNOWN-ISSUES 295): below about 2 500
   a line longer than the room beside the header and the command was shown in part and `next:` went past its rest (at
   1 000 every ordinary paragraph of an article). Measured: the longest line content.md has (1 998 characters, 6 000

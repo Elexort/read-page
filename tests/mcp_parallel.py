@@ -324,6 +324,14 @@ try:
     p_chars, p_bytes, p_lines = counted(plain["content"])
     check("a long page with no notes: its block is as long as ever (the baseline of what follows)",
           7000 < p_chars <= 7900 and p_bytes <= 9980, "%d chars, %d bytes, %d lines" % (p_chars, p_bytes, p_lines))
+    # read(), the call under read_url's next:, brings its block's pictures as the CLI's next: command does: they said
+    # "not downloaded: not printed yet" as they were printed, and only the first block's came (KNOWN-ISSUES 296)
+    p_next = re.search(r'read\(dir="([^"]+)", file="content\.md", from=(\d+), chars=7900\)', mcp_said(plain))
+    on_p = mcp.tool_read({"dir": p_next.group(1), "file": "content.md", "from": int(p_next.group(2)),
+                          "chars": 7900}) if p_next else {}
+    on_marks = re.findall(r"\[img #\d+ · [^\]]*\]", mcp_said(on_p))
+    check("read(dir, from=next): the pictures of its block come, none says not printed yet",
+          bool(on_marks) and not [m for m in on_marks if "not downloaded" in m], str(on_marks[:2])[:160])
     try:
         mcp.run_cli = with_screens
         busy = mcp.tool_read_url({"url": s.url("/fill"), "inline_images": True, "screenshots": 3, "refresh": True})

@@ -14,7 +14,8 @@ The answer budget lives in answer.py, the download cap and the timeouts in readp
 file never repeats them, so the CLI and the MCP server cannot drift apart.
 
 Stdlib only: no SDK. Logic lives in readpage.py; this file is a thin adapter. Each read_url runs
-readpage.py in a child process, four at a time; notifications/cancelled kills that process tree.
+readpage.py in a child process, and so does a read() whose block has pictures to fetch (window_fetch),
+four calls at a time; notifications/cancelled kills that process tree.
 Which pictures become image blocks is decided in content_blocks. A result is its blocks alone, no
 structuredContent; the blocks of one result fit the text's limits as a client counts them (counted, fitted).
 Never prints anything to stdout except JSON-RPC messages.
@@ -836,6 +837,24 @@ def owned_dir(d):
         return False
 
 
+def window_fetch(d, rel, start, quote, chars):
+    """read() of content.md or page.md: the pictures of the lines it prints come as a CLI continuation's do - the CLI
+    reads on from the folder (--dir, the saved copy), downloads its window's pictures and rewrites their markers; its
+    answer is not used, read() renders its own from the files. They said "not downloaded: not printed yet" as they
+    were printed, and only the first window's came (KNOWN-ISSUES 296). Not for a file of this machine, nor when the
+    read denied its pictures (the CLI's next: carries --deny-images), nor when every picture has its file."""
+    man = readpage.load_manifest(d) or {}
+    url = str((man.get("url") or {}).get("requested") or "")
+    if not url.startswith(("http://", "https://")) or "images" in readpage.SKIP \
+            or (man.get("signals") or {}).get("images_denied"):
+        return
+    if not [e for e in man.get("images") or [] if isinstance(e, dict) and not e.get("file")]:
+        return
+    argv = ["--json", "--dir", d, "--file", rel, "--chars", str(chars)]
+    argv += ["--from=" + quote] if quote else ["--from", str(max(1, start))]
+    run_cli(argv + ["--", url])
+
+
 def tool_read(args):
     # left out and named, as read_url does: an old `offset`, a word for `from`; a typo is the one meant
     known = TOOLS[1]["inputSchema"]["properties"]
@@ -903,6 +922,8 @@ def tool_read(args):
             "" if attached else " · attached only with READ_PAGE_MCP_MEDIA=audio (and a client that renders audio)")))
         return result(blocks)
 
+    if rel in readpage.VIEWS:
+        window_fetch(d, rel, start, quote, chars)               # the pictures of the lines it prints
     try:
         data = open(path, "rb").read()
     except OSError as e:
@@ -1024,9 +1045,10 @@ def main():
         if msg.get("method") == "notifications/cancelled":
             cancel((msg.get("params") or {}).get("requestId"))
             continue
-        if msg.get("method") == "tools/call" and (msg.get("params") or {}).get("name") == "read_url" \
+        if msg.get("method") == "tools/call" and (msg.get("params") or {}).get("name") in ("read_url", "read") \
                 and msg.get("id") is not None:
-            # a page read takes seconds: its own thread, so the next call does not wait for it
+            # a page read takes seconds, and read() starts a child for its pictures (window_fetch): its own thread, so
+            # the next call does not wait for it and a cancellation reaches the child
             t = threading.Thread(target=answer_call, args=(msg,), daemon=True)
             t.start()
             workers = [w for w in workers if w.is_alive()] + [t]
