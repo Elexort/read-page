@@ -8,6 +8,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **An automatic track says its numbers and names may be misheard** (KNOWN-ISSUES 366): a video's answer named
+  speech recognition `subtitles en, automatic` and nothing more, and an agent could not tell a recipe's figure
+  said from misheard; the first line says `subtitles en, automatic: numbers and names may be misheard`.
 - **A PDF table whose numbers group their thousands by a space is laid out** (KNOWN-ISSUES 361): the page test
   took "452 939" for no number, so such a table with no caption and no rulings was not asked of the model and
   stayed one cell a line (IRENA's onshore wind and eight more of its 69 pages). A space, a no-break or a thin one

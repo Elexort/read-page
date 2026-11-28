@@ -375,8 +375,11 @@ as `transcript.vtt` (WEBVTT whatever format the site sent: VTT, SRT, TTML, ASS .
 track: `subtitles en` (a person's), `subtitles fr, automatic` (speech recognition), `subtitles en, automatic, of a dub
 (original audio zh-Hant)` (the recognition of a dubbed video's default audio, which is not the speaker's words: a
 track in the speaker's own language, a human one first, is read before it), `subtitles zh-Hans, machine-translated
-from en` (YouTube's translation, read only when the video has no other track); `content.track`. No captions: the
-page is read as a page (description, comments) and `signals.no_transcript` says why. A video that has not
+from en` (YouTube's translation, read only when the video has no other track); `content.track`. An automatic track
+adds `: numbers and names may be misheard` there (speech recognition's words are what it heard - a model could not
+tell whether a recipe's "0.2 g of active dry yeast" was said or misheard, KNOWN-ISSUES 366); `content.track` keeps
+the name alone. No captions: the page is read as a page (description, comments) and
+`signals.no_transcript` says why. A video that has not
 premiered, a site that refused the request and any other error yt-dlp stopped with are said in its words, with an
 `advice:` (`--refresh` once the video has started or the refusal has passed; [video.md](video.md)). A video URL
 that is itself a file (`.mp4`) is `media_only`; one cut in transit is `error` or `too_large`, with how much arrived,

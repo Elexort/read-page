@@ -363,7 +363,11 @@ def header(manifest, view, total_lines, text_bytes):
             first.append("maybe a fragment: the text is %d%% of the page's words" % min(100, int(round(cover * 100)))
                          if isinstance(cover, (int, float)) else "maybe a fragment")
         if content.get("track"):
-            first.append(str(content["track"]))     # a video's subtitle track: human, automatic or machine-translated
+            # a video's subtitle track: human, automatic or machine-translated. Speech recognition's words are what it
+            # heard: a model could not tell whether a recipe's "0.2 g of active dry yeast" was said or misheard, so an
+            # automatic track says so beside it (KNOWN-ISSUES 366); content.track stays the track's name
+            track = str(content["track"])
+            first.append(track + (": numbers and names may be misheard" if ", automatic" in track else ""))
     stamp = str((m.get("archive") or {}).get("timestamp") or "")
     if stamp:
         first.append("archive copy of %s-%s-%s" % (stamp[:4], stamp[4:6], stamp[6:8]) if len(stamp) >= 8
