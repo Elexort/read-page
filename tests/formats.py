@@ -2084,7 +2084,7 @@ try:
 
     # a PDF cut short ends without its %%EOF: one that does not open was `empty`, "no text in it"; one that opens with
     # no page was a scan with no page to render; one whose first pages open was `ok` with the rest unsaid (KNOWN-ISSUES
-    # 335)
+    # 309)
     try:
         import pymupdf
         made = pymupdf.open()

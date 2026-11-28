@@ -527,16 +527,16 @@ def cut_ods(name, extra):
     return path(name)
 
 
-said339 = []
+said313 = []
 for count in (9999, 999999):
     cut_ods("lost-count.ods", [("meta.xml", '<?xml version="1.0"?><office:document-meta %s><office:meta><meta:document-'
                                 'statistic meta:table-count="%d"/></office:meta></office:document-meta>' % (NS_ODS, count))])
     md, info = hostile("lost-count.ods", "ods+cut", secs=BUDGET, wall=BUDGET + 30, mb=300)
-    said339.append((count, fine(info, 10, 300) and "CUT-SHEET-ROW 299" in md, md.count("[sheet · lost in the cut"),
+    said313.append((count, fine(info, 10, 300) and "CUT-SHEET-ROW 299" in md, md.count("[sheet · lost in the cut"),
                     "[sheet · lost in the cut · 9947 more of the 9999]" in md, show(info, md[-100:])))
 check("313: a cut workbook whose meta.xml says 9 999 sheets names 50 lost sheets and counts the rest, and one that says "
       "999 999 (past LibreOffice's 10 000) is not believed (it made a marker of each: 56 MB)",
-      said339[0][1:4] == (True, 51, True) and said339[1][1:3] == (True, 0), str(said339)[:300])
+      said313[0][1:4] == (True, 51, True) and said313[1][1:3] == (True, 0), str(said313)[:300])
 cut_ods("lost-list.ods", [("settings.xml", '<?xml version="1.0"?><office:document-settings %s><office:settings>%s'
                            '</office:settings></office:document-settings>' % (
                                NS_ODS, '<config:config-item-map-named config:name="Tables">' * 8000))])
