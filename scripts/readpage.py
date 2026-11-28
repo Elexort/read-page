@@ -3675,14 +3675,16 @@ LOADING_WORDS = 150
 
 
 def loading_stub(text):
-    """The loading message the text holds where its content goes, when little else is there; else ""."""
+    """The loading message the text holds where its content goes, when little else is there; else "". The rest is
+    counted as words_of counts it, Chinese and Japanese by character: by spaces a Chinese article of 1 690 characters
+    was 36 words, and a list's `加载中...` after it made it `empty` (KNOWN-ISSUES 290)."""
     if not text or len(text) > 20000:
         return ""
     lines = [ln.strip() for ln in text.split("\n")]
     hits = [ln for ln in lines if LOADING_LINE.match(ln)]
     if not hits:
         return ""
-    rest = sum(len(ln.split()) for ln in lines if not LOADING_LINE.match(ln))
+    rest = words_of("\n".join(ln for ln in lines if not LOADING_LINE.match(ln)))
     return hits[0].strip("#*_ ")[:120] if rest <= LOADING_WORDS else ""
 
 

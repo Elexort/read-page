@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A Chinese or Japanese article with a loading line after it is `ok`** (KNOWN-ISSUES 290): row 259's rule counted
+  the rest of the text by spaces, so a whole Chinese article of 1 690 characters was 36 words and a list's `加载中...`
+  after it made it `empty`, with the sign-in advice. The rest is counted by `words_of`, Chinese and Japanese by
+  character, as every other rule counts it.
 - **`tests/mcp_parallel.py`: four calls at once are told by their pages, not by the clock** (KNOWN-ISSUES 289):
   the check held the four calls' time under 9.5 s, and a macOS Intel runner, where three of them start cold
   processes, took 10.7 s once (8.4 s as a rule). The test server now notes when each page is asked for and
