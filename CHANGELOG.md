@@ -8,6 +8,12 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **An XLSX is read without the size its sheets state, a row up to 1 024 columns, within the converter's time**
+  (KNOWN-ISSUES 330): openpyxl pads every row of a read-only sheet to its `<dimension ref>` and stops at it, so a 4 KB
+  file whose sheet said `A1:XFD1048576` held the read for minutes in its own process (16 384 cells a row, no clock),
+  and a sheet that said `A1` gave its first cell alone. A sheet's size is set aside, a row read up to 1 024 columns
+  (a note says when a sheet says it runs past them), an empty row passed over at C's speed, and the converter's 10 s
+  looked at every 256 rows; where they run out the note names the sheet and the row. The two-row file reads in 2.5 s.
 - **`tests/mcp_parallel.py`: four calls at once are told by their pages, not by the clock** (KNOWN-ISSUES 289):
   the check held the four calls' time under 9.5 s, and a macOS Intel runner, where three of them start cold
   processes, took 10.7 s once (8.4 s as a rule). The test server now notes when each page is asked for and

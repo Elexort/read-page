@@ -5096,6 +5096,51 @@ def docx_para(p, qn):
 
 LOST = tabs.STATE["cut"]               # the state of what a cut archive lost, in its markers
 LOST_MARK = re.compile(r"\[(?:rows|sheet) · %s · [^\]\n]*\]" % re.escape(LOST))
+XLSX_WIDTH = docreaders.WIDTH          # a sheet's columns read (the ODS reader's cap): past it a row's cells are not
+XLSX_CLOCK_ROWS = 256                  # a sheet's rows between two looks at the converter's clock
+
+
+class _XlsxLate(Exception):
+    """The converter's time ran out in a sheet: the rows and the sheets after it are not read."""
+
+
+def _xlsx_lines(ws, until, said):
+    """A read-only sheet's rows as lines of " | "-joined cells, its trailing empty cells left out. openpyxl takes a
+    sheet's size from its <dimension ref> and pads every row to it, a missing row too: a sheet that says A1:XFD1048576
+    made each of its million rows 16 384 cells - minutes in this process, which nothing timed - and one that says less
+    than it holds (A1, which some writers put) was read up to that size (KNOWN-ISSUES 330). So the size is set aside
+    (reset_dimensions), a row is read up to XLSX_WIDTH columns (`said` gets a note when the sheet says it runs past
+    them), a row with no value is passed over at C's speed, and the converter's clock (`until`, a now()) is looked at
+    every XLSX_CLOCK_ROWS rows: past it _XlsxLate, `said` naming the sheet and the row."""
+    try:
+        stated = int(ws.max_column or 0)       # its <dimension>'s last column, before the size is set aside
+    except (TypeError, ValueError, AttributeError):
+        stated = 0
+    reset = getattr(ws, "reset_dimensions", None)
+    if reset is not None:
+        reset()
+    if stated > XLSX_WIDTH:
+        try:
+            from openpyxl.utils import get_column_letter
+            last = get_column_letter(stated)
+        except (ImportError, ValueError):
+            last = str(stated)
+        said.append("sheet %s: its columns past %d are not read (it says it runs to column %s)"
+                    % (ws.title, XLSX_WIDTH, last))
+    n = 0
+    for row in ws.iter_rows(values_only=True, max_col=XLSX_WIDTH):
+        n += 1
+        if until is not None and not n % XLSX_CLOCK_ROWS and now() > until:
+            said.append("the time ran out in sheet %s at its row %d: what comes after it is not read; --download "
+                        "has no time limit" % (ws.title, n))
+            raise _XlsxLate()
+        if row.count(None) == len(row):
+            continue
+        cells = ["" if v is None else str(v) for v in row]
+        while cells and not cells[-1]:
+            cells.pop()
+        if cells:
+            yield " | ".join(cells)
 
 
 def _xlsx_cut(sheets, sheet, out, broke):
@@ -5126,13 +5171,15 @@ def _xlsx_cut(sheets, sheet, out, broke):
             one(ws)                        # a sheet the list does not name (it was lost, and made here)
 
 
-def office_fast(path, sub, broke=None):
+def office_fast(path, sub, broke=None, until=None):
     """The fast path: a library that reads the format directly, no markitdown startup.
 
     The libraries check the file extension, and our download is raw.zip - so feed them bytes.
     What stopped it is in _OFFICE: a member that does not unpack ("damaged"), or the library not
-    installed here ("missing", its name on PyPI). `broke`: what was wrong with the archive (zip_salvage) -
-    a workbook cut short says where it lost its rows and its sheets (_xlsx_cut).
+    installed here ("missing", its name on PyPI); what the reader has to say of what it read, "note".
+    `broke`: what was wrong with the archive (zip_salvage) - a workbook cut short says where it lost
+    its rows and its sheets (_xlsx_cut). `until`: when a workbook's reading stops (a now(); None, no
+    limit), its sheets being read in this process (_xlsx_lines).
     """
     import io
     import zipfile
@@ -5199,15 +5246,23 @@ def office_fast(path, sub, broke=None):
         if sub == "xlsx":
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-            out = []
+            out, said, late = [], [], []
 
             def sheet(ws):
+                if late:
+                    late.append(ws.title)          # the time ran out in a sheet before it
+                    return
                 out.append("## " + ws.title)
-                for row in ws.iter_rows(values_only=True):
-                    cells = ["" if v is None else str(v) for v in row]
-                    if any(cells):
-                        out.append(" | ".join(cells))
+                try:
+                    for line in _xlsx_lines(ws, until, said):
+                        out.append(line)               # (the rows before the time ran out stand)
+                except _XlsxLate:
+                    late.append(ws.title)
             _xlsx_cut(wb.worksheets, sheet, out, broke)
+            if len(late) > 1:
+                said.append("%d sheet(s) after it not read" % (len(late) - 1))
+            if said:
+                _OFFICE["note"] = "; ".join(said)[:400]
             return "\n".join(out)
         if sub == "pptx":
             from pptx import Presentation
@@ -7185,7 +7240,9 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
     sub = zip_subtype(path) if kind == "zip" else ""
     secs = budget.cap(CONVERTER_TIMEOUT, floor=1.0)
     if sub in ("docx", "xlsx", "pptx"):
-        fast = office_fast(path, sub, state["broke"])
+        # a workbook is read in this process: the converter's seconds bound it (KNOWN-ISSUES 330)
+        until = None if budget.unlimited() else now() + secs
+        fast = office_fast(path, sub, state["broke"], until)
         if len(fast.strip()) <= 5 and not state["broke"] and _OFFICE.get("damaged"):
             # a member python-docx, python-pptx or openpyxl met does not unpack: the ones that do
             dest = os.path.join(workdir, "_mended-%s.zip" % hashlib.sha1(
@@ -7211,9 +7268,9 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 if not info["whole"]:
                     return "", ""
                 path = dest
-                fast = office_fast(path, sub, info)
+                fast = office_fast(path, sub, info, until)
         if len(fast.strip()) > 5:
-            return fast, ""
+            return fast, _OFFICE.get("note") or ""          # a sheet's columns past the cap, its time run out
     if kind == "rtf" or sub in ("odt", "ods", "odp"):
         # our reader's answer stands: a reader that breaks gives its plain text itself, in its own
         # process (the old plain readers here read a part whole, or in quadratic time; a sheet or a

@@ -1930,6 +1930,72 @@ try:
     except ImportError:
         check.skip("254: a cut XLSX's shared strings", "openpyxl is not installed here")
 
+    # openpyxl's read-only sheet takes its size from <dimension ref> and pads every row to it, a missing row too: a
+    # sheet that says A1:XFD1048576 made each of a million rows 16 384 cells, minutes in the read's own process with
+    # no clock; one that says less than it holds was read up to that size (KNOWN-ISSUES 330)
+    def raw_xlsx(dim, rows):
+        """A workbook of one sheet, its rows [(row number, [(column letters, text)])] as inline strings, under
+        <dimension ref=dim> (none for "")."""
+        main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        sheet_xml = "".join('<row r="%d">%s</row>' % (r, "".join(
+            '<c r="%s%d" t="inlineStr"><is><t>%s</t></is></c>' % (col, r, t) for col, t in cells)) for r, cells in rows)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/'
+                       'package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxml'
+                       'formats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
+                       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.'
+                       'spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType='
+                       '"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
+            z.writestr("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/'
+                       'package/2006/relationships"><Relationship Id="rId1" Type="%s/officeDocument" Target="xl/'
+                       'workbook.xml"/></Relationships>' % rel)
+            z.writestr("xl/workbook.xml", '<?xml version="1.0"?><workbook xmlns="%s" xmlns:r="%s"><sheets><sheet '
+                       'name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>' % (main, rel))
+            z.writestr("xl/_rels/workbook.xml.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.'
+                       'openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="%s/worksheet" '
+                       'Target="worksheets/sheet1.xml"/></Relationships>' % rel)
+            z.writestr("xl/worksheets/sheet1.xml", '<?xml version="1.0"?><worksheet xmlns="%s">%s<sheetData>%s'
+                       '</sheetData></worksheet>' % (main, '<dimension ref="%s"/>' % dim if dim else "", sheet_xml))
+        return buf.getvalue()
+
+    try:
+        import openpyxl  # noqa: F401
+        p = os.path.join(tmpc, "far.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(raw_xlsx("A1:XFD1048576", [(1, [("A", "FAR-FIRST-CELL"), ("B", "beside it")]),
+                                                (1048576, [("XFD", "FAR-LAST-CELL")])]))
+        name = ("330: an XLSX whose sheet says A1:XFD1048576, two rows a million apart, reads in seconds and says its "
+                "columns past 1024 are not read (it padded every row to 16 384 cells: minutes)")
+        try:
+            r = run_read(p, env=env, timeout=90)
+            note = str((r.manifest.get("signals") or {}).get("document_note") or "")
+            check(name, r.manifest.get("status") == "ok" and r.seconds < 30 and "FAR-FIRST-CELL | beside it" in
+                  r.file("content.md") and "past 1024 are not read" in note and "XFD" in note,
+                  "%.1f s, %s | %s" % (r.seconds, note[:160], said(r)))
+        except subprocess.TimeoutExpired:
+            check(name, False, "still reading at 90 s")
+        p = os.path.join(tmpc, "small-dimension.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(raw_xlsx("A1", [(r, [(c, "R%dC%d" % (r, k)) for k, c in enumerate("ABCDE")]) for r in range(1, 6)]))
+        r = run_read(p, env=env)
+        text = r.file("content.md")
+        check("330: a sheet that says it is A1 (some writers put that) reads every row and column it holds (openpyxl "
+              "read the one cell its size said)", "R1C0 | R1C1 | R1C2 | R1C3 | R1C4" in text
+              and "R5C0 | R5C1 | R5C2 | R5C3 | R5C4" in text, said(r))
+        p = os.path.join(tmpc, "long.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(raw_xlsx("A1:A300000", [(r, [("A", "LONG-ROW-%d" % r)]) for r in range(1, 300001)]))
+        r = run_read(p, env=dict(env, READ_PAGE_TEST_DEADLINE="2"))
+        text, note = r.file("content.md"), str((r.manifest.get("signals") or {}).get("document_note") or "")
+        check("330: a workbook its time does not hold is read up to a row and says where the time ran out (no clock "
+              "looked at it)", r.manifest.get("status") == "ok" and "LONG-ROW-1\n" in text + "\n"
+              and "LONG-ROW-300000" not in text and "the time ran out in sheet Data at its row" in note,
+              "%.1f s, %s | %s" % (r.seconds, note[:160], said(r)))
+    except ImportError:
+        check.skip("330: an XLSX's stated size", "openpyxl is not installed here")
+
     def excel_ods(sheets, before=(), head=""):
         """An ODS in Excel's order: content.xml right after the styles, before the rest; `before`: members
         [(name, text)] written ahead of content.xml, as LibreOffice writes its settings.xml and meta.xml;
