@@ -4223,6 +4223,27 @@ attempt("a proxy a script gives (Windows' setup script, a PAC file) is said wher
         lambda: (not ok362 and "comes from a script" in note362 and "HTTPS_PROXY" in note362
                  and "wpad.corp.example" in note362 and "comes from a script" not in note362b, note362[-200:]))
 
+# ---------------------------------------------------------------- the hop's start-up file (row 363)
+# The hop's start-up file had a name by the pid alone, in TMPDIR, TEMP or /tmp: in a shared /tmp another user's file of
+# that name made in advance was opened, the child could not remove it (the sticky bit), and the parent took a read that
+# worked for a start that failed - and read again in the machine's Python.
+saved363 = os.environ.get("READ_PAGE_HANDSHAKE")
+try:
+    p363a, p363b = ownenv._handshake_file(), ownenv._handshake_file()
+finally:
+    if saved363 is None:
+        os.environ.pop("READ_PAGE_HANDSHAKE", None)
+    else:
+        os.environ["READ_PAGE_HANDSHAKE"] = saved363
+made363 = [os.path.isfile(p_) for p_ in (p363a, p363b) if p_]
+for p_ in (p363a, p363b):
+    if p_ and os.path.exists(p_):
+        os.unlink(p_)
+attempt("the hop's start-up file is a name of its own, made new: not the pid's alone (another user's file of that name "
+        "was opened), two never the same",
+        lambda: (p363a and p363b and p363a != p363b and made363 == [True, True]
+                 and os.path.basename(p363a) != "read-page-start-%d" % os.getpid(), "%s %s" % (p363a, p363b)))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)

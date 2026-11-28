@@ -60,6 +60,9 @@
 - **A proxy that a setup script gives is said** (KNOWN-ISSUES 362): nothing of `--setup` reads a Windows PAC file, and
   behind one the network step said only that pypi.org did not answer; it now says the proxy comes from a script, and to
   set `HTTPS_PROXY`.
+- **The hop's start-up file has a name of its own** (KNOWN-ISSUES 363): `read-page-start-<pid>` in a shared `/tmp` could
+  be another user's file made in advance, which the child could not remove: a read that worked was taken for a failed
+  start and read again. The name is the pid and random digits, made new (`O_EXCL`, 0600).
 
 ## 0.5.0 - 2026-11-28
 

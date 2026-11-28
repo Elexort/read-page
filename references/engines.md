@@ -726,7 +726,8 @@ full reads of 8 local corpus pages were p50 1.38 -> 1.49 s there).
 `READ_PAGE_SKIP=env` keeps a run in the Python it was started with; a broken environment (its
 Python gone) is skipped with the reason in `--caps`. A Python that is there, starts and fails (an
 antivirus quarantined a DLL it needs, a damaged standard library) is found out by a start-up
-handshake: the parent makes a file, the child removes it as its first act, and a child that ends with
+handshake: the parent makes a file (a name of its own, made new - one by the pid alone, in a shared `/tmp`, could be
+another user's made in advance: KNOWN-ISSUES 363), the child removes it as its first act, and a child that ends with
 the file still there never reached the read - the read then runs in the machine's Python, the answer
 has an `environment:` line (`signals.env_failed`) and `--caps` says why. On POSIX, where `exec` leaves
 nothing to fall back from, the first run of each build is a child (`setup.started` in the folder
