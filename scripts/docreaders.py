@@ -60,6 +60,8 @@ CELLS = 250000                     # one table's grid, rows x columns, its spans
 DOC_CELLS = 1000000                # the grids of all of one document's tables; of a workbook, its sheets' copies
 SHEET_CELLS = 2000000              # one sheet's grid, rows x columns: what it stores itself, a cell a time
 DOC_SHEET_CELLS = 4000000          # the grids of all of one workbook's sheets
+HELD = 100000                      # elements a spreadsheet's tree holds at once past its styles: its open row's cells
+                                   # (WIDTH of them, the rest's text kept apart) and its other parts (_Body)
 SHEET_BYTES = 512 * 1024 * 1024    # a spreadsheet's content.xml, read as it unpacks and its rows dropped as
                                    # they are read (_Body): it costs time, not memory
 TABLE_BYTES = PART_BYTES           # the text of one table's cells, a repeated cell's as often as it is repeated
@@ -119,6 +121,8 @@ class _Clock(object):
 
 LOST = "lost in the cut"     # tabs.STATE["cut"], which this module, the standard library alone, does not import
 SHEET_ROWS = 1048576         # a sheet's rows at most: past it no row is lost
+LOST_SHEETS = 50             # a cut workbook's lost sheets named one by one, then how many more (_cut_lost)
+SHEETS_AT_MOST = 10000       # a workbook's sheets at most (LibreOffice's own limit): a count past it is not believed
 
 
 def lost_marker(kind, name, *props):
@@ -2401,7 +2405,8 @@ class _Grid(object):
                 else:
                     self.row(r)
 
-    def row(self, r):
+    def row(self, r, extra=None):
+        """One row. `extra`: the text of a sheet row's cells past WIDTH, which _Body did not keep in the tree."""
         clock = self.odt.clock
         if self.cut:
             return
@@ -2428,6 +2433,13 @@ class _Grid(object):
             if text:
                 filled += n
                 copies += n - 1
+        if extra:
+            joined = " ".join(extra)                 # its cells past WIDTH join its last one, as above
+            if cells:
+                cells[-1] = (cells[-1] + " " + joined).strip()
+            else:
+                cells.append(joined)
+            size += len(joined) + 1
         while cells and not cells[-1]:
             cells.pop()
         if not cells:
@@ -2506,12 +2518,12 @@ class _Sheet(object):
         elif tag == O_SHAPES:
             self.shapes.extend(self.odt.blocks_of(list(ch), 2))
 
-    def row(self, r):
+    def row(self, r, extra=None):
         self.at += min(max(_int(r.get(_o("table:number-rows-repeated")), 1), 1), SHEET_ROWS)
         if self.cache():
             return
         try:
-            self.grid.row(r)
+            self.grid.row(r, extra)
         except (Late, MemoryError):
             raise
         except Exception as e:                                 # noqa: BLE001  (this row, not the sheet)
@@ -2531,11 +2543,33 @@ class _Body(ET.TreeBuilder):
         ET.TreeBuilder.__init__(self)
         self.odt, self.stack, self.sheet, self.sheets, self.root = odt, [], None, False, None
         self.begun = []                        # the sheets begun: a cut names the others as lost (_cut_lost)
+        # what the tree holds now, and each open element's count with what ended under it (0: not in the tree); past
+        # HELD a spreadsheet's tree keeps no more (KNOWN-ISSUES 312): what was open was built whole until it ended - a
+        # row of 800 000 cells, 68 MB of XML in a 225 KB file, took 365 MB, and up to SHEET_BYTES 2.4-2.7 GB
+        self.held, self.sizes, self.detached = 0, [], 0
+        # the open row's cells so far, repeats counted, and the text of those past WIDTH, which leave the tree
+        self.row_cells, self.overflow, self.overflow_bytes = 0, [], 0
+
+    def _sheet_row(self, k):
+        """Is stack[k] a row of the sheet being read (under its table, in row groups alone)?"""
+        st = self.stack
+        return (self.sheet is not None and k >= 4 and st[k].tag == O_ROW and k - 4 <= DEPTH
+                and all(e.tag in O_ROWS for e in st[4:k]))
 
     def start(self, tag, attrs):
         el = ET.TreeBuilder.start(self, tag, attrs)
         st = self.stack
         st.append(el)
+        parent_out = len(self.sizes) > 0 and self.sizes[-1] == 0
+        self.sizes.append(1)
+        if self.sheets:                        # (what comes before the body - its styles - is held, never counted)
+            if len(st) > 1 and (parent_out or self.held >= HELD):
+                del st[-2][-1]                 # past what the tree holds: neither it nor what it holds is kept (it is
+                                               # its parent's last child: remove() searched 100 000 for each)
+                self.sizes[-1] = 0
+                self.detached += 1
+            else:
+                self.held += 1
         if len(st) == 1:
             self.root = el
         elif len(st) == 3 and tag == O_SHEET_BODY and st[1].tag == O_BODY:
@@ -2543,25 +2577,54 @@ class _Body(ET.TreeBuilder):
         elif len(st) == 4 and self.sheets and tag == O_TABLE and st[2].tag == O_SHEET_BODY:
             self.sheet = _Sheet(self.odt, el)
             self.begun.append(self.sheet)
+        elif tag == O_ROW and self._sheet_row(len(st) - 1):
+            self.row_cells, self.overflow, self.overflow_bytes = 0, [], 0
         return el
 
     def end(self, tag):
         el = ET.TreeBuilder.end(self, tag)
         st = self.stack
         st.pop()
+        size = self.sizes.pop()
         n = len(st)
+        drop = False
         if n == 1 and tag in O_STYLE_BOXES:
             self.odt.s.load_box(el)            # content.xml's own styles, before its body
         elif self.sheets and n == 3:
             if self.sheet is not None and el is self.sheet.el:
                 self.sheet_done()
-            st[2].remove(el)                   # a sheet read, or the workbook's other parts
-        elif self.sheet is not None and n == 4:
+            drop = True                        # a sheet read, or the workbook's other parts
+        elif self.sheet is not None and n == 4 and tag != O_ROW:
             self.sheet.child(el)
-            st[3].remove(el)
-        elif self.sheet is not None and tag == O_ROW and n - 4 <= DEPTH and all(e.tag in O_ROWS for e in st[4:]):
-            self.sheet.row(el)
-            st[-1].remove(el)
+            drop = True
+        elif tag == O_ROW and self.sheet is not None and n >= 4 and n - 4 <= DEPTH and all(
+                e.tag in O_ROWS for e in st[4:]):
+            self.sheet.row(el, self.overflow)          # (a row of the table's own, or in its row groups)
+            self.overflow, self.overflow_bytes = [], 0
+            drop = True
+        elif tag in (O_CELL, O_COVERED) and n >= 5 and self._sheet_row(n - 1):
+            # a cell of the sheet's open row: past WIDTH columns its text is kept and the cell leaves the tree
+            if self.row_cells >= WIDTH:
+                text = self.odt.cell(el, 2, self.sheet) if tag == O_CELL else ""
+                if text and self.overflow_bytes < TABLE_BYTES:
+                    self.overflow.append(text)
+                    self.overflow_bytes += len(text) + 1
+                elif text:
+                    self.odt.clock.cut("a row's cells past %d columns cut at %d MB of their text" % (
+                        WIDTH, TABLE_BYTES >> 20))
+                drop = True
+            else:
+                self.row_cells += min(max(_int(el.get(_o("table:number-columns-repeated")), 1), 1), 1 << 62)
+        if drop:
+            if size:
+                parent = st[-1]
+                if len(parent) and parent[-1] is el:
+                    del parent[-1]             # an element that ends is its parent's last child: no search
+                else:
+                    parent.remove(el)
+                self.held -= size
+        elif self.sizes and size:
+            self.sizes[-1] += size             # (what ended under an element stays in the tree with it)
         return el
 
     def sheet_done(self, finishing=False):
@@ -2593,7 +2656,7 @@ class _Body(ET.TreeBuilder):
             if k is not None and st[k].tag == O_ROW:
                 self.sheet.open_at = self.sheet.at + 1             # its first cells stand; the rest is lost
                 try:
-                    self.sheet.row(st[k])
+                    self.sheet.row(st[k], self.overflow)
                 except Late:
                     pass                       # the time is up: the rows before it stand
         return root
@@ -2690,19 +2753,28 @@ def _cut_lost(zf, b, sheet):
     settings, meta = zf.read("settings.xml", 16 << 20), zf.read("meta.xml", 1 << 20)
     names = []
     if settings:
-        box = re.search(rb'config:name="Tables"\s*>(.*?)</config:config-item-map-named>', settings, re.S)
-        names = [html.unescape(n.decode("utf-8", "replace"))
-                 for n in re.findall(rb'<config:config-item-map-entry\s+config:name="([^"]*)"', box.group(1))] \
-            if box else []
+        # the list's opening found once and its end once: a pattern that took what lies between them scanned the rest
+        # of the file again from each opening with no end - 10.7 s for 398 KB, quadratic, and the readers' process
+        # was stopped with the workbook's text (KNOWN-ISSUES 313)
+        start = re.search(rb'config:name="Tables"\s*>', settings)
+        end = settings.find(b"</config:config-item-map-named>", start.end()) if start else -1
+        names = [html.unescape(n.decode("utf-8", "replace")) for n in re.findall(
+            rb'<config:config-item-map-entry\s+config:name="([^"]*)"', settings[start.end():end])] if end >= 0 else []
     seen = set(s.name for s in b.begun)
     gone = [n for n in names if n not in seen]
     # settings.xml lists the sheets by name, not in the workbook's order: they all follow the last sheet that arrived,
-    # and among themselves they have no order the file knows - said, when there are several
-    out.extend(lost_marker("sheet", n, *(("order unknown",) if len(gone) > 1 else ())) for n in gone)
+    # and among themselves they have no order the file knows - said, when there are several. LOST_SHEETS of them are
+    # named, then how many more: a file's list made a marker of each, as many as it said (KNOWN-ISSUES 313)
+    out.extend(lost_marker("sheet", n, *(("order unknown",) if len(gone) > 1 else ())) for n in gone[:LOST_SHEETS])
+    if len(gone) > LOST_SHEETS:
+        out.append(lost_marker("sheet", "", "%d more" % (len(gone) - LOST_SHEETS)))
     count = re.search(rb'meta:table-count="(\d{1,6})"', meta or b"")
-    if count and not names:
+    if count and not names and int(count.group(1)) <= SHEETS_AT_MOST:
         total = int(count.group(1))           # how many, not which: each by its place
-        out.extend(lost_marker("sheet", "the sheet %d of %d" % (k, total)) for k in range(len(begun) + 1, total + 1))
+        lost = list(range(len(begun) + 1, total + 1))
+        out.extend(lost_marker("sheet", "the sheet %d of %d" % (k, total)) for k in lost[:LOST_SHEETS])
+        if len(lost) > LOST_SHEETS:
+            out.append(lost_marker("sheet", "", "%d more of the %d" % (len(lost) - LOST_SHEETS, total)))
     return out
 
 
@@ -2764,6 +2836,8 @@ def odt_md(path, until=None, finish=None, cut=False):
             if cut and why.startswith("its XML breaks") and not late and spreadsheet:
                 # a spreadsheet cut before its first sheet began (LibreOffice writes its styles first): every sheet lost
                 md = "\n\n".join(x for x in [md] + _cut_lost(zf, b, None) if x)
+        if b.detached:
+            clock.cut("%d element(s) past the %d a workbook's tree holds at once left out" % (b.detached, HELD))
         broke = ""
         if odt.broke:
             broke = "%d element(s) could not be read and were left out (%s)" % (

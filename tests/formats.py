@@ -956,6 +956,85 @@ try:
                   "every page named", r_starts[0] <= 3 and info.get("asked") == 0
                   and info.get("left") == [1, 2, 3, 4, 5, 6] and "ended" in (info.get("error") or "")
                   and info.get("secs", 99) < 6, "%d starts %s" % (r_starts[0], info))
+            # KNOWN-ISSUES 315: the read's end closed its model processes one after another, each given 2 s to end; one
+            # still loading its model reads its requests only after that, so each such process held the exit 2 s
+            os.environ["RP_STUB_LOAD_SLEEP"] = "8"
+            loading = [w for w in (mod3.tables_start() for _ in range(3)) if w is not None]
+            t_close = time.time()
+            mod3.tables_close()
+            took = time.time() - t_close
+            os.environ.pop("RP_STUB_LOAD_SLEEP", None)
+            check("315: the read's end closes three model processes still loading in one wait, not 2 s one after "
+                  "another", len(loading) == 3 and took < 3.5 and all(w.p.poll() is not None for w in loading)
+                  and not mod3._TABLES["pool"], "%.1f s, %s" % (took, [w.p.poll() for w in loading]))
+            # KNOWN-ISSUES 316: the note knew a process by its pid alone - Windows soon gives a dead read's pid to
+            # another process, and a hold of 512 MB lived as long as that one -; a replace a scanner refused lost the
+            # update at once and left its .tmp
+            note_path = os.path.join(mod3.cache_root(), mod3.TABLES_NOTE + ".json")
+            started = getattr(mod3.hostmem, "started", None)          # (an API the old code lacks fails the check)
+            mine = started(os.getpid()) if started else None
+            if started is not None and mine is None:
+                check.skip("316: a pid another process got", "the OS gives no process start here")
+            else:
+                with open(note_path, "w", encoding="utf-8") as fh:
+                    json.dump([{"pid": os.getpid(), "read": os.getpid(), "pid_at": (mine or 0) + 1,
+                                "read_at": (mine or 0) + 1, "ram": 1 << 30, "commit": 1 << 30, "said": False,
+                                "hold": True}], fh)
+                left = mod3.tables_note()
+                check("316: a note's entry whose pid now belongs to a process that started later is dropped (it was "
+                      "kept, 1 GB counted against every read)", started is not None and left == [], str(left)[:160])
+            refused, real_replace = [0], os.replace
+
+            def refusing(src, dst):
+                if refused[0] < 3:
+                    refused[0] += 1
+                    raise PermissionError(13, "the file is held by another process")
+                return real_replace(src, dst)
+            mod3.os.replace = refusing
+            try:
+                mod3.tables_note(lambda entries: entries.append({"pid": os.getpid(), "read": os.getpid(), "pid_at": mine,
+                                                                 "read_at": mine, "ram": 1, "commit": 1, "said": True}))
+            finally:
+                mod3.os.replace = real_replace
+            with open(note_path, encoding="utf-8") as fh:
+                kept = json.load(fh)
+            tmps = [n for n in os.listdir(os.path.dirname(note_path)) if n.startswith(mod3.TABLES_NOTE) and n.endswith(".tmp")]
+            check("316: a note's replace refused three times (a scanner that holds the file) is tried again, and no .tmp "
+                  "stays (the update was lost, its .tmp left)", len(kept) == 1 and not tmps, "%s %s" % (kept, tmps))
+            mod3.tables_note(lambda entries: entries.__setitem__(slice(None), []))
+            # KNOWN-ISSUES 317: a Windows job's limit on each process was not read: under one smaller than a model
+            # process takes, every process died at its load
+            os.environ["READ_PAGE_TEST_MEMORY"] = json.dumps({"phys": 64 << 30, "commit": 64 << 30, "per": 100 << 20})
+            r_starts, real_start = [0], mod3.tables_start
+
+            def counting_start2(*a, **kw):
+                r_starts[0] += 1
+                return real_start(*a, **kw)
+            mod3.tables_start = counting_start2
+            try:
+                mod3.tables_reset()
+                info = mod3.pdf_tables(many, d3, [p.get_text() for p in d3])
+            finally:
+                mod3.tables_start = real_start
+                mod3.tables_close(kill=True)
+                os.environ.pop("READ_PAGE_TEST_MEMORY", None)
+            check("317: a job that holds each process to 100 MB starts no model process, and the pages are named with "
+                  "why (each process died at its load)", r_starts[0] == 0 and not info.get("asked")
+                  and info.get("left") == [1, 2, 3] and "a job holds each process" in (info.get("error") or ""),
+                  "%d starts %s" % (r_starts[0], info))
+            if os.name == "nt":
+                code = ("import json, sys; sys.path.insert(0, %r); import docreaders, hostmem; "
+                        "held = docreaders._job_limit(300 << 20); print(json.dumps([held, hostmem.free_memory()]))"
+                        % os.path.dirname(SCRIPT))
+                child = subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True, timeout=60)
+                try:
+                    held, seen = json.loads(child.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
+                except (ValueError, IndexError):
+                    held, seen = None, {"out": child.stderr.decode("utf-8", "replace")[-160:]}
+                check("317: a process in a job with a limit on each process reads that limit (it was not read)",
+                      held is True and seen.get("per") == 300 << 20, str(seen)[:200])
+            else:
+                check.skip("317: a Windows job's limit on each process", "Windows only")
             for k in ("RP_STUB_SLEEP", "READ_PAGE_TEST_MEMORY", "READ_PAGE_TEST_CPUS"):
                 os.environ.pop(k, None)
             os.environ["RP_STUB_NOLOAD"] = "1"
@@ -1935,6 +2014,206 @@ try:
               heads == ["## First", "[sheet · lost in the cut · Second]", "## Third", "## Fourth"], str(heads))
     except ImportError:
         check.skip("254: a cut XLSX's shared strings", "openpyxl is not installed here")
+
+    # openpyxl's read-only sheet takes its size from <dimension ref> and pads every row to it, a missing row too: a
+    # sheet that says A1:XFD1048576 made each of a million rows 16 384 cells, minutes in the read's own process with
+    # no clock; one that says less than it holds was read up to that size (KNOWN-ISSUES 304)
+    def raw_xlsx(dim, rows):
+        """A workbook of one sheet, its rows [(row number, [(column letters, text)])] as inline strings, under
+        <dimension ref=dim> (none for "")."""
+        main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+        sheet_xml = "".join('<row r="%d">%s</row>' % (r, "".join(
+            '<c r="%s%d" t="inlineStr"><is><t>%s</t></is></c>' % (col, r, t) for col, t in cells)) for r, cells in rows)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/'
+                       'package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxml'
+                       'formats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>'
+                       '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.'
+                       'spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType='
+                       '"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
+            z.writestr("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/'
+                       'package/2006/relationships"><Relationship Id="rId1" Type="%s/officeDocument" Target="xl/'
+                       'workbook.xml"/></Relationships>' % rel)
+            z.writestr("xl/workbook.xml", '<?xml version="1.0"?><workbook xmlns="%s" xmlns:r="%s"><sheets><sheet '
+                       'name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>' % (main, rel))
+            z.writestr("xl/_rels/workbook.xml.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.'
+                       'openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="%s/worksheet" '
+                       'Target="worksheets/sheet1.xml"/></Relationships>' % rel)
+            z.writestr("xl/worksheets/sheet1.xml", '<?xml version="1.0"?><worksheet xmlns="%s">%s<sheetData>%s'
+                       '</sheetData></worksheet>' % (main, '<dimension ref="%s"/>' % dim if dim else "", sheet_xml))
+        return buf.getvalue()
+
+    try:
+        import openpyxl  # noqa: F401
+        p = os.path.join(tmpc, "far.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(raw_xlsx("A1:XFD1048576", [(1, [("A", "FAR-FIRST-CELL"), ("B", "beside it")]),
+                                                (1048576, [("XFD", "FAR-LAST-CELL")])]))
+        name = ("304: an XLSX whose sheet says A1:XFD1048576, two rows a million apart, reads in seconds, the far cell "
+                "joined to its row's last and said (it padded every row to 16 384 cells: minutes)")
+        try:
+            r = run_read(p, env=env, timeout=90)
+            note = str((r.manifest.get("signals") or {}).get("document_note") or "")
+            check(name, r.manifest.get("status") == "ok" and r.seconds < 30 and "FAR-FIRST-CELL | beside it" in
+                  r.file("content.md") and r.file("content.md").rstrip().endswith("| FAR-LAST-CELL")
+                  and "past column 1024 of 1 row(s) joined" in note,
+                  "%.1f s, %s | %s" % (r.seconds, note[:160], said(r)))
+        except subprocess.TimeoutExpired:
+            check(name, False, "still reading at 90 s")
+        p = os.path.join(tmpc, "small-dimension.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(raw_xlsx("A1", [(r, [(c, "R%dC%d" % (r, k)) for k, c in enumerate("ABCDE")]) for r in range(1, 6)]))
+        r = run_read(p, env=env)
+        text = r.file("content.md")
+        check("304: a sheet that says it is A1 (some writers put that) reads every row and column it holds (openpyxl "
+              "read the one cell its size said)", "R1C0 | R1C1 | R1C2 | R1C3 | R1C4" in text
+              and "R5C0 | R5C1 | R5C2 | R5C3 | R5C4" in text, said(r))
+        p = os.path.join(tmpc, "long.xlsx")
+        with open(p, "wb") as fh:
+            fh.write(raw_xlsx("A1:A300000", [(r, [("A", "LONG-ROW-%d" % r)]) for r in range(1, 300001)]))
+        r = run_read(p, env=dict(env, READ_PAGE_TEST_DEADLINE="2"))
+        text, note = r.file("content.md"), str((r.manifest.get("signals") or {}).get("document_note") or "")
+        check("304: a workbook its time does not hold is read up to a row and says where the time ran out (no clock "
+              "looked at it)", r.manifest.get("status") == "ok" and "LONG-ROW-1\n" in text + "\n"
+              and "LONG-ROW-300000" not in text and "the time ran out in sheet Data at its row" in note,
+              "%.1f s, %s | %s" % (r.seconds, note[:160], said(r)))
+    except ImportError:
+        check.skip("304: an XLSX's stated size", "openpyxl is not installed here")
+
+    # a PDF cut short ends without its %%EOF: one that does not open was `empty`, "no text in it"; one that opens with
+    # no page was a scan with no page to render; one whose first pages open was `ok` with the rest unsaid (KNOWN-ISSUES
+    # 309)
+    try:
+        import pymupdf
+        made = pymupdf.open()
+        for n in range(8):
+            made.new_page().insert_textbox((72, 72, 520, 760), "PDF-PAGE-%d-FACT %s" % (n + 1, EN * 12), fontsize=10)
+        plain_pdf, streams_pdf = made.tobytes(garbage=3, deflate=True), made.tobytes(garbage=3, deflate=True, use_objstms=1)
+        made.close()
+        for label, data in (("that does not open (its first 200 bytes)", plain_pdf[:200]),
+                            ("whose objects are in streams, cut at half (it opens with no page)",
+                             streams_pdf[:len(streams_pdf) // 2])):
+            p = os.path.join(tmpc, "cut-%d.pdf" % len(data))
+            with open(p, "wb") as fh:
+                fh.write(data)
+            r = run_read(p, env=env)
+            sig = (r.manifest.get("signals") or {}).get("broken_pdf") or {}
+            check("309: a PDF %s is an error that says it is cut and asks for a whole copy (it was `empty`, \"no text in "
+                  "it\", or a scan)" % label, r.manifest.get("status") == "error" and sig.get("how") == "cut"
+                  and sig.get("pages") == 0 and "a whole copy of the file is needed" in (r.manifest.get("advice") or "")
+                  and "text layer" not in json.dumps(r.manifest.get("missing") or []), said(r))
+        p = os.path.join(tmpc, "cut-half.pdf")
+        with open(p, "wb") as fh:
+            fh.write(plain_pdf[:len(plain_pdf) // 2])
+        r = run_read(p, env=env)
+        sig = (r.manifest.get("signals") or {}).get("broken_pdf") or {}
+        check("309: a PDF cut at half whose pages open keeps what they hold, `ok`, and says it is cut (it said nothing)",
+              r.manifest.get("status") == "ok" and "PDF-PAGE-1-FACT" in r.file("content.md") and sig.get("how") == "cut"
+              and sig.get("pages") == 8 and "the file is needed for the rest" in (r.manifest.get("advice") or ""), said(r))
+        p = os.path.join(tmpc, "whole.pdf")
+        with open(p, "wb") as fh:
+            fh.write(plain_pdf)
+        r = run_read(p, env=env)
+        check("309: a whole PDF says nothing of a cut", r.manifest.get("status") == "ok" and "PDF-PAGE-8-FACT" in
+              r.file("content.md") and not (r.manifest.get("signals") or {}).get("broken_pdf"), said(r))
+    except ImportError:
+        check.skip("309: a cut PDF", "pymupdf is not installed here")
+
+    # MuPDF writes its errors to file descriptor 1: a damaged PDF's "MuPDF error: ..." stood before the answer's first
+    # line, and `--json` did not parse; the MCP server's stdout is its protocol, and an SVG with a broken picture made
+    # lines there that are no JSON-RPC (KNOWN-ISSUES 310). Sent to stderr they were lines a harness shows with the
+    # answer: in the read's stderr log (where file descriptor 2 goes while a page is read), on stderr itself with
+    # READ_PAGE_TRACE. A line of MuPDF's is one PyMuPDF prefixed ("MuPDF error: ...") or one of what MuPDF said
+    try:
+        import pymupdf  # noqa: F401
+        p = os.path.join(tmpc, "complains.pdf")
+        with open(p, "wb") as fh:
+            fh.write(plain_pdf[:len(plain_pdf) // 2])
+        r = run_read(p, env=env)
+        first = r.text.split("\n", 1)[0]
+        try:
+            parsed = json.loads(run_read(p, "--json", env=env).text)
+        except ValueError:
+            parsed = None
+        check("310: a PDF MuPDF complains of: the answer's first line is its header, and --json parses (MuPDF's error "
+              "stood before them)", first.startswith("read-page · ") and isinstance(parsed, dict), repr(first[:90]))
+        log_p, held = os.path.join(r.root, "cache", "stderr.log"), ""
+        if os.path.isfile(log_p):
+            with open(log_p, encoding="utf-8", errors="replace") as fh:
+                held = fh.read()
+        rt = run_read(p, env=dict(env, READ_PAGE_TRACE="1"))
+        lines = rt.err.decode("utf-8", "replace").splitlines()
+        traced = [x.split(" said=", 1)[1] for x in lines if x.startswith("RP_LOG event=pdf.mupdf ") and " said=" in x]
+        words = [w.strip() for w in (traced[0].split(" | ") if traced else []) if len(w.strip()) >= 12]
+        loud = [x for x in held.splitlines() + r.err.decode("utf-8", "replace").splitlines() + lines
+                if not x.startswith("RP_LOG") and (x.lstrip().startswith("MuPDF") or any(w in x for w in words))]
+        check("310: what MuPDF says of that PDF reaches no stderr either - not the read's stderr log, not stderr with "
+              "READ_PAGE_TRACE - and the trace keeps it (it was lines there, which harnesses show with the answer)",
+              bool(words) and not loud, "%s | trace: %s" % (loud[:3], traced[:1]))
+        svg = os.path.join(tmpc, "broken-picture.svg")
+        with open(svg, "wb") as fh:
+            fh.write(b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><image width="40" height="40" '
+                     b'href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ"/></svg>')
+        # what MuPDF said of it comes back after the KEPT mark; libjpeg's own warning ("Corrupt JPEG data: ..."), which
+        # the C library writes on stderr itself, no setting of PyMuPDF reaches: the server's stderr is its log
+        code = ("import sys, json; sys.path.insert(0, %r); import mcp_server, pymupdf; got = mcp_server.inline_image(%r); "
+                "sys.stderr.write(chr(10) + 'KEPT ' + json.dumps([got[1:2], pymupdf.TOOLS.mupdf_warnings()]))"
+                % (os.path.dirname(SCRIPT), svg))
+        child = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, timeout=120)
+        before, _, kept = child.stderr.decode("utf-8", "replace").rpartition("\nKEPT ")
+        try:
+            mime, told = json.loads(kept)
+        except ValueError:
+            mime, told = [], ""
+        words = [w.strip() for w in told.splitlines() if w.strip()]
+        loud = [x.strip() for x in before.splitlines() if x.strip().startswith("MuPDF") or x.strip() in words]
+        check("310: the MCP server makes an SVG with a broken picture a PNG, and what MuPDF said of it reaches neither "
+              "its stdout, its protocol, nor its stderr (MuPDF's errors were lines there)", child.returncode == 0
+              and child.stdout == b"" and mime == ["image/png"] and bool(words) and not loud,
+              "%r | %s | stderr: %s" % (child.stdout[:120], loud[:3],
+                                        " / ".join(x.strip() for x in before.splitlines() if x.strip())[-160:]))
+    except ImportError:
+        check.skip("310: MuPDF's messages", "pymupdf is not installed here")
+
+    # a scan's page was rendered at 150 dpi whatever its size: a page of 200 x 200 in, which PDF allows, was 900 million
+    # pixels in the read's own process (KNOWN-ISSUES 311); here a page of 60 x 60 in, 81 million at 150 dpi
+    try:
+        import pymupdf
+        big = pymupdf.open()
+        big.new_page(width=4320, height=4320).draw_rect(pymupdf.Rect(100, 100, 4220, 4220), color=(0, 0, 0))
+        p = os.path.join(tmpc, "big-scan.pdf")
+        big.save(p)
+        big.close()
+        r = run_read(p, env=env)
+        shots = [os.path.join(r.dir, x) for x in (r.manifest.get("files") or {}).get("pages") or []]
+        dims = []
+        for s_ in shots:
+            with open(s_ if os.path.isabs(s_) else os.path.join(r.dir, s_), "rb") as fh:
+                head = fh.read(24)
+            dims.append(struct.unpack(">II", head[16:24]) if head[:8] == b"\x89PNG\r\n\x1a\n" else (0, 0))
+        check("311: a scan's page of 60 x 60 in is rendered within 25 million pixels (at 150 dpi it was 81 million)",
+              dims and all(0 < w_ * h_ <= 25000000 for w_, h_ in dims), "%s | %s" % (dims, said(r)))
+    except ImportError:
+        check.skip("311: a large scanned page", "pymupdf is not installed here")
+
+    # on Linux a process's commit is what the kernel charges it - its private writable mappings, VmData and VmStk -,
+    # not its peak resident size: a model process that said 401 MB took 1 238 of VmData (KNOWN-ISSUES 314)
+    if sys.platform.startswith("linux"):
+        import mmap
+        reserved = mmap.mmap(-1, 256 << 20, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)   # untouched: no resident page
+        mem7 = module().pdftables.own_memory()
+        with open("/proc/self/status") as fh:
+            vm7 = sum(int(v.split()[0]) * 1024 for k, _s, v in (ln.partition(":") for ln in fh)
+                      if k in ("VmData", "VmStk") and v.split())
+        reserved.close()
+        check("314: on Linux what a process says it commits is its VmData and VmStk, 256 MB it reserved and never "
+              "touched among them (it was its peak resident size)", abs(mem7.get("commit", 0) - vm7) < (16 << 20)
+              and mem7.get("commit", 0) > mem7.get("ram", 0) + (200 << 20),
+              "%s against %d MB" % ({k: v >> 20 for k, v in mem7.items()}, vm7 >> 20))
+    else:
+        check.skip("314: a process's commit as Linux charges it", "Linux only")
 
     def excel_ods(sheets, before=(), head=""):
         """An ODS in Excel's order: content.xml right after the styles, before the rest; `before`: members

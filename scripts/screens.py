@@ -24,6 +24,40 @@ import io
 import os
 import time
 
+
+class _Silent:
+    """A stream that keeps nothing, for what PyMuPDF says itself."""
+
+    def write(self, s):
+        return len(s)
+
+    def flush(self):
+        pass
+
+
+_QUIET = []
+
+
+def _pymupdf():
+    """PyMuPDF with MuPDF silent, as readpage.pymupdf_quiet makes it (KNOWN-ISSUES 310): stdout is the answer's, and
+    stderr a harness shows with it. MuPDF's errors and warnings are not shown, what PyMuPDF says itself goes nowhere;
+    a PyMuPDF that cannot turn the display off sends its messages to stderr."""
+    import pymupdf
+    if not _QUIET:
+        _QUIET.append(True)
+        try:
+            pymupdf.TOOLS.mupdf_display_errors(False)
+            pymupdf.TOOLS.mupdf_display_warnings(False)
+            where = {"stream": _Silent()}
+        except Exception:                                     # noqa: BLE001  (an older PyMuPDF)
+            where = {"fd": 2}
+        try:
+            pymupdf.set_messages(**where)
+        except Exception:                                     # noqa: BLE001  (an older PyMuPDF has no set_messages)
+            pass
+    return pymupdf
+
+
 SCREEN_W, SCREEN_H = 1280, 784
 MAX_BYTES = int(3.75 * 1024 * 1024)
 JPEG_Q = 95
@@ -116,7 +150,7 @@ def _glue(parts, tool):
             out.save(buf, "JPEG", quality=JPEG_Q)
             data, fmt = buf.getvalue(), "jpg"
         return data, out.width, out.height, fmt
-    import pymupdf
+    pymupdf = _pymupdf()
     pix = [pymupdf.Pixmap(b) for b, _cut in parts]
     w = max(p.width for p in pix)
     h = sum(p.height - cut for p, (_b, cut) in zip(pix, parts))
@@ -143,7 +177,7 @@ def _alone(png, tool, page):
         Image.open(io.BytesIO(png)).convert("RGB").save(buf, "JPEG", quality=JPEG_Q)
         return buf.getvalue(), "jpg"
     if tool == "pymupdf":
-        import pymupdf
+        pymupdf = _pymupdf()
         return pymupdf.Pixmap(png).tobytes("jpg", jpg_quality=JPEG_Q), "jpg"
     try:
         return page.screenshot(type="jpeg", quality=JPEG_Q), "jpg"

@@ -8,6 +8,65 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A Windows job's limit on each process is read** (KNOWN-ISSUES 317): the memory rule read a job's limit on all its
+  processes alone, so under a limit on each process smaller than a model process takes every process died at its
+  load; such a job starts none, the pages named with why, and a job's figure that does not answer is traced.
+- **The note of the model processes knows a process by its pid and its start** (KNOWN-ISSUES 316): Windows soon gives
+  a dead process's pid to another, and a hold of 512 MB lived on for as long as that one ran; a refused replace lost
+  the note's update and left its `.tmp`. An entry keeps when its process started, the replace is tried for 2 s, and
+  the `.tmp` goes.
+- **The read's end closes its model processes in one wait** (KNOWN-ISSUES 315): they were closed one after another,
+  2 s each, and one still loading its model held the read's exit those 2 s; they are told together, waited for 2 s in
+  all, then killed, and one that has not loaded by the step's end goes with those at a page.
+- **On Linux a model process's commit is what the kernel charges it** (KNOWN-ISSUES 314): it said its peak resident
+  size, while Linux charges its private writable mappings, touched or not, against the commit limit that row 242
+  guards under strict overcommit - 554 MB of VmData against 490 said with the lock's engines, 1 238 against 401
+  with newer ones. A process says its VmData and VmStk there, counts as 640 MB of commit before it says, and a
+  cgroup's room is counted by what is resident. The two figures of a process's growth say which run they come from.
+- **A cut workbook names 50 lost sheets at most, and its list is found in linear time** (KNOWN-ISSUES 313): a meta.xml
+  that said 999 999 sheets made a marker of each - 56 MB from a 10 KB file -, and a settings.xml list with no end was
+  searched again from each opening, quadratic: an 11 KB file had the reader stopped with its text. The rest is
+  counted in one marker, a count past 10 000 is not believed, and the list is found by its opening and its end.
+- **An ODS's tree holds 100 000 elements, an open row 1 024 cells** (KNOWN-ISSUES 312): the streaming reader built
+  what was open whole until it ended - a row of 800 000 cells took 365 MB, 300 000 named ranges 173 MB, and up to its
+  512 MB of XML some 2.7 GB, with no limit on macOS. Past 1 024 cells a row keeps their text alone, joined to its last
+  cell; past 100 000 elements the tree keeps no more, and says so. The row takes 30 MB, in the same time.
+- **A scan's large page is rendered within 25 million pixels** (KNOWN-ISSUES 311): pages were rendered at 150 dpi
+  whatever their size, and a page of 200 × 200 in was 2.7 GB in the read's own process; such a page gets fewer dots
+  an inch (an A0 drawing 127).
+- **MuPDF is silent, off the answer, the MCP protocol and stderr** (KNOWN-ISSUES 310): MuPDF writes its errors to
+  file descriptor 1, so a damaged PDF's "MuPDF error: ..." stood before the answer's first line and `--json` did not
+  parse, and in the MCP server an SVG with a broken picture wrote lines into the JSON-RPC stream. PyMuPDF is imported
+  with MuPDF's errors and warnings not shown and its own messages sent nowhere, in the read, the server and the
+  screenshots (on stderr they were lines harnesses show with the answer); what MuPDF said of a PDF goes to the
+  trace. A PyMuPDF that cannot turn the display off sends them to stderr.
+- **A cut PDF says it is cut** (KNOWN-ISSUES 309): a PDF that ends without its `%%EOF` was read as if whole - one
+  that did not open was `empty`, "no text in it", one that opened with no page a scan with no page to render, one
+  MuPDF repaired `ok` with its last pages gone unsaid. `signals.broken_pdf` says cut or damaged and how many pages
+  opened; a PDF whose pages hold under 40 words is `error`, and the advice asks for a whole copy (`--refresh` for a
+  server's).
+- **An ASS line's vector drawing is no words** (KNOWN-ISSUES 308): between `{\p1}` and `{\p0}` an ASS line draws a
+  shape ("m 0 0 l 100 0 100 100"), and its path stood in the transcript; it is left out.
+- **A subtitle file is read in its own encoding** (KNOWN-ISSUES 307): yt-dlp writes a site's file as it came, and it
+  was read as UTF-8 whatever it was in - a UTF-16 SRT gave no cue, a cp1251 one U+FFFD. Its BOM decides, else UTF-8,
+  else the guess a page's bytes get; `transcript.vtt` is UTF-8.
+- **A cue's `<`, `>` and `&` reach the transcript as they were said** (KNOWN-ISSUES 306): a converted track's text
+  was unescaped and written into WEBVTT as it was, and the transcript took out everything between `<` and `>` - an
+  SRT's "x &lt; y and y &gt; z" became "x  z" -, while a VTT read as it came kept its escapes (`AT&amp;T`,
+  `&gt;&gt;`). The WEBVTT written is escaped as WebVTT asks, and a cue is read back tags first, then entities.
+- **A broadcaster's TTML is read: EBU-TT-D's `<tt:p>`, single quotes, times on spans or a `<div>`, a `.xml` track**
+  (KNOWN-ISSUES 305): the TTML reader matched `<p begin="...">` alone, so EBU-TT-D - every element prefixed - and a
+  single-quoted file gave "subtitles were empty", a paragraph timed by its spans was left out, and a track yt-dlp
+  named by its address's `.xml` was no track. Elements are known by their local names, attributes in either quote, a
+  paragraph's time is its own or its spans', relative to a timed `<div>`; `xml` is read as the TTML or YouTube XML
+  it holds.
+- **An XLSX is read without the size its sheets state, a row as its own cells, within the converter's time**
+  (KNOWN-ISSUES 304): openpyxl pads every row of a read-only sheet to its `<dimension ref>` and stops at it, so a 4 KB
+  file whose sheet said `A1:XFD1048576` held the read for minutes in its own process (16 384 cells a row, no clock),
+  and a sheet that said `A1` gave its first cell alone. A sheet's size is set aside, a row is its own cells - its
+  cells past 1 024 columns joined to its last, the rows counted in a note -, an empty row passed over at C's speed,
+  and the converter's 10 s looked at every 256 rows; where they run out the note names the sheet and the row. The
+  two-row file reads in 0.6 s, a sheet of ten columns at the speed it had.
 - **Planned for 0.5.1: a quote with `$` or a backtick after a cut** (KNOWN-ISSUES 303): SKILL.md's `--from "<words of
   the last line before the gap>"` hands a shell what it expands inside double quotes when a model quotes the whole
   line; a new wording is measured with Haiku first, as rows 279-280 were.

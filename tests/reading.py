@@ -219,8 +219,9 @@ try:
                     continue
                 formats = available[key]
                 ext = next((e for e in prefs if e in formats), list(formats)[-1])
-                with open(os.path.join(folder, "video.%s.%s" % (key, ext)), "w", encoding="utf-8") as fh:
-                    fh.write(formats[ext])
+                body = formats[ext]                  # a site's file as it came: text, or the bytes it was in
+                with open(os.path.join(folder, "video.%s.%s" % (key, ext)), "wb") as fh:
+                    fh.write(body if isinstance(body, bytes) else body.encode("utf-8"))
             if refused:
                 return 0, b"", ("WARNING: Unable to download video subtitles for '%s': HTTP Error 429: Too Many Requests\n"
                                 % refused[0]).encode()
@@ -279,6 +280,14 @@ try:
                 wrong.append("%s: %r" % (ext, got[:70]))
         check("%d subtitle formats (SRT, SBV, TTML, DFXP, srv1-3, json3, ASS, LRC) read as the same two blocks" % len(formats8),
               not wrong, "; ".join(wrong[:2]))
+        # an ASS sign or karaoke effect is a vector drawing between {\p1} and {\p0}: its path was words (KNOWN-ISSUES 308)
+        ass8 = ("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+                "Dialogue: 0,0:00:01.00,0:00:03.50,Sign,,0,0,0,,{\\an7\\pos(10,20)\\p1}m 0 0 l 100 0 100 100 0 100{\\p0}"
+                "Hello, it's world\n"
+                "Dialogue: 0,0:00:41.00,0:00:43.50,Default,,0,0,0,,Second block{\\p2}m 5 5 l 9 9\n")
+        got8 = mod8.vtt_to_text(sub8.to_vtt(ass8, "ass"))
+        check("308: an ASS line's vector drawing ({\\p1}m 0 0 l ...{\\p0}) is no words in the transcript (its path was)",
+              got8 == want8, got8[:120])
         vtt8 = sub8.to_vtt(formats8["srt"], "srt")
         check("an SRT becomes a WEBVTT text (dotted times, no index lines): what transcript.vtt holds",
               vtt8.startswith("WEBVTT") and "00:00:01.000 --> 00:00:03.500" in vtt8 and "," not in vtt8.split("\n\n")[1].split("\n")[0],
@@ -337,10 +346,63 @@ try:
     got, calls, folder = yt_video(rutube, {"ru": {"srt": RU_SRT}}, lang="en")
     check("... for an English reader too: the video's own language is asked for once more",
           "Добрый день" in got[0] and len(calls) == 2 and langs_of(calls[1]) == "ru", "%s | %d calls" % (got[0][:40], len(calls)))
+    # yt-dlp writes a site's file as it came: a UTF-16 SRT read as UTF-8 had no cue, a cp1251 one was U+FFFD throughout
+    # (KNOWN-ISSUES 307)
+    said8 = []
+    for codec in ("utf-16", "cp1251"):
+        got, calls, folder = yt_video(rutube, {"ru": {"srt": RU_SRT.encode(codec)}}, lang="ru")
+        vtt8 = open(os.path.join(folder, "transcript.vtt"), encoding="utf-8").read() if os.path.isfile(
+            os.path.join(folder, "transcript.vtt")) else ""
+        said8.append((codec, "Добрый день, коллеги" in got[0] and "Сегодня говорим о субтитрах" in vtt8, got[0][:40]))
+    check("307: an SRT in UTF-16 (with its BOM) and one in cp1251 are read, transcript.vtt in UTF-8 (they read as no "
+          "cue, and as U+FFFD)", all(ok for _c, ok, _g in said8), str(said8))
     got, calls, _ = yt_video({"title": "T", "language": "de", "subtitles": {"de": [{"ext": "ttml", "name": "Deutsch"}]}},
                              {"de": {"ttml": formats8["ttml"]}}, lang="en")
     check("a site that has TTML only: its track is read all the same", "Hello," in got[0] and got[2] == "subtitles de",
           "%s | %s" % (got[0][:40], got[2]))
+    # EBU-TT-D, the broadcasters' TTML, writes every element <tt:...>, and XML allows either quote; a paragraph may
+    # have its time on its spans, or under a <div> that has one; yt-dlp names a track by its address: `.xml`
+    # (KNOWN-ISSUES 305)
+    ebu8 = ('<?xml version="1.0" encoding="UTF-8"?><tt:tt xmlns:tt="http://www.w3.org/ns/ttml" xml:lang="de"><tt:body>'
+            "<tt:div><tt:p xml:id='s1' begin='00:00:01.000' end='00:00:03.500'><tt:span>Hello,</tt:span><tt:br/>"
+            "<tt:span>it&apos;s world</tt:span></tt:p><tt:p begin=\"41s\" dur=\"2.5s\">Second block</tt:p></tt:div>"
+            "</tt:body></tt:tt>")
+    if sub8 is not None:
+        got8 = [mod8.vtt_to_text(sub8.to_vtt(ebu8, ext)) for ext in ("ttml", "xml")]
+        check("305: EBU-TT-D's TTML (<tt:p>, single quotes, <tt:br/>) reads as the two blocks, named .ttml or .xml (no "
+              "cue: 'subtitles were empty')", got8 == [want8, want8], str(got8)[:160])
+        timed8 = ('<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p><span begin="00:00:01.000" end="00:00:02.000">'
+                  "Hello,</span> <span begin='2s' end='3.5s'>it's world</span></p></div><div begin=\"40s\">"
+                  '<p begin="1s" end="3.5s">Second block</p></div></body></tt>')
+        got8 = mod8.vtt_to_text(sub8.to_vtt(timed8, "ttml"))
+        check("305: a TTML paragraph timed by its spans, and one under a <div> with a begin, take those times (the first "
+              "was left out, the second read 40 s early)", got8 == want8, got8[:120])
+    got, calls, _ = yt_video({"title": "T", "language": "de", "subtitles": {"de": [{"ext": "xml", "name": "Deutsch"}]}},
+                             {"de": {"xml": ebu8}}, lang="en")
+    check("305: a broadcaster's track yt-dlp named by its address (video.de.xml) is read (it was no track: 'no "
+          "subtitles')", "Hello," in got[0] and got[2] == "subtitles de", "%s | %s" % (got[0][:40], got[2]))
+    # a cue's text is escaped in the WEBVTT the converters make, and read back tags first, then entities: an SRT's
+    # "x < y and y > z" lost the words between its < and >, and a VTT's &amp; and &gt;&gt; stayed in the transcript
+    # (KNOWN-ISSUES 306)
+    if sub8 is not None:
+        srt8 = ("1\n00:00:01,000 --> 00:00:02,000\nif x &lt; y and y &gt; z\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nAT&amp;T &gt;&gt; next\n")
+        got8 = mod8.vtt_to_text(sub8.to_vtt(srt8, "srt"))
+        check("306: an SRT's < and > reach the transcript as they are, \"if x < y and y > z\" (the words between "
+              "were taken for a tag)", got8 == "[0:01] if x < y and y > z AT&T >> next", got8)
+        plain8 = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n&gt;&gt; AT&amp;T said &lt;no&gt; <i>now</i>\n"
+        roll8 = ("WEBVTT\nKind: captions\nLanguage: en\n\n00:00:00.000 --> 00:00:02.000 align:start position:0%\n \n"
+                 "&gt;&gt; we<00:00:00.500><c> met</c><00:00:01.000><c> AT&amp;T</c>\n\n"
+                 "00:00:02.000 --> 00:00:02.010 align:start position:0%\n&gt;&gt; we met AT&amp;T\n \n\n"
+                 "00:00:02.010 --> 00:00:04.000 align:start position:0%\n&gt;&gt; we met AT&amp;T\n"
+                 "then<00:00:02.500><c> left</c>\n")
+        got8 = [mod8.vtt_to_text(plain8), mod8.vtt_to_text(roll8)]
+        check("306: a VTT's entities are its text, its tags still out - a plain track and YouTube's rolling one "
+              "(\"&gt;&gt; AT&amp;T\" stayed)", got8 == ["[0:01] >> AT&T said <no> now", "[0:00] >> we met AT&T then left"],
+              str(got8))
+        check("306: the WEBVTT a converter makes is escaped as WebVTT asks, and its rolling track's lines too",
+              "if x &lt; y and y &gt; z" in sub8.to_vtt(srt8, "srt") and "AT&amp;T" in sub8.unrolled(roll8),
+              sub8.to_vtt(srt8, "srt")[:90].replace("\n", "/"))
 
     # a dubbed video: yt-dlp's `language` names the default audio track, and the automatic track is that audio's speech
     ASR = "https://www.youtube.com/api/timedtext?v=x&caps=asr&hl=en&kind=asr&lang=en&fmt=vtt"
