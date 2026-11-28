@@ -328,7 +328,7 @@ def outline(lines, budget, block_starts):
 def outline_title(lines):
     """The outline's first line: its rows are the text's headings, or - a text with fewer than two - where each block
     of the answer's size starts, with its first words (outline). Under "(line, heading)" those rows were taken for the
-    document's structure: a sheet of one heading listed its rows (`59 | Jun.14 | 1,9 | ...`, KNOWN-ISSUES 360)."""
+    document's structure: a sheet of one heading listed its rows (`59 | Jun.14 | 1,9 | ...`, KNOWN-ISSUES 321)."""
     return "outline (line, heading):" if len(headings(lines)) >= 2 else "outline (line, first words):"
 
 
@@ -365,7 +365,7 @@ def header(manifest, view, total_lines, text_bytes):
         if content.get("track"):
             # a video's subtitle track: human, automatic or machine-translated. Speech recognition's words are what it
             # heard: a model could not tell whether a recipe's "0.2 g of active dry yeast" was said or misheard, so an
-            # automatic track says so beside it (KNOWN-ISSUES 366); content.track stays the track's name
+            # automatic track says so beside it (KNOWN-ISSUES 327); content.track stays the track's name
             track = str(content["track"])
             first.append(track + (": numbers and names may be misheard" if ", automatic" in track else ""))
     stamp = str((m.get("archive") or {}).get("timestamp") or "")

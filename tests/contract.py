@@ -265,7 +265,7 @@ try:
     for path in ("/long", "/flat", "/ru", "/zh"):
         first = run_read(srv.url(path))
         fits(path, first)
-        # /flat has no headings: its outline is where its blocks start, with their first words (KNOWN-ISSUES 360)
+        # /flat has no headings: its outline is where its blocks start, with their first words (KNOWN-ISSUES 321)
         check(path + ": an outline and the next line", ("outline (line, first words):" if path == "/flat" else
                                                          "outline (line, heading):") in first.text
               and next_line(first.text) is not None, "")
@@ -319,7 +319,7 @@ try:
           len(starts) >= 12 and max(starts) >= 0.85 * len(saved),
           "%d rows, last at line %s of %d" % (len(starts), max(starts) if starts else None, len(saved)))
     # those rows are no headings, and the outline said they were: a sheet of one heading had its rows there
-    # (`59 | Jun.14 | 1,9 | ...`), which a model took for the document's structure (KNOWN-ISSUES 360)
+    # (`59 | Jun.14 | 1,9 | ...`), which a model took for the document's structure (KNOWN-ISSUES 321)
     import answer                                              # noqa: E402
     sheet = "## VPI\n\n| Monat | % |\n| --- | --- |\n" + "".join("| M%04d | %d,%d |\n" % (i, i % 9, i % 7)
                                                                  for i in range(3000))

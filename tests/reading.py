@@ -432,7 +432,7 @@ try:
     got, calls, _ = yt_video(plain, on8, lang="en")
     check("... but an English talk is still `subtitles en, automatic`", got[2] == "subtitles en, automatic", got[2])
     # an automatic track's numbers and names are speech recognition's: the answer says so beside the track - a model
-    # could not tell whether a recipe's "0.2 g of active dry yeast" was said or misheard (KNOWN-ISSUES 366); a
+    # could not tell whether a recipe's "0.2 g of active dry yeast" was said or misheard (KNOWN-ISSUES 327); a
     # person's track says nothing of it
     h_auto = mod8.answer.header({"status": "ok", "content": {"engine": "video:yt-dlp", "track": got[2]}},
                                 "content.md", 75, 7188)[0]

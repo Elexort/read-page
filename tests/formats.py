@@ -501,7 +501,7 @@ try:
               got == {} and not mod3._TABLES.get("pool") and mod3._TABLES.get("worker") is None, str(got))
         # a table whose numbers group their thousands by a space ("452 939", "1 291 368"; a no-break or a thin space
         # too) and that has no caption and no rulings: its page was not asked, and stayed one cell a line - IRENA's
-        # onshore wind and eight more of its 69 pages, each a table the model lays out (KNOWN-ISSUES 361). Years
+        # onshore wind and eight more of its 69 pages, each a table the model lays out (KNOWN-ISSUES 322). Years
         # glued to a number ("2016 467 316") and two years ("2016 2017") are no such number
         gdoc = pymupdf.open()
         gpg = gdoc.new_page()

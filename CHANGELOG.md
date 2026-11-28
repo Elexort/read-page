@@ -8,14 +8,14 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
-- **An automatic track says its numbers and names may be misheard** (KNOWN-ISSUES 366): a video's answer named
+- **An automatic track says its numbers and names may be misheard** (KNOWN-ISSUES 327): a video's answer named
   speech recognition `subtitles en, automatic` and nothing more, and an agent could not tell a recipe's figure
   said from misheard; the first line says `subtitles en, automatic: numbers and names may be misheard`.
-- **A PDF table whose numbers group their thousands by a space is laid out** (KNOWN-ISSUES 361): the page test
+- **A PDF table whose numbers group their thousands by a space is laid out** (KNOWN-ISSUES 322): the page test
   took "452 939" for no number, so such a table with no caption and no rulings was not asked of the model and
   stayed one cell a line (IRENA's onshore wind and eight more of its 69 pages). A space, a no-break or a thin one
   groups them now; no other page of the corpus's 38 PDFs is chosen by it.
-- **An outline of first words says so** (KNOWN-ISSUES 360): a text with fewer than two headings has a row per
+- **An outline of first words says so** (KNOWN-ISSUES 321): a text with fewer than two headings has a row per
   block of the answer's size in its outline, with the block's first words, and it stood under `outline (line,
   heading):`; a spreadsheet of one sheet listed its rows there, and a model took them for the document's
   headings. Such an outline is `outline (line, first words):` now.
