@@ -3954,6 +3954,36 @@ asked355 = real_read_json(os.path.join(d355, "setup.state")).get("asked") or {}
 attempt("the work's state keeps what it was asked: the packs named for it, and its copy's pins",
         lambda: (asked355 == {"ocr_langs": "eng+hin", "pins": pins355}, str(asked355)))
 
+# ---------------------------------------------------------------- an interrupted run's uv temporary folders (row 356)
+# A worker killed in its engines step left eight .tmp folders in uv's cache (half-unpacked pymupdf, numpy, onnxruntime,
+# playwright, tesserocr, Pillow: 124 MB), under the 150 MB line that prunes the cache: nothing removed them.
+def uv_tmp_run(age):
+    """tidy_uv_cache of a Work whose uv cache holds a .tmp folder last changed `age` s before the Work started (None: none):
+    the commands it ran."""
+    d_, w_ = work_in("rp-env-uvtmp-")
+    cache_ = os.path.join(d_, "cache", "uv")
+    os.makedirs(os.path.join(cache_, "wheels-v5"))
+    if age is not None:
+        os.makedirs(os.path.join(cache_, ".tmpAbC123", "pymupdf"))
+        with open(os.path.join(cache_, ".tmpAbC123", "pymupdf", "_mupdf.pyd"), "wb") as fh2:
+            fh2.write(b"x" * 4096)
+        when = w_.t0 - age
+        os.utime(os.path.join(cache_, ".tmpAbC123"), (when, when))
+    cmds_ = []
+    w_.uv_exe = "UV"
+    w_.sh = lambda cmd, timeout=900, env=None, cwd=None: (cmds_.append(list(cmd)) or (0, "Removed 41 files"))
+    w_.tidy_uv_cache()
+    return cmds_
+
+
+cmds356_old, cmds356_new, cmds356_none = uv_tmp_run(3600), uv_tmp_run(-5), uv_tmp_run(None)
+attempt("the uv temporary folders an interrupted run left in the cache are pruned by the next --setup: a plain "
+        "`uv cache prune`, which removes them and what nothing points to, nothing else",
+        lambda: (["UV", "cache", "prune"] in cmds356_old, str(cmds356_old)))
+attempt("... and none is run where there are none, or only folders newer than this run's start (its own uv's)",
+        lambda: (["UV", "cache", "prune"] not in cmds356_new and ["UV", "cache", "prune"] not in cmds356_none,
+                 "%s %s" % (cmds356_new, cmds356_none)))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)

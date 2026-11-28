@@ -753,7 +753,9 @@ uv 0.13.9: the wheels of a deleted environment stay reachable, "No unused entrie
 runs `uv cache clean` for the packages whose pin moved - before it installs the new ones, which a clean
 afterwards would take out too - and a yt-dlp update does it for yt-dlp and yt-dlp-ejs; where an older
 environment's lock was not kept, `uv cache prune --ci` removes every wheel (527 MB to 15 MB measured; the
-environment keeps its files by their links, and the next update fetches what it needs again). Outside the
+environment keeps its files by their links, and the next update fetches what it needs again). What a plain prune
+does remove is uv's temporary folders: a run cut off while uv unpacked left `.tmp*` folders of half-unpacked wheels
+(124 MB measured), and the next `--setup` prunes where it finds one older than its own start (KNOWN-ISSUES 356). Outside the
 folder: the read cache (`read-page` in the temp folder) and, for a read that does not run in the
 environment, the skill's bytecode there.
 

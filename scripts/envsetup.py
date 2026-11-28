@@ -2215,6 +2215,13 @@ class Work:
         hundreds). Its size goes in the report either way."""
         uv = getattr(self, "uv_exe", "")
         path = os.path.join(self.d, "cache", "uv")
+        temps = stale_uv_temps(path, self.t0)
+        if uv and temps:
+            # an interrupted run's uv leaves its half-unpacked wheels in .tmp folders that no environment holds and that
+            # the line below did not reach (eight of them, 124 MB, after a kill in the engines step: KNOWN-ISSUES 356);
+            # a plain prune removes them, and what nothing points to, and nothing else (measured: 123.1 MiB)
+            rc, out = self.sh([uv, "cache", "prune"], timeout=300)
+            self.log("uv cache prune (%d of uv's temporary folders of an earlier run): %s" % (len(temps), out[-120:]))
         total, alone = cache_bytes(path)
         stale = alone is not None and alone > STALE_CACHE_BYTES
         if uv and (getattr(self, "cache_unknown", False) or stale):
@@ -2866,6 +2873,24 @@ def moved_pins(old_lock, new_lock):
     """The packages of the old lock that the new one gives another version or drops: what an update leaves in uv's cache."""
     old, new = lock_pins(old_lock), lock_pins(new_lock)
     return sorted(k for k, v in old.items() if new.get(k) != v)
+
+
+def stale_uv_temps(path, before):
+    """The temporary folders of uv's cache (`.tmp*`) last changed before `before` - an earlier uv's, cut off with its
+    run (this run's own are newer): [names]."""
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return []
+    out = []
+    for n in sorted(names):
+        p = os.path.join(path, n)
+        try:
+            if n.startswith(".tmp") and os.path.isdir(p) and os.path.getmtime(p) < before:
+                out.append(n)
+        except OSError:
+            continue
+    return out
 
 
 def cache_bytes(path, seconds=20.0):

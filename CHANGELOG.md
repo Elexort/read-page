@@ -36,6 +36,9 @@
   eng+hin` started while a run worked followed it and ended with exit 0 and "Nothing is missing", no hin fetched. The
   work's state keeps what it was asked (the packs named for it, its copy's pins); a follower asked otherwise names it,
   with the command to run once the run ends, and exits 1.
+- **An interrupted run's uv temporary folders are pruned** (KNOWN-ISSUES 356): a worker killed while uv unpacked left
+  `cache/uv/.tmp*` folders (124 MB measured), under the 150 MB line that prunes the cache whole. The next `--setup` runs
+  a plain `uv cache prune` where it finds one older than its own start.
 
 ## 0.5.0 - 2026-11-28
 
