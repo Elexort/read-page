@@ -675,7 +675,9 @@ the same holds where a POSIX locale is not UTF-8 and the folder's name is its co
 path as UTF-8 ("surrogates not allowed"), so the folder goes by its own name from its parent.
 
 The work runs detached (its parent, a launcher, is gone at once), so a harness that kills a
-long command does not kill it; the command shows its progress for 100 s (in a terminal, to the
+long command does not kill it; its own output goes to the end of `setup-detail.log` (on Windows by a handle that can
+only append: one inherited from `open(log, "ab")` wrote where the log ended when the work started, over that run's
+first lines - KNOWN-ISSUES 354); the command shows its progress for 100 s (in a terminal, to the
 end), then says it goes on in the background, and a second `--setup` follows the one at work - a run
 that is not done, whose process is alive and whose `setup.lock` is held; nothing else counts as one.
 The command follows the work's `setup.state`, which the work replaces whole (a temp file, then a rename). A read that

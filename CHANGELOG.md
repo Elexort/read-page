@@ -26,6 +26,12 @@
   by the background yt-dlp update) now shows an address as its scheme, host and port, and leaves out a setting's or a
   header's secret (`_authToken=`, `Authorization:`) and a proxy's `user:password@`. Tests: a stand-in installer printing
   a proxy address with its password and the other forms.
+- **A `--setup` worker ends cleanly, and on Windows its own output no longer overwrites the log** (KNOWN-ISSUES 354):
+  it let go of `ytdlp.lock` twice, and every run's `setup-detail.log` ended with `ValueError: seek of closed file`; on
+  Windows a detached child's inherited `open(log, "ab")` handle wrote where the log ended when the child started, so
+  that traceback took the place of the run's first lines (its sources, the network and uv steps). The lock is let go of
+  once; a detached child gets a handle that can only append. Tests: a worker's real start and end raise nothing and leave
+  both locks free; a detached child's late line lands after what was written meanwhile.
 
 ## 0.5.0 - 2026-11-28
 

@@ -426,12 +426,44 @@ def _launch(d, run, skill_version):
     return p.stdout.decode("utf-8", "replace").strip()[-300:], False
 
 
+def _append_handle(path):
+    """The log, opened for a detached child's own output so that every write of it lands at the end. On Windows a
+    handle a child inherits from open(path, "ab") does not append - the append is its parent's C runtime's, and the
+    child's writes went where the file ended when the handle was made, over what the work had written there since: the
+    traceback at a worker's end took the place of that run's first lines (KNOWN-ISSUES 354). A handle with
+    FILE_APPEND_DATA and no FILE_WRITE_DATA appends whatever writes through it. POSIX: O_APPEND, which the child keeps."""
+    if os.name != "nt":
+        return open(path, "ab")
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+                                    wintypes.DWORD, wintypes.HANDLE]
+        # FILE_APPEND_DATA | FILE_READ_ATTRIBUTES (a Python child's start looks at its stdout) | SYNCHRONIZE; share all;
+        # OPEN_ALWAYS; FILE_ATTRIBUTE_NORMAL
+        h = k32.CreateFileW(path, 0x4 | 0x80 | 0x100000, 0x7, None, 4, 0x80, None)
+        if not h or h == ctypes.c_void_p(-1).value:                            # INVALID_HANDLE_VALUE
+            raise OSError(ctypes.get_last_error(), "CreateFileW")
+        try:
+            return os.fdopen(msvcrt.open_osfhandle(h, os.O_APPEND), "ab")
+        except (OSError, ValueError):
+            k32.CloseHandle(wintypes.HANDLE(h))
+            raise
+    except (AttributeError, ImportError, OSError, ValueError):
+        return open(path, "ab")
+    except (AttributeError, ImportError, OSError, ValueError):
+        return open(path, "ab")
+
+
 def _detached(cmd, cwd, log, attached_ok=True):
     """Start cmd apart from this process. Says which way it went: "free" (out of this process's group
     and job: it goes on when the command that started it ends), "attached" (started, but a job around
     us - a harness that runs each command in one that kills on close and lets nothing leave - ends it
     with the command), or "" (not started: attached_ok is False and it would have been attached)."""
-    with open(log, "ab") as out:
+    with _append_handle(log) as out:
         kw = dict(stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, cwd=cwd, close_fds=True)
         if os.name == "nt":
             # a console of its own that nobody sees (its installers open no windows), its own group
@@ -684,6 +716,8 @@ def _try_lock(path):
 
 
 def _unlock(fh):
+    if fh is None or getattr(fh, "closed", False):
+        return                       # let go of already: once more raised ValueError, at the end of every worker
     try:
         if os.name == "nt":
             import msvcrt
@@ -2226,6 +2260,7 @@ class Work:
                 self.say("not done: %s - %s%s" % (p["part"], p["why"], (" - " + p["fix"]) if p.get("fix") else ""))
         if getattr(self, "ytlock", None):
             _unlock(self.ytlock)
+            self.ytlock = None                   # (the worker's own end lets go of it too, where go() did not get here)
         self.state(done=True, ok=bool(ready) and not any(not v["ok"] for v in self.parts.values()))
 
 

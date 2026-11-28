@@ -3874,6 +3874,53 @@ attempt("... and the background yt-dlp update's lines in it neither (its command
                              and "Pr0xyPa55" in r_[2], str([s for s in secrets353 if s in bg353.getvalue()])))(
             envsetup._bg_run(bg353, installer353, 60, None, d353)))
 
+# ---------------------------------------------------------------- a worker's end, and its own output (row 354)
+# Every worker let go of ytdlp.lock twice - at go()'s end and in its own finally - and the second raised ValueError: a
+# traceback ended every --setup, past the worker's letting go of setup.lock. And on Windows the worker's own output (that
+# traceback, a warning, a crash) went where the log ended when it started, over the lines the run had written since.
+d354 = scratch("rp-env-workerend-")
+
+
+class QuietWork(envsetup.Work):
+    """A --setup's work whose steps do nothing (the network one says no): its start and its end are the real ones."""
+
+    def step(self, name, fn, need=None):
+        with self.lock:
+            self.parts[name] = {"ok": False, "note": "skipped", "seconds": 0.0}
+        return False
+
+
+real_work354, err354 = envsetup.Work, ""
+envsetup.Work = QuietWork
+try:
+    envsetup._main(["--worker", d354, "r354", "test"])
+except Exception as e_:                                  # noqa: BLE001
+    err354 = "%s: %s" % (type(e_).__name__, e_)
+finally:
+    envsetup.Work = real_work354
+attempt("a worker ends with no exception (it let go of ytdlp.lock twice: ValueError, past its letting go of setup.lock), "
+        "and setup.lock and ytdlp.lock are free after it",
+        lambda: (not err354 and envsetup._lock_state(os.path.join(d354, "setup.lock")) == "free"
+                 and envsetup._lock_state(os.path.join(d354, "ytdlp.lock")) == "free", err354 or "ok"))
+log354 = os.path.join(d354, "child.log")
+with open(log354, "w", encoding="utf-8") as fh_:
+    fh_.write("line 0, before the child\n")
+how354 = envsetup._detached([sys.executable, "-c", "import sys, time; time.sleep(1.5); "
+                             "sys.stderr.write('CHILD LATE LINE\\n'); sys.stderr.flush()"], d354, log354)
+with open(log354, "a", encoding="utf-8") as fh_:             # as Work.detail writes beside the worker's own output
+    for i_ in range(1, 6):
+        fh_.write("line %d of the run's own log\n" % i_)
+        fh_.flush()
+        time.sleep(0.1)
+t354 = time.time()
+while time.time() - t354 < 30 and "CHILD LATE LINE" not in io.open(log354, encoding="utf-8", errors="replace").read():
+    time.sleep(0.2)
+lines354 = io.open(log354, encoding="utf-8", errors="replace").read().splitlines()
+attempt("a detached child's own output lands at the end of the log, after what the work wrote meanwhile (on Windows it "
+        "went where the log ended when the child started, over those lines)",
+        lambda: (lines354 == ["line 0, before the child"] + ["line %d of the run's own log" % n_ for n_ in range(1, 6)]
+                 + ["CHILD LATE LINE"], "%s | %s" % (how354, lines354)))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)
