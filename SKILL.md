@@ -18,7 +18,7 @@ metadata:
 
 # read-page
 
-One command reads a URL or file and answers with a header and the text:
+One command reads a URL or file and answers with a header and the text (`SKILL_DIR` is this file's folder):
 
 ```
 python -X utf8 "SKILL_DIR/scripts/readpage.py" URL --allow-external

@@ -8,6 +8,8 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **SKILL.md says what `SKILL_DIR` is** (KNOWN-ISSUES 321): its command names `SKILL_DIR` and five of eight agents of
+  the 0.5.0 stress round guessed it from the install path; the first line says it is this file's folder (5 words).
 - **A Windows job's limit on each process is read** (KNOWN-ISSUES 317): the memory rule read a job's limit on all its
   processes alone, so under a limit on each process smaller than a model process takes every process died at its
   load; such a job starts none, the pages named with why, and a job's figure that does not answer is traced.

@@ -1191,6 +1191,10 @@ check("SKILL.md's `error` row fits both kinds of error: retry later, and a cut o
 # command under it, as an answer does; it names --chars and EOF, the way back from a cut, and no --to
 with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as fh_:
     skill = fh_.read()
+# SKILL_DIR, which the command names, is said once: five of eight agents of the 0.5.0 stress round guessed it from
+# the install path (KNOWN-ISSUES 321)
+check("SKILL.md says what SKILL_DIR is, by its command", re.search(r"`SKILL_DIR` is this file's folder", skill) is not None
+      and skill.find("`SKILL_DIR` is") < skill.find('"SKILL_DIR/scripts/readpage.py"'), "")
 example = re.search(r"(?s)```\nread-page · ok · .*?\n```", skill)
 ex_rows = example.group(0).split("\n")[1:-1] if example else []
 check("SKILL.md's example answer ends as an answer does: `── next: line N of T ──`, then the command alone",
