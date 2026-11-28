@@ -25,19 +25,38 @@ import os
 import time
 
 
+class _Silent:
+    """A stream that keeps nothing, for what PyMuPDF says itself."""
+
+    def write(self, s):
+        return len(s)
+
+    def flush(self):
+        pass
+
+
+_QUIET = []
+
+
 def _pymupdf():
-    """PyMuPDF with MuPDF's messages on stderr, not on stdout, which is the answer's (readpage.pymupdf_quiet,
-    KNOWN-ISSUES 310); an older PyMuPDF is told not to show them."""
+    """PyMuPDF with MuPDF silent, as readpage.pymupdf_quiet makes it (KNOWN-ISSUES 310): stdout is the answer's, and
+    stderr a harness shows with it. MuPDF's errors and warnings are not shown, what PyMuPDF says itself goes nowhere;
+    a PyMuPDF that cannot turn the display off sends its messages to stderr."""
     import pymupdf
-    try:
-        pymupdf.set_messages(fd=2)
-    except Exception:                                         # noqa: BLE001  (no set_messages)
+    if not _QUIET:
+        _QUIET.append(True)
         try:
             pymupdf.TOOLS.mupdf_display_errors(False)
             pymupdf.TOOLS.mupdf_display_warnings(False)
-        except Exception:                                     # noqa: BLE001
+            where = {"stream": _Silent()}
+        except Exception:                                     # noqa: BLE001  (an older PyMuPDF)
+            where = {"fd": 2}
+        try:
+            pymupdf.set_messages(**where)
+        except Exception:                                     # noqa: BLE001  (an older PyMuPDF has no set_messages)
             pass
     return pymupdf
+
 
 SCREEN_W, SCREEN_H = 1280, 784
 MAX_BYTES = int(3.75 * 1024 * 1024)

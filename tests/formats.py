@@ -2123,29 +2123,57 @@ try:
 
     # MuPDF writes its errors to file descriptor 1: a damaged PDF's "MuPDF error: ..." stood before the answer's first
     # line, and `--json` did not parse; the MCP server's stdout is its protocol, and an SVG with a broken picture made
-    # lines there that are no JSON-RPC (KNOWN-ISSUES 310)
+    # lines there that are no JSON-RPC (KNOWN-ISSUES 310). Sent to stderr they were lines a harness shows with the
+    # answer: in the read's stderr log (where file descriptor 2 goes while a page is read), on stderr itself with
+    # READ_PAGE_TRACE. A line of MuPDF's is one PyMuPDF prefixed ("MuPDF error: ...") or one of what MuPDF said
     try:
         import pymupdf  # noqa: F401
         p = os.path.join(tmpc, "complains.pdf")
         with open(p, "wb") as fh:
             fh.write(plain_pdf[:len(plain_pdf) // 2])
-        first = run_read(p, env=env).text.split("\n", 1)[0]
+        r = run_read(p, env=env)
+        first = r.text.split("\n", 1)[0]
         try:
             parsed = json.loads(run_read(p, "--json", env=env).text)
         except ValueError:
             parsed = None
         check("310: a PDF MuPDF complains of: the answer's first line is its header, and --json parses (MuPDF's error "
               "stood before them)", first.startswith("read-page · ") and isinstance(parsed, dict), repr(first[:90]))
+        log_p, held = os.path.join(r.root, "cache", "stderr.log"), ""
+        if os.path.isfile(log_p):
+            with open(log_p, encoding="utf-8", errors="replace") as fh:
+                held = fh.read()
+        rt = run_read(p, env=dict(env, READ_PAGE_TRACE="1"))
+        lines = rt.err.decode("utf-8", "replace").splitlines()
+        traced = [x.split(" said=", 1)[1] for x in lines if x.startswith("RP_LOG event=pdf.mupdf ") and " said=" in x]
+        words = [w.strip() for w in (traced[0].split(" | ") if traced else []) if len(w.strip()) >= 12]
+        loud = [x for x in held.splitlines() + r.err.decode("utf-8", "replace").splitlines() + lines
+                if not x.startswith("RP_LOG") and (x.lstrip().startswith("MuPDF") or any(w in x for w in words))]
+        check("310: what MuPDF says of that PDF reaches no stderr either - not the read's stderr log, not stderr with "
+              "READ_PAGE_TRACE - and the trace keeps it (it was lines there, which harnesses show with the answer)",
+              bool(words) and not loud, "%s | trace: %s" % (loud[:3], traced[:1]))
         svg = os.path.join(tmpc, "broken-picture.svg")
         with open(svg, "wb") as fh:
             fh.write(b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><image width="40" height="40" '
                      b'href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ"/></svg>')
-        code = ("import sys; sys.path.insert(0, %r); import mcp_server; got = mcp_server.inline_image(%r); "
-                "sys.stderr.write(str(got[1:])[:80])" % (os.path.dirname(SCRIPT), svg))
+        # what MuPDF said of it comes back after the KEPT mark; libjpeg's own warning ("Corrupt JPEG data: ..."), which
+        # the C library writes on stderr itself, no setting of PyMuPDF reaches: the server's stderr is its log
+        code = ("import sys, json; sys.path.insert(0, %r); import mcp_server, pymupdf; got = mcp_server.inline_image(%r); "
+                "sys.stderr.write(chr(10) + 'KEPT ' + json.dumps([got[1:2], pymupdf.TOOLS.mupdf_warnings()]))"
+                % (os.path.dirname(SCRIPT), svg))
         child = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, timeout=120)
-        check("310: the MCP server makes an SVG with a broken picture a PNG and writes nothing on its stdout, its "
-              "protocol (MuPDF's errors were lines there)", child.returncode == 0 and child.stdout == b"",
-              repr(child.stdout[:120]) + " | " + child.stderr.decode("utf-8", "replace")[-160:])
+        before, _, kept = child.stderr.decode("utf-8", "replace").rpartition("\nKEPT ")
+        try:
+            mime, told = json.loads(kept)
+        except ValueError:
+            mime, told = [], ""
+        words = [w.strip() for w in told.splitlines() if w.strip()]
+        loud = [x.strip() for x in before.splitlines() if x.strip().startswith("MuPDF") or x.strip() in words]
+        check("310: the MCP server makes an SVG with a broken picture a PNG, and what MuPDF said of it reaches neither "
+              "its stdout, its protocol, nor its stderr (MuPDF's errors were lines there)", child.returncode == 0
+              and child.stdout == b"" and mime == ["image/png"] and bool(words) and not loud,
+              "%r | %s | stderr: %s" % (child.stdout[:120], loud[:3],
+                                        " / ".join(x.strip() for x in before.splitlines() if x.strip())[-160:]))
     except ImportError:
         check.skip("310: MuPDF's messages", "pymupdf is not installed here")
 

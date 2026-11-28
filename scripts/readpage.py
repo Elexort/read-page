@@ -3613,7 +3613,7 @@ def pdf_shots(path, workdir, want):
 
 def _pdf_shots(path, workdir, want):
     try:
-        pymupdf = pymupdf_quiet()           # MuPDF's messages off stdout (310)
+        pymupdf = pymupdf_quiet()           # MuPDF silent (310)
     except Exception as _dbg_e:                                     # noqa: BLE001
         debuglog.exc("pdf shots: import", _dbg_e)
         return [], 0
@@ -5341,26 +5341,41 @@ def office_fast(path, sub, broke=None, until=None):
 
 
 OCR_RENDER_DPI = 150                    # a scanned page's picture for OCR
-_PYMUPDF_QUIET = []                     # PyMuPDF's messages sent to stderr, once a process (pymupdf_quiet)
+_PYMUPDF_QUIET = []                     # MuPDF made silent, once a process (pymupdf_quiet)
+
+
+class _Silent:
+    """A stream that keeps nothing, for what PyMuPDF says itself (set_messages): no display setting turns it off."""
+
+    def write(self, s):
+        return len(s)
+
+    def flush(self):
+        pass
 
 
 def pymupdf_quiet():
-    """PyMuPDF, its MuPDF messages on stderr: MuPDF writes its errors and warnings to file descriptor 1, which is the
-    answer - a damaged PDF's "MuPDF error: format error: object is not a stream" stood before the answer's first
-    line, and `--json` did not parse - and the MCP server's protocol, where an SVG with a broken picture became
-    lines that are no JSON-RPC (KNOWN-ISSUES 310). PyMuPDF 1.24 and later send every message where set_messages
-    says; an older one is told not to show them. What MuPDF said stays in pymupdf.TOOLS.mupdf_warnings()."""
+    """PyMuPDF with MuPDF silent (KNOWN-ISSUES 310). MuPDF wrote its errors on file descriptor 1, the answer's - a
+    damaged PDF's "MuPDF error: format error: object is not a stream" stood before the answer's first line, and
+    `--json` did not parse - and the MCP server's, its protocol, where an SVG with a broken picture made lines that
+    are no JSON-RPC; on stderr they were lines a harness shows with the answer. MuPDF's errors and warnings are not
+    shown, and what PyMuPDF says itself goes nowhere: as it opens an SVG it repeats MuPDF's warnings of it whatever
+    the display. What MuPDF said stays in pymupdf.TOOLS.mupdf_warnings(), which a PDF's read traces (pdf.mupdf). A
+    PyMuPDF that cannot turn the display off sends its messages to stderr."""
     import pymupdf
     if not _PYMUPDF_QUIET:
         _PYMUPDF_QUIET.append(True)
         try:
-            pymupdf.set_messages(fd=2)
-        except Exception:                                     # noqa: BLE001  (no set_messages: an older PyMuPDF)
-            try:
-                pymupdf.TOOLS.mupdf_display_errors(False)
-                pymupdf.TOOLS.mupdf_display_warnings(False)
-            except Exception as e:                            # noqa: BLE001
-                debuglog.exc("pymupdf: messages", e)
+            pymupdf.TOOLS.mupdf_display_errors(False)
+            pymupdf.TOOLS.mupdf_display_warnings(False)
+            where = {"stream": _Silent()}
+        except Exception as e:                                # noqa: BLE001  (an older PyMuPDF)
+            debuglog.exc("pymupdf: display", e)
+            where = {"fd": 2}
+        try:
+            pymupdf.set_messages(**where)
+        except Exception as e:                                # noqa: BLE001  (an older PyMuPDF has no set_messages)
+            debuglog.exc("pymupdf: messages", e)
     return pymupdf
 
 
@@ -5380,7 +5395,7 @@ def render_pdf_pages(path, workdir, pages=3, dpi=OCR_RENDER_DPI):
     path it takes as UTF-8, and the pictures are written by Python, which writes any path (KNOWN-ISSUES 175). A
     large page at fewer dots an inch (render_dpi)."""
     try:
-        pymupdf = pymupdf_quiet()           # MuPDF's messages off stdout (310)
+        pymupdf = pymupdf_quiet()           # MuPDF silent (310)
         with lib_path(path) as at:
             doc = pymupdf.open(at)
             out = []
@@ -7468,7 +7483,7 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
         if c["libs"].get("pymupdf"):
             text, pages = None, []
             try:
-                pymupdf = pymupdf_quiet()           # MuPDF's messages off stdout (310)
+                pymupdf = pymupdf_quiet()           # MuPDF silent (310)
                 doc = pymupdf.open(path)
                 pages = [p.get_text() for p in doc]
                 text = "\n\f\n".join(pages)
