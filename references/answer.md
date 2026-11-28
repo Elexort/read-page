@@ -31,17 +31,25 @@ The lines around the text are dry (KNOWN-ISSUES 276): above it `── content.m
 alike (a text that fits too: `from line 1 of 12`) - where the text starts, never where it ends: a harness that keeps
 an answer's head and cuts its tail (Zed) cuts `next:` off and leaves this line, and a model took an end named there
 for the end of what it had seen (KNOWN-ISSUES 279); below it, while text remains, `── next: line 127 of 389 ──` and
-on a line of its own the command that reads on, literal, so that a model copies it whole - the interpreter by the
-name the agent started the skill with (the first process's, which the environment's child is handed), `-X utf8`,
-the script by its absolute path in forward slashes, the address and `--dir` in double quotes, the flags that matter
-if the saved copy is gone and the page is read again (`--allow-external`, `--force-external`, `--alternate`,
+on a line of its own the command that reads on, literal, so that a model copies it whole - the interpreter as a
+shell reaches the one that ran the first process (which hands it to the environment's child): its name, `python` or
+`python3`, where the PATH leads that name to it, else its absolute path in forward slashes when it needs no quotes,
+else on Windows `py -3.13`, else the words (a read started by `py -3.13`, where `python` is the Store's alias, said
+`python`: KNOWN-ISSUES 293), `-X utf8`, the script by its absolute path in forward slashes, the address and `--dir`
+in double quotes, the flags that matter if the saved copy is gone and the page is read again (`--allow-external`,
+`--force-external`, `--alternate`,
 `--deny-images`, `--download`, `--dir`; never `--refresh`, whose every step would fetch again and could move the
 lines, `--clear-cookies`, `--screenshots`, `--ocr` or `--json`), then `--from N --chars C --file F`, C the size this
 answer was asked with. It runs as printed in bash, PowerShell 5.1 and 7 and cmd; its paths are in the locale's letters,
 as the `files:` line names them (under zh_CN.GBK the GBK reading of their bytes). An address, a folder or a script
-path holding `"`, `$`, a backtick, `%` or a backslash - what a shell reads inside double quotes -, or one a shell of the
-locale could not write back to its bytes, gets the words instead: `the same command with --from 127 --chars 7900
---file content.md`. When the text ends in an answer, a short
+path holding `"` or the three PowerShell takes for it (“ ” „, which file names hold), `$`, a backtick, `%` or a
+backslash - what a shell reads inside double quotes -, a control character, or what a shell of the locale could not
+write back to its bytes (U+FFFD, a lone surrogate), gets the words instead: `the same command with --from 127 --chars
+7900 --file content.md`. An address whose percent-escapes alone stand in the way (cmd reads `%` there) - what a
+browser copies of a page named in Russian or Chinese, a query with a space - is named as the IRI that asks for the same
+thing, `"https://ru.wikipedia.org/wiki/Москва"` for `…/wiki/%D0%9C%D0%BE…`, with `--dir` of the page's folder: the
+continuation reads the saved copy by its folder (KNOWN-ISSUES 294); one whose escapes an IRI cannot say (`%2F`, `%25`,
+`%22`) gets the words. When the text ends in an answer, a short
 page's too, the answer's last line says so: `── EOF content.md: lines 352-389 of 389 ──`. A stray `──` on the command
 line (a model copied the decoration) is left out and named on the `ignored:` line.
 
@@ -60,7 +68,8 @@ nothing is cut between the script and the agent. English text meets the characte
 about 7 700 characters where it was 9 850 (Node's fs reference, 381 KB, takes 54 answers instead of
 43); Cyrillic and CJK text meet the bytes, as before. `--from N`
 prints the block that starts at line N - the next one, or a heading from the outline - of the same
-file, from the saved copy, with no network; without `--file` it goes on in the file read last
+file, from the saved copy, with no new request for the page (its block's pictures come, see Pictures); without
+`--file` it goes on in the file read last
 (`--file` switches it). If the copy is gone the page is read again and a `note:` line says the
 lines may have moved. The files stay in the work folder: the per-URL cache entry under the system
 temp directory, or `--dir DIR`.
@@ -73,17 +82,19 @@ properties say: `--from "[tab · Developer Plan Limits]"`, `--from "[img #3]"`. 
 whitespace folded, so a quote that ends inside a marker is found - the case when a harness cut the answer in the middle
 of a picture's or a tab's line: `--from "#3 · 100x80 3K · picture 3] im"`, `--from "[tab · hidden, but extr"`. When no
 line holds it, the answer says
-so and shows the outline (its line numbers are what `--from N` takes), and no text. It works on `content.md` and
+so and shows the outline (its line numbers are what `--from N` takes), and no text. A quote of digits alone is a
+line number (`--from 2023` goes to line 2023): add a word to look for a number (`--from "2023 report"`; KNOWN-ISSUES 302). It works on `content.md` and
 `page.md` alike.
 
 `--chars C` sets how much one answer holds, for a harness that shows more (Codex with an OpenAI model about 40 000
-bytes, Claude Code 30 000, goose and OpenCode 50 000) or less: at most C characters (UTF-16 units, as Cline counts
+bytes, Claude Code 30 000, goose and OpenCode 50 000): at most C characters (UTF-16 units, as Cline counts
 them), whole lines, at most C x 9 980 / 7 900 bytes and C x 495 / 7 900 lines - the header, the outline and the lines
 above and below the text included. Without it an answer is `--chars 7900`: the 7 900 characters, 9 980 bytes and
 495 lines that fit every harness. It works on a first read, `--from N` and `--from "text"` alike, and the next line
-carries it on; C is 1 000 to 150 000 (the most a harness shows: Claude Code with its limit raised), and a value
-outside, or not a number, is named on the `ignored:` line with what was used (`--chars 500 (1000 at the least: 1000
-used)`). The skill cannot see what the harness shows: SKILL.md says when to raise the size and how to go on from a
+carries it on; C is 7 000 to 150 000 (the most a harness shows: Claude Code with its limit raised; the least, where
+the longest line a text has - 1 998 characters, 6 000 bytes of Chinese - stands whole beside the header and the
+command: KNOWN-ISSUES 295), and a value outside, or not a number, is named on the `ignored:` line with what was used
+(`--chars 500 (7000 at the least: 7000 used)`). The skill cannot see what the harness shows: SKILL.md says when to raise the size and how to go on from a
 cut. `--to` is gone (it named a range in lines until 2026-11-27): `--to M` is left out and named, `--to 120 (gone:
 --chars sets the size)`, and the read goes on.
 
@@ -149,8 +160,10 @@ naming the rule that fired (`a challenge page: Just a moment...`), so a status c
 instead of trusted. Content is never hidden, whatever the status.
 
 Exit code: 0 whenever an answer is printed, whatever its status; 1 an internal error (the answer
-says so); 2 a wrong call - no URL, or one that is neither http(s) nor a file here - with the reason
-on stderr. A flag that is not read-page's, or a value it cannot use (`--to 407`, `--from abc`,
+says so); 2 a wrong call - no URL, or one that is neither http(s) nor a file here, a bare file's name among them
+(`README.md` with no such file in this folder is `no such file`, never asked of the web as a host: a site so named
+takes its `https://`, KNOWN-ISSUES 298) - with the reason on stderr. A flag that is not read-page's, or a value it
+cannot use (`--to 407`, `--from abc`,
 `--file notes.md`), does not stop the read: it is left out and an `ignored:` line names it. A
 misspelled flag is the flag meant, silently (`--screenshot`, `--allow-extrnal`, `--form`): one edit
 for a short name, two for a longer one, and only when one flag is that near.
@@ -164,8 +177,8 @@ A PDF's tables come as Markdown tables where the layout model is installed (`--s
 
 | Flag | Meaning |
 |---|---|
-| `--from N` | print the block that starts at line N of the saved copy, no network; without `--file` it goes on in the file read last (`--file` switches it). `--from "text"`: from the first line that holds it, a marker by its type and name (see The answer) |
-| `--chars C` | how much one answer holds: C characters (UTF-16 units), whole lines, the bytes and lines in the same ratio; 7 900 by default, which fits every harness; 1 000 to 150 000 (see The answer) |
+| `--from N` | print the block that starts at line N of the saved copy, the page not fetched again; without `--file` it goes on in the file read last (`--file` switches it). `--from "text"`: from the first line that holds it, a marker by its type and name (see The answer) |
+| `--chars C` | how much one answer holds: C characters (UTF-16 units), whole lines, the bytes and lines in the same ratio; 7 900 by default, which fits every harness; 7 000 to 150 000 (see The answer) |
 | `--file page.md` | answer with the whole page (default: `content.md`, or `page.md` for a fragment) |
 | `--json` | print the manifest instead of the answer |
 | `--ocr N` | answer with the text drawn in picture N, the number on its marker, instead of the page's text: for a model that cannot see pictures (see Pictures) |
@@ -397,7 +410,7 @@ Not for reading, and not in SKILL.md: tools for seeing what a harness does to an
   | `middle:8000` | Cline's SDK runtime | over N UTF-16 units, about half of N kept at each end, `...[truncated K chars]...` between (Cline's `truncateMiddleByChars`) |
   | `head:16384` | Zed | over N bytes, `Command output too long. The first K bytes:` and those K bytes (K <= N), cut at a line's end |
   | `tail:51200` | OpenCode | over N bytes, a `...output truncated...` line and the last N bytes, from a line's start |
-  | `file:30000` | Claude Code | over N bytes, the whole answer in a file of the temp folder, and `Output too large (37.6KB). Full output saved to: <path>` with its first 2 000 characters |
+  | `file:30000` | Claude Code | over N bytes, the whole answer in a file of the page's folder (the cache's prune takes it; the temp folder where there is none), and `Output too large (37.6KB). Full output saved to: <path>` with its first 2 000 characters |
 
   An answer under N, or a value that names no cut, is printed as it is; `--json`, `--probe`, `--probe-units` and
   MCP's `probe` are never cut.

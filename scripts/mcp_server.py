@@ -14,7 +14,8 @@ The answer budget lives in answer.py, the download cap and the timeouts in readp
 file never repeats them, so the CLI and the MCP server cannot drift apart.
 
 Stdlib only: no SDK. Logic lives in readpage.py; this file is a thin adapter. Each read_url runs
-readpage.py in a child process, four at a time; notifications/cancelled kills that process tree.
+readpage.py in a child process, and so does a read() whose block has pictures to fetch (window_fetch),
+four calls at a time; notifications/cancelled kills that process tree.
 Which pictures become image blocks is decided in content_blocks. A result is its blocks alone, no
 structuredContent; the blocks of one result fit the text's limits as a client counts them (counted, fitted).
 Never prints anything to stdout except JSON-RPC messages.
@@ -702,6 +703,10 @@ def tool_read_url(args):
     url = (args.get("url") or "").strip()
     if not url:
         return err("url is required")
+    if url.startswith("-"):
+        # the address is a model's argument, and a page's text can ask for one: `--setup` as the address ran the
+        # installer, without the user's yes (KNOWN-ISSUES 291). The child gets it after `--` as well
+        return err("url is an address or a path, not a flag: %s" % url[:80])
     # the CLI reads any file on the machine; over MCP only one inside read-page's
     # own folders (a cache entry, a folder with our manifest), checked after links are resolved -
     # so a prompt-injected model cannot read C:\Windows or a home folder through this tool
@@ -715,7 +720,7 @@ def tool_read_url(args):
         ignored.append("file %s (content.md or page.md)" % args.get("file"))
         view = ""
     start, quote, chars = line_args(args, ignored)
-    argv = [url, "--json"]
+    argv = ["--json"]                           # the flags first; the address last, after `--` (KNOWN-ISSUES 291)
     for flag in ("allow_external", "force_external", "alternate", "refresh", "clear_cookies", "download"):
         if args.get(flag):
             argv.append("--" + flag.replace("_", "-"))
@@ -751,6 +756,7 @@ def tool_read_url(args):
         else:
             ignored.append("ocr %s (a picture's number, from its marker)" % args.get("ocr"))
             ocr_n = 0
+    argv += ["--", url]                         # whatever it holds, the address is never read as a flag
     rc, out, e = run_cli(argv)
     if e:
         return err(e)
@@ -831,6 +837,27 @@ def owned_dir(d):
         return False
 
 
+def window_fetch(d, rel, start, quote, chars):
+    """read() of content.md or page.md: the pictures of the lines it prints come as a CLI continuation's do - the CLI
+    reads on from the folder (--dir, the saved copy), downloads its window's pictures and rewrites their markers; its
+    answer is not used, read() renders its own from the files. They said "not downloaded: not printed yet" as they
+    were printed, and only the first window's came (KNOWN-ISSUES 296). Not for a file of this machine, nor when the
+    read denied its pictures (the CLI's next: carries --deny-images), nor when no picture without its file could
+    come (refused for good, a 404, or failed a moment ago: readpage.retryable, retry_due) - then no child starts."""
+    man = readpage.load_manifest(d) or {}
+    url = str((man.get("url") or {}).get("requested") or "")
+    if not url.startswith(("http://", "https://")) or "images" in readpage.SKIP \
+            or (man.get("signals") or {}).get("images_denied"):
+        return
+    if not [e for e in man.get("images") or [] if isinstance(e, dict) and not e.get("file")
+            and readpage.retryable(e.get("why")) and readpage.retry_due(e)
+            and str(e.get("url") or "").startswith(("http://", "https://"))]:
+        return                                  # nothing a window could bring: no child
+    argv = ["--json", "--dir", d, "--file", rel, "--chars", str(chars)]
+    argv += ["--from=" + quote] if quote else ["--from", str(max(1, start))]
+    run_cli(argv + ["--", url])
+
+
 def tool_read(args):
     # left out and named, as read_url does: an old `offset`, a word for `from`; a typo is the one meant
     known = TOOLS[1]["inputSchema"]["properties"]
@@ -898,6 +925,8 @@ def tool_read(args):
             "" if attached else " · attached only with READ_PAGE_MCP_MEDIA=audio (and a client that renders audio)")))
         return result(blocks)
 
+    if rel in readpage.VIEWS:
+        window_fetch(d, rel, start, quote, chars)               # the pictures of the lines it prints
     try:
         data = open(path, "rb").read()
     except OSError as e:
@@ -944,7 +973,10 @@ def test_cut(res):
     if not os.environ.get("READ_PAGE_TEST_CUT") or not isinstance(res, dict):
         return res
     said = "".join(b.get("text") or "" for b in res.get("content") or [] if b.get("type") == "text")
-    cut = answer.harness_cut(said)
+    # file:N keeps the whole answer in the page's folder, the one its files: line names (KNOWN-ISSUES 300)
+    named = re.search(r"(?m)^files: (.+?) \(", said)
+    folder = ownenv.fs_path(named.group(1).strip()) if named else ""
+    cut = answer.harness_cut(said, folder=folder if folder and os.path.isdir(folder) else None)
     return res if cut == said else dict(res, content=[text(cut)])
 
 
@@ -1019,9 +1051,10 @@ def main():
         if msg.get("method") == "notifications/cancelled":
             cancel((msg.get("params") or {}).get("requestId"))
             continue
-        if msg.get("method") == "tools/call" and (msg.get("params") or {}).get("name") == "read_url" \
+        if msg.get("method") == "tools/call" and (msg.get("params") or {}).get("name") in ("read_url", "read") \
                 and msg.get("id") is not None:
-            # a page read takes seconds: its own thread, so the next call does not wait for it
+            # a page read takes seconds, and read() starts a child for its pictures (window_fetch): its own thread, so
+            # the next call does not wait for it and a cancellation reaches the child
             t = threading.Thread(target=answer_call, args=(msg,), daemon=True)
             t.start()
             workers = [w for w in workers if w.is_alive()] + [t]

@@ -12,8 +12,8 @@ its own. English text meets the characters first (a 9 980-byte block lost about 
 from its middle in Cline), Cyrillic and CJK text the bytes. A text that fits is printed whole. A
 longer one gets an outline with line numbers first, then its beginning up to the limit, cut at a
 paragraph, and the exact line where it goes on; continuing from that line prints the next block of
-the same size. `--chars C` (MCP's chars) sets the size for a tool that shows more or less: C characters,
-the bytes and the lines in the same ratio (limits).
+the same size. `--chars C` (MCP's chars) sets the size for a tool that shows more: C characters, the bytes and
+the lines in the same ratio (limits), at least CHARS_MIN, at which the longest line stays whole.
 """
 import os
 import re
@@ -30,7 +30,12 @@ LINE_CHARS = 1998      # the Read tools of OpenCode, Kilo Code, Cline, Crush, Ge
                        # a line at 2 000 characters; "\r\n" fits too
 LINE_BYTES = 6000      # keeps every line inside one block even with the outline above it
 POINTER_BYTES = 200    # the separator above the text and the pointer below it (characters too)
-CHARS_MIN = 1000       # --chars C: the least an answer holds,
+# --chars C: the least an answer holds - where the longest line content.md has (LINE_CHARS, LINE_BYTES of Chinese)
+# always stands whole beside the header and the command under next:, measured 2026-11-28 with a header of its longest
+# rows (a redirect's url:, a 400-character advice, missing: and improve:, outside the text:) under a 200-character
+# folder, a 150-character script path and a 200-character address: 6 900 (5 800 with the plain header, 3 300 for an
+# English text). Below it such a line was shown in part and next: went past its rest (KNOWN-ISSUES 295)
+CHARS_MIN = 7000
 CHARS_MAX = 150000     # and the most - the most a harness shows (Claude Code with its limit raised)
 OUTSIDE_SHOWN = 1024   # less than this outside the text (a footer line) is not worth a header row
 PROBE_LINE = 100       # characters a probe line takes, its "\n" too
@@ -128,15 +133,16 @@ def _u16_slice(s, start, end=None):
     return part.decode("utf-16-le", "ignore")
 
 
-def harness_cut(out, spec=None):
+def harness_cut(out, spec=None, folder=None):
     """READ_PAGE_TEST_CUT, a hook for testing the skill (references/answer.md, For testing the skill): an answer cut
     after it is built the way a harness cuts what a command printed, so that a model can be taught to go on under each
     cut. `middle:N` Cline's SDK runtime: over N UTF-16 units, about half of N kept at each end and
     `...[truncated K chars]...` between (its truncateMiddleByChars); `head:N` Zed: over N bytes, "Command output too
     long. The first K bytes:" and those bytes, cut at a line's end; `tail:N` OpenCode: over N bytes, a
     `...output truncated...` line and the last N bytes from a line's start; `file:N` Claude Code: over N bytes the
-    whole answer in a file of the temp folder, and a note naming it with its first 2 000 characters. An answer under
-    N, or a value that names no cut, is returned as it is. `spec` None: the environment's."""
+    whole answer in a file - in the page's `folder`, which the cache's prune takes with it (one in the temp folder for
+    each cut was left there: KNOWN-ISSUES 300), else in the temp folder - and a note naming it with its first 2 000
+    characters. An answer under N, or a value that names no cut, is returned as it is. `spec` None: the environment's."""
     spec = os.environ.get("READ_PAGE_TEST_CUT", "") if spec is None else spec
     m = re.match(r"\s*(middle|head|tail|file)\s*:\s*(\d+)\s*$", spec or "")
     if not m or not out:
@@ -163,7 +169,8 @@ def harness_cut(out, spec=None):
         nl = part.find(b"\n")
         part = part[nl + 1:] if 0 <= nl < len(part) - 1 else part
         return "...output truncated...\n\n" + part.decode("utf-8", "ignore")
-    fd, path = tempfile.mkstemp(prefix="read-page-cut-", suffix=".txt")
+    fd, path = tempfile.mkstemp(prefix="read-page-cut-", suffix=".txt",
+                                dir=folder if folder and os.path.isdir(folder) else None)
     with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(out)
     return "Output too large (%.1fKB). Full output saved to: %s\n\nPreview (first 2KB):\n%s\n...\n" % (
@@ -584,13 +591,32 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
                 n = window(lines, n, block, room_l - 3, block_c)
             return out
 
+        def outline_rows(room_o):
+            rows = outline(lines, room_o, starts_after(window(lines, 1, block - OUTLINE_BYTES, room_l - 60,
+                                                              block_c - OUTLINE_BYTES)))
+            first_end = window(lines, 1, block - _bytes(rows) - 30, room_l - len(rows) - 4,
+                               block_c - _chars(rows) - 30)
+            rows = outline(lines, room_o, starts_after(first_end))
+            return ["outline (line, heading):"] + rows if rows else []
+
+        def first_fits(rows):
+            # the text's first line whole beside the outline, under the longest pointer this text can have
+            tail = [next_hint(max(2, total), total, view) if total > 1 else _eof(view, 1, 1, total)]
+            return _fits("\n".join(head + rows + [_lines(view, 1, total)] + pictures.compact(lines[:1]) + tail) + "\n",
+                         budget, chars, max_lines)
+
         room_o = min(OUTLINE_BYTES, room_b // 3, room_c // 3)
-        rows = outline(lines, room_o, starts_after(window(lines, 1, block - OUTLINE_BYTES, room_l - 60,
-                                                          block_c - OUTLINE_BYTES)))
-        first_end = window(lines, 1, block - _bytes(rows) - 30, room_l - len(rows) - 4, block_c - _chars(rows) - 30)
-        rows = outline(lines, room_o, starts_after(first_end))
-        if rows:
-            rows = ["outline (line, heading):"] + rows
+        rows = outline_rows(room_o)
+        if rows and not first_fits(rows):
+            # a first line too long to stand beside the outline - a text with no headings that opens with a paragraph
+            # of 1 998 characters, a Chinese one of 6 KB - was cut and its rest never shown (KNOWN-ISSUES 295): the
+            # outline gives up its room, a half, a quarter, all of it
+            for smaller in (room_o // 2, room_o // 4):
+                rows = outline_rows(smaller)
+                if first_fits(rows):
+                    break
+            else:
+                rows = []
     end = window(lines, start, block - _bytes(rows), room_l - len(rows) - 3, block_c - _chars(rows))
     while True:
         # a picture's first marker in this answer is full, a repeat short

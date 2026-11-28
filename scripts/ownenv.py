@@ -11,6 +11,7 @@ run imports it before the environment, if any, takes over.
 import json
 import os
 import re
+import shutil
 import sys
 import threading
 
@@ -483,6 +484,50 @@ def python_name(exe):
     return name if re.match(r"(?i)py[A-Za-z0-9._+-]*$", name) else "python"
 
 
+# a path a command line holds as it is, with no quotes, in bash, sh, cmd and both PowerShells: letters, digits and . _
+# / : + - alone (cmd splits at , ; = and a space, PowerShell reads ( ) { } @ $, bash ( ) & ; * ? [ ~ and more)
+PLAIN_PATH = re.compile(r"^(?:[A-Za-z]:)?/[\w./:+-]*$")
+# a handed command (READ_PAGE_PYTHON_NAME): a name, a plain path, `py -X.Y`, or "-" for none
+HANDED = re.compile(r"^(?:-|py -\d+(?:\.\d+)?|py[\w.+-]*|(?:[A-Za-z]:)?/[\w./:+-]+)$")
+
+
+def _same_file(a, b):
+    def norm(p):
+        p = os.path.realpath(p)
+        head, tail = os.path.split(p)
+        if tail.lower().startswith("pythonw"):              # pythonw is python's twin, which the name reaches
+            tail = tail[:6] + tail[7:]
+        return os.path.normcase(os.path.join(head, tail))
+    try:
+        return norm(a) == norm(b)
+    except (OSError, ValueError):
+        return False
+
+
+def python_command(exe):
+    """The interpreter as the command under an answer's next: names it (readpage.agent_python), so that every shell
+    reaches this very interpreter: its name (python_name) when that name, looked up on PATH as a shell does, is this
+    interpreter's file; else its absolute path, in forward slashes, when it needs no quotes (PLAIN_PATH); else on
+    Windows `py -X.Y` when the py launcher is on PATH; else "" - the answer then gives the words. The name alone, as
+    until 2026-11-28, said `python` after a read started with `py -3.13` - python.org's installer puts py on PATH
+    and leaves `python` to the Store's alias, which answered "Python was not found" in every shell (KNOWN-ISSUES
+    293). An interpreter of no known file: "python"."""
+    exe = str(exe or "")
+    if not exe:
+        return "python"
+    name = python_name(exe)
+    found = shutil.which(name)
+    if found and _same_file(found, exe):
+        return name
+    path = os.path.abspath(exe)
+    path = path.replace("\\", "/") if os.name == "nt" else path
+    if PLAIN_PATH.match(path):
+        return path
+    if os.name == "nt" and shutil.which("py"):
+        return "py -%d.%d" % sys.version_info[:2]
+    return ""
+
+
 def use(script, argv):
     """Go on under the environment's Python when there is one and this is not it (POSIX: exec;
     Windows: a child with the same arguments, our console and exit code, which ends with us).
@@ -510,7 +555,8 @@ def use(script, argv):
     if not _python_ok(py):
         _STATUS["why"] = "its Python is missing: run --setup again"
         return
-    if any(meant_setup(a) for a in argv):
+    if any(meant_setup(a) for a in (argv[:argv.index("--")] if "--" in argv else argv)):
+        # (after `--` stands the address, never a flag: the MCP server puts it there, KNOWN-ISSUES 291)
         _STATUS["why"] = "--setup works from outside it"
         return
     if os.environ.get("READ_PAGE_ENV_CHILD"):
@@ -521,8 +567,9 @@ def use(script, argv):
     cmd = [py, "-E"] + (["-B"] if sys.dont_write_bytecode or os.environ.get("PYTHONDONTWRITEBYTECODE") else []) \
         + ["-X", "utf8", os.path.abspath(script)] + [str(a) for a in argv]
     os.environ["READ_PAGE_ENV_CHILD"] = "1"
-    # the name the agent started the skill with: the answer's next: line repeats it, not the environment's Python
-    os.environ.setdefault("READ_PAGE_PYTHON_NAME", python_name(sys.executable))
+    # the interpreter the agent started the skill with, as a shell reaches it from the agent's PATH (python_command,
+    # here, before the environment's tools come first on it): the answer's next: line repeats it, "-" for none
+    os.environ.setdefault("READ_PAGE_PYTHON_NAME", python_command(sys.executable) or "-")
     for f in (sys.stdout, sys.stderr):
         try:
             f.flush()

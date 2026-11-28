@@ -43,7 +43,7 @@ outline (line, heading): …
 python -X utf8 "SKILL_DIR/scripts/readpage.py" URL --allow-external --from 127 --chars 7900 --file content.md
 ```
 
-- The rest of a long text, when you need it: run the command under `next:` (the saved copy, no network); `EOF`
+- The rest of a long text, when you need it: run the command under `next:` (the saved copy, not fetched again); `EOF`
   marks the end. For more at once raise `--chars` in it (7 900 fits every tool): to your tool's output limit if
   you know it, else to about 20 000. If an answer comes back cut (a gap, a note like `truncated` or `omitted`) or
   saved to a file, go on where the text you saw breaks off - `--from "<words of the last line before the gap>"`,
