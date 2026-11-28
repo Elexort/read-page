@@ -8181,7 +8181,7 @@ def vtt_to_text(vtt, block_seconds=30):
         for nxt in lines[i + 1:]:
             if "-->" in nxt or re.match(r"^(WEBVTT|Kind:|Language:|NOTE|\d+\s*$)", nxt):
                 break
-            clean = re.sub(r"<[^>]+>", "", nxt).strip()
+            clean = subtitles.cue_text(nxt).strip()        # tags, then entities: `&amp;` was the text's
             if clean:
                 text.append(clean)
         if text:
@@ -8535,7 +8535,9 @@ def transcript_video(url, workdir):
 
     def stamp(t):
         return "%02d:%02d:%06.3f" % (int(t) // 3600, (int(t) % 3600) // 60, t % 60)
-    vtt = "WEBVTT\n\n" + "\n\n".join("%s --> %s\n%s" % (stamp(a), stamp(a + max(0.01, d)), (t or "").replace("\n", " "))
+    from html import escape                  # a cue's text escaped, as WebVTT asks (KNOWN-ISSUES 332)
+    vtt = "WEBVTT\n\n" + "\n\n".join("%s --> %s\n%s" % (stamp(a), stamp(a + max(0.01, d)),
+                                                        escape((t or "").replace("\n", " "), quote=False))
                                      for a, d, t in cues if (t or "").strip())
     try:
         with open(os.path.join(workdir, "transcript.vtt"), "w", encoding="utf-8") as fh:

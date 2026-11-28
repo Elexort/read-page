@@ -362,6 +362,28 @@ try:
                              {"de": {"xml": ebu8}}, lang="en")
     check("331: a broadcaster's track yt-dlp named by its address (video.de.xml) is read (it was no track: 'no "
           "subtitles')", "Hello," in got[0] and got[2] == "subtitles de", "%s | %s" % (got[0][:40], got[2]))
+    # a cue's text is escaped in the WEBVTT the converters make, and read back tags first, then entities: an SRT's
+    # "x < y and y > z" lost the words between its < and >, and a VTT's &amp; and &gt;&gt; stayed in the transcript
+    # (KNOWN-ISSUES 332)
+    if sub8 is not None:
+        srt8 = ("1\n00:00:01,000 --> 00:00:02,000\nif x &lt; y and y &gt; z\n\n"
+                "2\n00:00:03,000 --> 00:00:04,000\nAT&amp;T &gt;&gt; next\n")
+        got8 = mod8.vtt_to_text(sub8.to_vtt(srt8, "srt"))
+        check("332: an SRT's < and > reach the transcript as they are, \"if x < y and y > z\" (the words between "
+              "were taken for a tag)", got8 == "[0:01] if x < y and y > z AT&T >> next", got8)
+        plain8 = "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n&gt;&gt; AT&amp;T said &lt;no&gt; <i>now</i>\n"
+        roll8 = ("WEBVTT\nKind: captions\nLanguage: en\n\n00:00:00.000 --> 00:00:02.000 align:start position:0%\n \n"
+                 "&gt;&gt; we<00:00:00.500><c> met</c><00:00:01.000><c> AT&amp;T</c>\n\n"
+                 "00:00:02.000 --> 00:00:02.010 align:start position:0%\n&gt;&gt; we met AT&amp;T\n \n\n"
+                 "00:00:02.010 --> 00:00:04.000 align:start position:0%\n&gt;&gt; we met AT&amp;T\n"
+                 "then<00:00:02.500><c> left</c>\n")
+        got8 = [mod8.vtt_to_text(plain8), mod8.vtt_to_text(roll8)]
+        check("332: a VTT's entities are its text, its tags still out - a plain track and YouTube's rolling one "
+              "(\"&gt;&gt; AT&amp;T\" stayed)", got8 == ["[0:01] >> AT&T said <no> now", "[0:00] >> we met AT&T then left"],
+              str(got8))
+        check("332: the WEBVTT a converter makes is escaped as WebVTT asks, and its rolling track's lines too",
+              "if x &lt; y and y &gt; z" in sub8.to_vtt(srt8, "srt") and "AT&amp;T" in sub8.unrolled(roll8),
+              sub8.to_vtt(srt8, "srt")[:90].replace("\n", "/"))
 
     # a dubbed video: yt-dlp's `language` names the default audio track, and the automatic track is that audio's speech
     ASR = "https://www.youtube.com/api/timedtext?v=x&caps=asr&hl=en&kind=asr&lang=en&fmt=vtt"

@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A cue's `<`, `>` and `&` reach the transcript as they were said** (KNOWN-ISSUES 332): a converted track's text
+  was unescaped and written into WEBVTT as it was, and the transcript took out everything between `<` and `>` - an
+  SRT's "x &lt; y and y &gt; z" became "x  z" -, while a VTT read as it came kept its escapes (`AT&amp;T`,
+  `&gt;&gt;`). The WEBVTT written is escaped as WebVTT asks, and a cue is read back tags first, then entities.
 - **A broadcaster's TTML is read: EBU-TT-D's `<tt:p>`, single quotes, times on spans or a `<div>`, a `.xml` track**
   (KNOWN-ISSUES 331): the TTML reader matched `<p begin="...">` alone, so EBU-TT-D - every element prefixed - and a
   single-quoted file gave "subtitles were empty", a paragraph timed by its spans was left out, and a track yt-dlp

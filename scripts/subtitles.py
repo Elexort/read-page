@@ -10,7 +10,7 @@ anything; the standard library only.
 import bisect
 import json
 import re
-from html import unescape
+from html import escape, unescape
 
 # the text formats a track may come in, in the order one is taken when a language has several; `xml` is a TTML or a
 # YouTube XML track whose address yt-dlp took its extension from (an EBU-TT file at `...deu.xml`, KNOWN-ISSUES 331)
@@ -64,9 +64,17 @@ def _clean(text):
 
 
 def _vtt(cues):
-    """WEBVTT from [(start, end, text)]; "" when there is no cue with text."""
-    out = ["%s --> %s\n%s" % (_stamp(a), _stamp(max(a, b)), t) for a, b, t in cues if t]
+    """WEBVTT from [(start, end, text)]; "" when there is no cue with text. A cue's text is escaped as WebVTT asks
+    (&, <, >): it is read back tags first, then entities, and "x < y and y > z" lost "< y and y >" (KNOWN-ISSUES 332)."""
+    out = ["%s --> %s\n%s" % (_stamp(a), _stamp(max(a, b)), escape(t, quote=False)) for a, b, t in cues if t]
     return "WEBVTT\n\n" + "\n\n".join(out) + "\n" if out else ""
+
+
+def cue_text(line):
+    """A WebVTT cue's line as text: its tags out (<c>, <i>, a word's time <00:00:01.500>), then its entities (&amp;,
+    &gt;&gt;, &lt;), which stayed in the transcript as they were written (KNOWN-ISSUES 332). In that order, so an
+    escaped tag stays text."""
+    return unescape(re.sub(r"<[^>]+>", "", line or ""))
 
 
 def _split_blocks(raw):
@@ -275,7 +283,7 @@ def rolled_cues(vtt):
             take.append(bottom)
         for i in take:
             times = _WORD_TIME.findall(rows[i])
-            out.append((start, end, re.sub(r"<[^>]+>", "", rows[i]).strip(), since))
+            out.append((start, end, cue_text(rows[i]).strip(), since))
             since = _seconds(times[-1]) if times else start
             shown.append(keys[i])
         del shown[:-8]
