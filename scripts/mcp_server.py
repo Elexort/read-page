@@ -415,7 +415,7 @@ def inline_image(path):
         return data, "image/" + kind, w, h
     if kind == "svg":
         try:
-            import pymupdf
+            pymupdf = readpage.pymupdf_quiet()      # MuPDF's messages off stdout, the protocol's (336)
             doc = pymupdf.open(stream=data, filetype="svg")
             r = doc[0].rect
             zoom = min(1.0, IMG_SIDE / max(r.width, r.height, 1.0))

@@ -3597,7 +3597,7 @@ def pdf_shots(path, workdir, want):
 
 def _pdf_shots(path, workdir, want):
     try:
-        import pymupdf
+        pymupdf = pymupdf_quiet()           # MuPDF's messages off stdout (336)
     except Exception as _dbg_e:                                     # noqa: BLE001
         debuglog.exc("pdf shots: import", _dbg_e)
         return [], 0
@@ -5308,13 +5308,34 @@ def office_fast(path, sub, broke=None, until=None):
 
 
 OCR_RENDER_DPI = 150                    # a scanned page's picture for OCR
+_PYMUPDF_QUIET = []                     # PyMuPDF's messages sent to stderr, once a process (pymupdf_quiet)
+
+
+def pymupdf_quiet():
+    """PyMuPDF, its MuPDF messages on stderr: MuPDF writes its errors and warnings to file descriptor 1, which is the
+    answer - a damaged PDF's "MuPDF error: format error: object is not a stream" stood before the answer's first
+    line, and `--json` did not parse - and the MCP server's protocol, where an SVG with a broken picture became
+    lines that are no JSON-RPC (KNOWN-ISSUES 336). PyMuPDF 1.24 and later send every message where set_messages
+    says; an older one is told not to show them. What MuPDF said stays in pymupdf.TOOLS.mupdf_warnings()."""
+    import pymupdf
+    if not _PYMUPDF_QUIET:
+        _PYMUPDF_QUIET.append(True)
+        try:
+            pymupdf.set_messages(fd=2)
+        except Exception:                                     # noqa: BLE001  (no set_messages: an older PyMuPDF)
+            try:
+                pymupdf.TOOLS.mupdf_display_errors(False)
+                pymupdf.TOOLS.mupdf_display_warnings(False)
+            except Exception as e:                            # noqa: BLE001
+                debuglog.exc("pymupdf: messages", e)
+    return pymupdf
 
 
 def render_pdf_pages(path, workdir, pages=3, dpi=OCR_RENDER_DPI):
     """PNG of the first pages, for a model that can look. Returns the file paths. PyMuPDF opens the document by a
     path it takes as UTF-8, and the pictures are written by Python, which writes any path (KNOWN-ISSUES 175)."""
     try:
-        import pymupdf
+        pymupdf = pymupdf_quiet()           # MuPDF's messages off stdout (336)
         with lib_path(path) as at:
             doc = pymupdf.open(at)
             out = []
@@ -7335,10 +7356,13 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
         if c["libs"].get("pymupdf"):
             text, pages = None, []
             try:
-                import pymupdf
+                pymupdf = pymupdf_quiet()           # MuPDF's messages off stdout (336)
                 doc = pymupdf.open(path)
                 pages = [p.get_text() for p in doc]
                 text = "\n\f\n".join(pages)
+                said = pymupdf.TOOLS.mupdf_warnings()           # what MuPDF said of the file: the trace's
+                if said:
+                    trace("pdf.mupdf", said=" | ".join(said.splitlines())[:300])
             except Exception as e:                            # noqa: BLE001
                 debuglog.exc("document: converter", e)
                 note = short_reason(e, 160)                   # (its end says what: "... as type pdf")

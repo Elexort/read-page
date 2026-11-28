@@ -2035,6 +2035,34 @@ try:
     except ImportError:
         check.skip("335: a cut PDF", "pymupdf is not installed here")
 
+    # MuPDF writes its errors to file descriptor 1: a damaged PDF's "MuPDF error: ..." stood before the answer's first
+    # line, and `--json` did not parse; the MCP server's stdout is its protocol, and an SVG with a broken picture made
+    # lines there that are no JSON-RPC (KNOWN-ISSUES 336)
+    try:
+        import pymupdf  # noqa: F401
+        p = os.path.join(tmpc, "complains.pdf")
+        with open(p, "wb") as fh:
+            fh.write(plain_pdf[:len(plain_pdf) // 2])
+        first = run_read(p, env=env).text.split("\n", 1)[0]
+        try:
+            parsed = json.loads(run_read(p, "--json", env=env).text)
+        except ValueError:
+            parsed = None
+        check("336: a PDF MuPDF complains of: the answer's first line is its header, and --json parses (MuPDF's error "
+              "stood before them)", first.startswith("read-page · ") and isinstance(parsed, dict), repr(first[:90]))
+        svg = os.path.join(tmpc, "broken-picture.svg")
+        with open(svg, "wb") as fh:
+            fh.write(b'<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><image width="40" height="40" '
+                     b'href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQ"/></svg>')
+        code = ("import sys; sys.path.insert(0, %r); import mcp_server; got = mcp_server.inline_image(%r); "
+                "sys.stderr.write(str(got[1:])[:80])" % (os.path.dirname(SCRIPT), svg))
+        child = subprocess.run([sys.executable, "-X", "utf8", "-c", code], capture_output=True, timeout=120)
+        check("336: the MCP server makes an SVG with a broken picture a PNG and writes nothing on its stdout, its "
+              "protocol (MuPDF's errors were lines there)", child.returncode == 0 and child.stdout == b"",
+              repr(child.stdout[:120]) + " | " + child.stderr.decode("utf-8", "replace")[-160:])
+    except ImportError:
+        check.skip("336: MuPDF's messages", "pymupdf is not installed here")
+
     def excel_ods(sheets, before=(), head=""):
         """An ODS in Excel's order: content.xml right after the styles, before the rest; `before`: members
         [(name, text)] written ahead of content.xml, as LibreOffice writes its settings.xml and meta.xml;

@@ -8,6 +8,11 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **MuPDF's messages go to stderr, off the answer and the MCP protocol** (KNOWN-ISSUES 336): MuPDF writes its errors
+  to file descriptor 1, so a damaged PDF's "MuPDF error: ..." stood before the answer's first line and `--json` did
+  not parse, and in the MCP server an SVG with a broken picture wrote lines into the JSON-RPC stream. PyMuPDF is
+  imported with its messages on stderr (`set_messages(fd=2)`), in the read, the server and the screenshots; what it
+  said of a PDF goes to the trace.
 - **A cut PDF says it is cut** (KNOWN-ISSUES 335): a PDF that ends without its `%%EOF` was read as if whole - one
   that did not open was `empty`, "no text in it", one that opened with no page a scan with no page to render, one
   MuPDF repaired `ok` with its last pages gone unsaid. `signals.broken_pdf` says cut or damaged and how many pages

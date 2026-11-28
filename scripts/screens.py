@@ -24,6 +24,21 @@ import io
 import os
 import time
 
+
+def _pymupdf():
+    """PyMuPDF with MuPDF's messages on stderr, not on stdout, which is the answer's (readpage.pymupdf_quiet,
+    KNOWN-ISSUES 336); an older PyMuPDF is told not to show them."""
+    import pymupdf
+    try:
+        pymupdf.set_messages(fd=2)
+    except Exception:                                         # noqa: BLE001  (no set_messages)
+        try:
+            pymupdf.TOOLS.mupdf_display_errors(False)
+            pymupdf.TOOLS.mupdf_display_warnings(False)
+        except Exception:                                     # noqa: BLE001
+            pass
+    return pymupdf
+
 SCREEN_W, SCREEN_H = 1280, 784
 MAX_BYTES = int(3.75 * 1024 * 1024)
 JPEG_Q = 95
@@ -116,7 +131,7 @@ def _glue(parts, tool):
             out.save(buf, "JPEG", quality=JPEG_Q)
             data, fmt = buf.getvalue(), "jpg"
         return data, out.width, out.height, fmt
-    import pymupdf
+    pymupdf = _pymupdf()
     pix = [pymupdf.Pixmap(b) for b, _cut in parts]
     w = max(p.width for p in pix)
     h = sum(p.height - cut for p, (_b, cut) in zip(pix, parts))
@@ -143,7 +158,7 @@ def _alone(png, tool, page):
         Image.open(io.BytesIO(png)).convert("RGB").save(buf, "JPEG", quality=JPEG_Q)
         return buf.getvalue(), "jpg"
     if tool == "pymupdf":
-        import pymupdf
+        pymupdf = _pymupdf()
         return pymupdf.Pixmap(png).tobytes("jpg", jpg_quality=JPEG_Q), "jpg"
     try:
         return page.screenshot(type="jpeg", quality=JPEG_Q), "jpg"
