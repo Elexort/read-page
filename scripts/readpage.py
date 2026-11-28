@@ -6673,10 +6673,28 @@ def tables_stop(w, kill=False):
     w.kill() if kill else w.close()
 
 
+TABLES_CLOSE_SECONDS = 2.0     # the read's end: what its model processes get, together, to end by themselves
+
+
 def tables_close(kill=False):
-    """Every model process of the read goes (its end, or a step that killed them)."""
-    for w in list(_TABLES["pool"]):
-        tables_stop(w, kill)
+    """Every model process of the read goes (its end, or a step that killed them): each is told it has no more, they
+    are waited for together, TABLES_CLOSE_SECONDS in all, and those still there are killed - one at a time, a process
+    still loading its model (it reads its requests only after) held the read's exit 2 s each (KNOWN-ISSUES 341)."""
+    pool = list(_TABLES["pool"])
+    if not kill:
+        for w in pool:
+            try:
+                w.p.stdin.close()
+            except Exception:                                 # noqa: BLE001  (closed already, a pipe that broke)
+                pass
+        end = now() + TABLES_CLOSE_SECONDS
+        for w in pool:
+            try:
+                w.p.wait(max(0.0, end - now()))
+            except subprocess.TimeoutExpired:
+                pass
+    for w in pool:
+        tables_stop(w, kill or w.p.poll() is None)
     tables_unhold()
 
 
@@ -6968,8 +6986,10 @@ def pdf_tables(path, doc, pages):
         tables_unhold()                            # (room held for a process that did not start)
         slow = tables_pace()
         for w in list(pool):
-            if w.pages or state["stop"] == "error":
-                named += [p + 1 for p in w.pages]          # still at a page: it goes, its pages named
+            if w.pages or state["stop"] == "error" or not w.ready:
+                # still at a page: it goes, its pages named; one still loading its model, with no page, goes too - kept,
+                # it held the read's exit while it loaded (KNOWN-ISSUES 341)
+                named += [p + 1 for p in w.pages]
                 w.pages = []
                 tables_stop(w, kill=True)
         info["pages"] = sorted(info["pages"])             # (answered as each process was done)

@@ -950,6 +950,17 @@ try:
                   "every page named", r_starts[0] <= 3 and info.get("asked") == 0
                   and info.get("left") == [1, 2, 3, 4, 5, 6] and "ended" in (info.get("error") or "")
                   and info.get("secs", 99) < 6, "%d starts %s" % (r_starts[0], info))
+            # KNOWN-ISSUES 341: the read's end closed its model processes one after another, each given 2 s to end; one
+            # still loading its model reads its requests only after that, so each such process held the exit 2 s
+            os.environ["RP_STUB_LOAD_SLEEP"] = "8"
+            loading = [w for w in (mod3.tables_start() for _ in range(3)) if w is not None]
+            t_close = time.time()
+            mod3.tables_close()
+            took = time.time() - t_close
+            os.environ.pop("RP_STUB_LOAD_SLEEP", None)
+            check("341: the read's end closes three model processes still loading in one wait, not 2 s one after "
+                  "another", len(loading) == 3 and took < 3.5 and all(w.p.poll() is not None for w in loading)
+                  and not mod3._TABLES["pool"], "%.1f s, %s" % (took, [w.p.poll() for w in loading]))
             for k in ("RP_STUB_SLEEP", "READ_PAGE_TEST_MEMORY", "READ_PAGE_TEST_CPUS"):
                 os.environ.pop(k, None)
             os.environ["RP_STUB_NOLOAD"] = "1"
