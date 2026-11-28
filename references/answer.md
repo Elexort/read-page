@@ -85,13 +85,14 @@ so and shows the outline (its line numbers are what `--from N` takes), and no te
 `page.md` alike.
 
 `--chars C` sets how much one answer holds, for a harness that shows more (Codex with an OpenAI model about 40 000
-bytes, Claude Code 30 000, goose and OpenCode 50 000) or less: at most C characters (UTF-16 units, as Cline counts
+bytes, Claude Code 30 000, goose and OpenCode 50 000): at most C characters (UTF-16 units, as Cline counts
 them), whole lines, at most C x 9 980 / 7 900 bytes and C x 495 / 7 900 lines - the header, the outline and the lines
 above and below the text included. Without it an answer is `--chars 7900`: the 7 900 characters, 9 980 bytes and
 495 lines that fit every harness. It works on a first read, `--from N` and `--from "text"` alike, and the next line
-carries it on; C is 1 000 to 150 000 (the most a harness shows: Claude Code with its limit raised), and a value
-outside, or not a number, is named on the `ignored:` line with what was used (`--chars 500 (1000 at the least: 1000
-used)`). The skill cannot see what the harness shows: SKILL.md says when to raise the size and how to go on from a
+carries it on; C is 7 000 to 150 000 (the most a harness shows: Claude Code with its limit raised; the least, where
+the longest line a text has - 1 998 characters, 6 000 bytes of Chinese - stands whole beside the header and the
+command: KNOWN-ISSUES 295), and a value outside, or not a number, is named on the `ignored:` line with what was used
+(`--chars 500 (7000 at the least: 7000 used)`). The skill cannot see what the harness shows: SKILL.md says when to raise the size and how to go on from a
 cut. `--to` is gone (it named a range in lines until 2026-11-27): `--to M` is left out and named, `--to 120 (gone:
 --chars sets the size)`, and the read goes on.
 
@@ -173,7 +174,7 @@ A PDF's tables come as Markdown tables where the layout model is installed (`--s
 | Flag | Meaning |
 |---|---|
 | `--from N` | print the block that starts at line N of the saved copy, no network; without `--file` it goes on in the file read last (`--file` switches it). `--from "text"`: from the first line that holds it, a marker by its type and name (see The answer) |
-| `--chars C` | how much one answer holds: C characters (UTF-16 units), whole lines, the bytes and lines in the same ratio; 7 900 by default, which fits every harness; 1 000 to 150 000 (see The answer) |
+| `--chars C` | how much one answer holds: C characters (UTF-16 units), whole lines, the bytes and lines in the same ratio; 7 900 by default, which fits every harness; 7 000 to 150 000 (see The answer) |
 | `--file page.md` | answer with the whole page (default: `content.md`, or `page.md` for a fragment) |
 | `--json` | print the manifest instead of the answer |
 | `--ocr N` | answer with the text drawn in picture N, the number on its marker, instead of the page's text: for a model that cannot see pictures (see Pictures) |

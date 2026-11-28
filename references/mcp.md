@@ -69,7 +69,7 @@ matched as it stands too, so a quote that ends inside a marker (a client cut the
 holds it: the answer says so and shows the outline, and names no next line.
 
 `chars` (both tools) is the CLI's `--chars`: how much one answer holds, in characters, whole lines - 7 900 by
-default, which fits every client; 1 000 to 150 000, a value outside or not a number named on the `ignored:` line with
+default, which fits every client; 7 000 to 150 000, a value outside or not a number named on the `ignored:` line with
 what was used. The result as Cline counts it, its JSON (see How a client counts a result), stays within it, and the
 next line carries it on. `to`, a range in lines until 2026-11-27, is gone: left out and named, `to 120 (gone: chars
 sets the size)`, and the call goes on.

@@ -8,6 +8,11 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **`--chars` is 7 000 at the least, and no line of a text is cut by paging** (KNOWN-ISSUES 295): below about 2 500
+  a line longer than the room beside the header and the command was shown in part and `next:` went past its rest (at
+  1 000 every ordinary paragraph of an article). Measured: the longest line content.md has (1 998 characters, 6 000
+  bytes of Chinese) stands whole from 6 900 with the longest header rows under deep paths, so `CHARS_MIN` is 7 000; and
+  in a first block whose first line does not fit beside the outline, the outline gives up its room.
 - **An address with percent-escapes gets the command under `next:`, as its IRI with the page's folder**
   (KNOWN-ISSUES 294): `%` is read by cmd inside double quotes, so every Wikipedia page outside English as a browser
   copies it, and any query with a space, got the words. Such an address is named as the IRI that asks for the same

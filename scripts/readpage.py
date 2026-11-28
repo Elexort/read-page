@@ -9998,7 +9998,7 @@ def main(argv=None):
                          "--from \"[img #3]\"")
     ap.add_argument("--chars", dest="chars", default="", metavar="C",
                     help="how much one answer holds, in characters (UTF-16 units), whole lines: 7900 by default, which "
-                         "fits every harness; 1000 to 150000 (the bytes and lines in the same ratio)")
+                         "fits every harness; 7000 to 150000 (the bytes and lines in the same ratio)")
     ap.add_argument("--json", action="store_true", help="print the manifest instead of the text")
     ap.add_argument("--ocr", default="", metavar="N",
                     help="print the text drawn in picture N (the number on its marker) instead of the "
@@ -10053,7 +10053,7 @@ def main(argv=None):
         args.ignored.append("--from %d (a line number, 1 or more)" % args.from_line)
         args.from_line = 0
     # the answer's size in characters, the bytes and the lines in the default's ratio (answer.limits); a value
-    # outside 1 000 .. 150 000, or no number, is named with what was used
+    # outside 7 000 .. 150 000 (answer.CHARS_MIN, CHARS_MAX), or no number, is named with what was used
     asked = str(args.chars).strip()
     args.chars, why = answer.chars_asked(asked)
     if why:

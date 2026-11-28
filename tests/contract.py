@@ -515,7 +515,7 @@ try:
 
     # --chars C, one knob in characters (KNOWN-ISSUES 277): the whole answer - header, outline, the lines above and
     # below the text - within C characters (UTF-16 units), C x 9 980 / 7 900 bytes and C x 495 / 7 900 lines, whole
-    # lines; on a first read, --from N and --from "text"; clamped to 1 000 .. 150 000, named on ignored: with what was
+    # lines; on a first read, --from N and --from "text"; clamped to 7 000 .. 150 000, named on ignored: with what was
     # used; no --chars is --chars 7900. --to is gone: named on ignored:, the read goes on
     import answer                                              # noqa: E402
     plain = run_read(srv.url("/plainlong"))
@@ -538,9 +538,9 @@ try:
           within(on, 20000) and u16(on.text) > 15000 and n_on and body(on.text) == saved[(n_big or 1) - 1:n_on - 1],
           size(on))
     at_q = next(i for i, ln in enumerate(saved, 1) if "Sentence 300.4 explains" in ln)
-    q = run_read(srv.url("/plainlong"), "--from", "Sentence 300.4 explains", "--chars", "3000", reuse=plain)
-    check("--from \"text\" --chars 3000: from the quote's line, within 3 000 characters",
-          within(q, 3000) and "── content.md: from line %d of " % at_q in q.text and body(q.text)[:1] == saved[at_q - 1:at_q],
+    q = run_read(srv.url("/plainlong"), "--from", "Sentence 300.4 explains", "--chars", "7000", reuse=plain)
+    check("--from \"text\" --chars 7000: from the quote's line, within 7 000 characters",
+          within(q, 7000) and "── content.md: from line %d of " % at_q in q.text and body(q.text)[:1] == saved[at_q - 1:at_q],
           size(q))
     d0 = run_read(srv.url("/plainlong"), "--from", "5", reuse=plain)
     d79 = run_read(srv.url("/plainlong"), "--from", "5", "--chars", "7900", reuse=plain)
@@ -548,7 +548,7 @@ try:
           d0.text.split("\n")[1:] == d79.text.split("\n")[1:] and within(d0, 7900)
           and answer.limits(7900) == answer.limits() == {"chars": 7900, "budget": 9980, "max_lines": 495},
           size(d0))
-    for value, used, note in (("500", 1000, "--chars 500 (1000 at the least: 1000 used)"),
+    for value, used, note in (("500", 7000, "--chars 500 (7000 at the least: 7000 used)"),
                               ("999999", 150000, "--chars 999999 (150000 at the most: 150000 used)"),
                               ("abc", 7900, "--chars abc (a number of characters: 7900 used)")):
         r = run_read(srv.url("/plainlong"), "--from", "5", "--chars", value, reuse=plain)
@@ -556,9 +556,39 @@ try:
         check("--chars %s: %d used, named on ignored:, the read goes on" % (value, used),
               r.rc == 0 and note in ign and within(r, used) and "── content.md: from line 5 of " in r.text
               and (used < 100000 or u16(r.text) > 100000), ign[:90] + " | " + size(r))
+    # below 7 000 a line of 1 998 characters, or of 6 000 bytes of Chinese, did not fit beside the header and the
+    # command: it was shown in part and next: went past its rest (KNOWN-ISSUES 295)
     one = run_read(srv.url("/oneline"), "--chars", "1000")
-    check("--chars 1000, lines of 1 998 characters: one line at least, its head, within 1 000",
-          within(one, 1000) and "is longer than one answer" in one.text and next_line(one.text) == 2, size(one))
+    ign1 = next((ln for ln in one.text.split("\n") if ln.startswith("ignored: ")), "")
+    pieces, k_one = [one.text], next_line(one.text)
+    while k_one and len(pieces) < 80:
+        pieces.append(run_read(srv.url("/oneline"), "--from", str(k_one), "--chars", "1000", reuse=one).text)
+        k_one = next_line(pieces[-1])
+    check("--chars 1000, lines of 1 998 characters: 7 000 used, named on ignored:, and paging to the end cuts no line",
+          "--chars 1000 (7000 at the least: 7000 used)" in ign1 and "── EOF " in pieces[-1]
+          and not [t for t in pieces if "is longer than one answer" in t], "%s | %d answers" % (ign1[:60], len(pieces)))
+    cjk_long = "\n\n".join([("北京是中华人民共和国的首都也是全国的政治文化和国际交往中心" * 70)[:1998]] * 12)
+    deep = "C:/" + "/".join(["d" * 40] * 5)
+    # a header of its longest rows: a redirect's url:, a 400-character advice, missing: and improve:, outside the text:
+    m_deep = {"status": "ok", "url": {"requested": "https://e.example/" + "f" * 180,
+                                       "final": "https://e.example/moved/" + "g" * 200}, "dir": deep,
+              "content": {"engine": "defuddle", "outside": 9000}, "files": {"content": deep + "/content.md"},
+              "elapsed_ms": 1, "advice": "x " * 199, "missing": [{"what": "browser", "fix": "y " * 140}],
+              "improve": [{"what": "tables", "fix": "z " * 140}]}
+
+    def deep_hint(k, total, view):
+        return '── next: line %d of %d ──\npython -X utf8 "%s/readpage.py" "%s" --dir "%s" --from %d --chars %d ' \
+               '--file %s' % (k, total, deep, m_deep["url"]["requested"], deep, k, 7000, view)
+    at_min, k_min = [], 1
+    while k_min and len(at_min) < 40:
+        said_min, k_min = answer.render(m_deep, cjk_long, "content.md", k_min, deep_hint,
+                                        **answer.limits(getattr(answer, "CHARS_MIN", 1000)))
+        at_min.append(said_min)
+    check("... at the least, a Chinese text with no headings, 6 000 bytes a line, under deep paths: every line whole, "
+          "the first block's too (the outline gives up its room)",
+          getattr(answer, "CHARS_MIN", 0) == 7000 and not [t for t in at_min if "is longer than one answer" in t]
+          and "── EOF " in at_min[-1], "%d answers, %d cut" % (len(at_min),
+                                                              len([t for t in at_min if "is longer than one" in t])))
     gone = run_read(srv.url("/plainlong"), "--from", "50", "--to", "60", reuse=plain)
     ign = next((ln for ln in gone.text.split("\n") if ln.startswith("ignored: ")), "")
     check("--to is gone: left out and named, the usual block from --from",
@@ -653,11 +683,11 @@ try:
     pm = lines_of(first, "page.md")
     at_p = next(i for i, ln in enumerate(pm, 1) if "Sentence 20.4 explains" in ln)
     check("--from \"text\" in page.md alike", "── page.md: from line %d of " % at_p in r.text, first_line(r)[:80])
-    r = run_read(srv.url("/long"), "--from", "Sentence 20.4 explains", "--chars", "1500", "--file", "content.md",
+    r = run_read(srv.url("/long"), "--from", "Sentence 20.4 explains", "--chars", "7000", "--file", "content.md",
                  reuse=first)
-    check("--from \"text\" --chars 1500: from the quote's line, within 1 500 characters",
+    check("--from \"text\" --chars 7000: from the quote's line, within 7 000 characters",
           "── content.md: from line %d of " % at in r.text and body(r.text)[:1] == saved[at - 1:at]
-          and u16(r.text) <= 1500, "%d characters" % u16(r.text))
+          and u16(r.text) <= 7000, "%d characters" % u16(r.text))
     tabs_r = run_read(srv.url("/tabs"))
     tl = lines_of(tabs_r)
     for quote, want in (("[tab · Developer Plan Limits]", "[tab · hidden, but extracted · Developer Plan Limits]"),
@@ -888,13 +918,13 @@ try:
     check("MCP read_url chars=20000: past one block, as Cline counts it within 20 000 characters, the size carried on",
           15000 < cline_form(rc20) <= 20000 and "chars=20000" in mcp_said(rc20).rstrip("\n").split("\n")[-1],
           "%d characters as JSON; %s" % (cline_form(rc20), mcp_said(rc20).rstrip("\n").split("\n")[-1][-60:]))
-    rc3 = mcp({"dir": d, "from": 121, "chars": 3000}, "read")
-    check("MCP read chars=3000: from line 121, as Cline counts it within 3 000 characters",
-          cline_form(rc3) <= 3000 and "── content.md: from line 121 of " in mcp_said(rc3) and "chars=3000" in mcp_said(rc3),
+    rc3 = mcp({"dir": d, "from": 121, "chars": 7000}, "read")
+    check("MCP read chars=7000: from line 121, as Cline counts it within 7 000 characters",
+          cline_form(rc3) <= 7000 and "── content.md: from line 121 of " in mcp_said(rc3) and "chars=7000" in mcp_said(rc3),
           "%d characters as JSON" % cline_form(rc3))
     rc1 = mcp({"dir": d, "from": 121, "chars": "99"}, "read")
-    check("MCP chars=99: 1 000 used, named on ignored:", "chars 99 (1000 at the least: 1000 used)" in mcp_said(rc1)
-          and cline_form(rc1) <= 1000, next((ln for ln in mcp_said(rc1).split("\n") if ln.startswith("ignored")), ""))
+    check("MCP chars=99: 7 000 used, named on ignored:", "chars 99 (7000 at the least: 7000 used)" in mcp_said(rc1)
+          and cline_form(rc1) <= 7000, next((ln for ln in mcp_said(rc1).split("\n") if ln.startswith("ignored")), ""))
     rt = mcp({"url": srv.url("/long"), "from": 1, "to": 120})
     check("MCP read_url to= is gone: named on ignored:, the usual block",
           "to 120 (gone: chars sets the size)" in mcp_said(rt) and "── content.md: from line 1 of " in mcp_said(rt)
