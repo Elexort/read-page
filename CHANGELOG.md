@@ -8,6 +8,11 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **An address with percent-escapes gets the command under `next:`, as its IRI with the page's folder**
+  (KNOWN-ISSUES 294): `%` is read by cmd inside double quotes, so every Wikipedia page outside English as a browser
+  copies it, and any query with a space, got the words. Such an address is named as the IRI that asks for the same
+  thing (`…/wiki/Москва` for `…/wiki/%D0%9C…`) with `--dir` of the page's folder, which a continuation reads the saved
+  copy from; escapes an IRI cannot say (`%2F`, `%25`) still get the words.
 - **The command under `next:` reaches the interpreter that ran the read** (KNOWN-ISSUES 293): it named the
   interpreter's file (`python`), and after a read started by `py -3.13` - python.org's installer leaves `python` to the
   Store's alias - every shell answered "Python was not found". The name stands only where the PATH leads it to this

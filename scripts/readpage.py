@@ -11498,7 +11498,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
     # reads on carries it
     chars = (getattr(args, "chars", 0) or answer.BUDGET_CHARS) if args is not None else answer.BUDGET_CHARS
     size = answer.limits(chars)
-    hint = cli_next_for(args if args is not None else argparse.Namespace(url="", dir=""), chars)
+    hint = cli_next_for(args if args is not None else argparse.Namespace(url="", dir=""), chars, workdir)
     if ocr_n:
         # --ocr N answers with picture N's text: the window's other pictures are not wanted
         manifest, ocr = ocr_answer(workdir, manifest, ocr_n)
@@ -11664,11 +11664,54 @@ def in_letters(path):
     return text
 
 
-def cli_command(args, frm, chars, view):
+_ESCAPES = re.compile(r"(?:%[0-9A-Fa-f]{2})+")
+
+
+def iri_form(address):
+    """An address whose percent-escapes are all that stands between it and a shell (cmd reads `%` inside double quotes)
+    as the IRI that asks for the very same thing: its escapes decoded - every one, else those of UTF-8 text and of a
+    space alone - when intl.iri_to_uri makes the address of it again, the escapes' case aside; "" when none does
+    (`%2F`, `%25`, `%22` stand for what an IRI cannot say). KNOWN-ISSUES 294: every Wikipedia page outside English as
+    a browser copies it, and a query with a space, got the words under next:."""
+    def same(a, b):
+        up = lambda s: _ESCAPES.sub(lambda m: m.group(0).upper(), s)       # noqa: E731
+        return up(intl.iri_to_uri(a)) == up(intl.iri_to_uri(b))
+
+    def text_and_spaces(m):
+        raw = urllib.parse.unquote_to_bytes(m.group(0))
+        out = []
+        for part in re.split(rb"([\x00-\x7f]+)", raw):
+            if not part:
+                continue
+            if part[0] < 0x80:
+                out.append("".join(" " if b == 0x20 else "%%%02X" % b for b in part))
+            else:
+                try:
+                    out.append(part.decode("utf-8"))
+                except UnicodeDecodeError:
+                    out.append("".join("%%%02X" % b for b in part))
+        return "".join(out)
+
+    if "%" not in (address or ""):
+        return ""
+    whole = None
+    try:
+        whole = urllib.parse.unquote(address, errors="strict")
+    except UnicodeDecodeError:
+        pass
+    for form in (whole, _ESCAPES.sub(text_and_spaces, address)):
+        if form and form != address and not UNQUOTABLE.search(form) and same(form, address):
+            return form
+    return ""
+
+
+def cli_command(args, frm, chars, view, workdir=""):
     """The command that reads on, to run as it is printed in bash, PowerShell 5.1 and 7 and cmd: the interpreter by
     its name, -X utf8, the script by its absolute path and the address in double quotes, the flags that matter if
-    the page is read again (CARRIED, --dir), then --from N --chars C --file F. An address, a folder or a script path
-    that a shell would read inside double quotes gets the words: the same command with --from N --chars C --file F."""
+    the page is read again (CARRIED, --dir), then --from N --chars C --file F. An address whose escapes alone stand in
+    the way is named as its IRI, with `--dir` of the page's folder (`workdir`): the continuation reads the saved copy
+    by its folder, under any name of the page (KNOWN-ISSUES 294). An address, a folder or a script path that a shell
+    would read inside double quotes gets the words: the same command with --from N --chars C --file F."""
     tail = "--from %d --chars %d --file %s" % (frm, chars, view)
     target = getattr(args, "target", None)                # read() sets it; "" when no shell could name it
     if target is None:
@@ -11678,6 +11721,11 @@ def cli_command(args, frm, chars, view):
     folder = in_letters(slashed(args.dir)) if getattr(args, "dir", "") else ""
     script = in_letters(slashed(__file__))
     python = agent_python()                               # "" when no shell could reach the interpreter by a name
+    if target and UNQUOTABLE.search(target) and (folder or workdir):
+        iri = iri_form(target)
+        here = folder or in_letters(slashed(workdir))
+        if iri and here and not UNQUOTABLE.search(here):
+            target, folder = iri, here
     if not target or not script or not python or (getattr(args, "dir", "") and not folder) \
             or any(UNQUOTABLE.search(x) for x in (script, target, folder)):
         return "the same command with " + tail
@@ -11687,12 +11735,13 @@ def cli_command(args, frm, chars, view):
     return '%s -X utf8 "%s" "%s" %s' % (python, script, target, " ".join(flags + [tail]))
 
 
-def cli_next_for(args, chars):
+def cli_next_for(args, chars, workdir=""):
     """How a CLI answer ends while text remains (answer.render's next_hint): where it goes on, and on a line of its
     own the command that reads on, so that a model copies it whole (KNOWN-ISSUES 276). The file is named even when
-    it is the default: a continuation never depends on a guess."""
+    it is the default: a continuation never depends on a guess. `workdir`: the page's folder, which the command
+    names for an address it gives as its IRI (cli_command)."""
     def hint(n, total, view):
-        return "── next: line %d of %d ──\n%s" % (n, total, cli_command(args, n, chars, view))
+        return "── next: line %d of %d ──\n%s" % (n, total, cli_command(args, n, chars, view, workdir))
     return hint
 
 

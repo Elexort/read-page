@@ -45,7 +45,11 @@ as the `files:` line names them (under zh_CN.GBK the GBK reading of their bytes)
 path holding `"` or the three PowerShell takes for it (“ ” „, which file names hold), `$`, a backtick, `%` or a
 backslash - what a shell reads inside double quotes -, a control character, or what a shell of the locale could not
 write back to its bytes (U+FFFD, a lone surrogate), gets the words instead: `the same command with --from 127 --chars
-7900 --file content.md`. When the text ends in an answer, a short
+7900 --file content.md`. An address whose percent-escapes alone stand in the way (cmd reads `%` there) - what a
+browser copies of a page named in Russian or Chinese, a query with a space - is named as the IRI that asks for the same
+thing, `"https://ru.wikipedia.org/wiki/Москва"` for `…/wiki/%D0%9C%D0%BE…`, with `--dir` of the page's folder: the
+continuation reads the saved copy by its folder (KNOWN-ISSUES 294); one whose escapes an IRI cannot say (`%2F`, `%25`,
+`%22`) gets the words. When the text ends in an answer, a short
 page's too, the answer's last line says so: `── EOF content.md: lines 352-389 of 389 ──`. A stray `──` on the command
 line (a model copied the decoration) is left out and named on the `ignored:` line.
 

@@ -174,6 +174,8 @@ class Versioned:
 VERSIONED = Versioned()
 ROUTES["/v"] = VERSIONED
 ROUTES["/dollar$sign"] = ROUTES["/long"]      # an address a shell would read inside double quotes (KNOWN-ISSUES 276)
+# an address whose escapes alone stand in the way: as a browser copies a page named in Russian, a query with a space
+ROUTES["/pct/%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0"] = ROUTES["/q"] = ROUTES["/long"]     # (KNOWN-ISSUES 294)
 srv = serve(ROUTES)
 
 
@@ -458,6 +460,26 @@ try:
           n_d and last_rows(dollar.text, 2) == ["── next: line %d of %d ──" % (n_d, len(lines_of(dollar))),
                                                 "the same command with --from %d --chars 7900 --file content.md" % n_d],
           str(last_rows(dollar.text, 1))[:120])
+    # an address whose escapes alone stand in the way (cmd reads % inside double quotes) got the words: every page of a
+    # Wikipedia outside English as a browser copies it, a query with a space. The command names its IRI and the page's
+    # folder, and the continuation is the saved copy's, by its folder, in every shell (KNOWN-ISSUES 294)
+    for path, iri_path in (("/pct/%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0", "/pct/Москва"), ("/q?s=a%20b", "/q?s=a b")):
+        enc = run_read(srv.url(path), own_dir=False)
+        e_line = last_rows(enc.text, 1)[0]
+        n_e = next_line(enc.text)
+        check("an address with escapes (%s): its IRI and the page's folder in the command, not the words" % path,
+              bool(n_e) and ('"%s"' % srv.url(iri_path)) in e_line and (' --dir "%s"' % slashed(enc.dir)) in e_line
+              and "%" not in e_line, e_line[:120])
+        if not path.startswith("/pct/"):
+            continue
+        e_cache = dict(e_sh, READ_PAGE_CACHE=os.path.join(enc.root, "cache"))
+        for name, run in shells():
+            p = run(e_line, e_cache)
+            said = p.stdout.decode("utf-8", "replace")
+            check("... run as printed in %s: the saved copy's next block, from cache" % name,
+                  p.returncode == 0 and "from cache" in said.split("\n")[0]
+                  and "── content.md: from line %s of " % n_e in said,
+                  "rc %s %s" % (p.returncode, (said.split("\n")[0] or p.stderr.decode("utf-8", "replace")[-120:])[:100]))
     # PowerShell takes “ ” and „ for `"`, and Windows forbids `"` in a file name, so a name holds them: in PowerShell
     # 5.1 and 7 the command split the path there and read its second half as a host (KNOWN-ISSUES 292)
     curly = os.path.join(tempfile.mkdtemp(prefix="rp-curly-"), "Report “Final” „de“.html")
