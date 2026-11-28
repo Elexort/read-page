@@ -221,7 +221,7 @@
         "broken_pdf": {
           "type": "object",
           "additionalProperties": false,
-          "description": "the document is a PDF that does not open whole (KNOWN-ISSUES 335): cut (it ends without its %%EOF in its last 1 KB) or damaged (it ends so, and no page of it opens); the pages that opened are read, and `advice` says what gets the rest",
+          "description": "the document is a PDF that does not open whole (KNOWN-ISSUES 309): cut (it ends without its %%EOF in its last 1 KB) or damaged (it ends so, and no page of it opens); the pages that opened are read, and `advice` says what gets the rest",
           "properties": {
             "how": {
               "enum": ["cut", "damaged"]

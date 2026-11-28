@@ -51,12 +51,12 @@ infos could be read (163 YouTube, 31 RuTube, 5 Bilibili), as an English, a Russi
   `transcript.vtt` are the same whatever the site sent. TTML is read by its elements' local names - EBU-TT-D, the
   broadcasters' own, writes `<tt:p>` - and its attributes in either quote; a paragraph's time is its own, else its
   spans', relative to a `<div>` that has one; a track yt-dlp named by its address's `.xml` is read as the TTML or the
-  YouTube XML it holds (KNOWN-ISSUES 331). A cue's text is escaped in the WEBVTT the module writes, as WebVTT asks,
+  YouTube XML it holds (KNOWN-ISSUES 305). A cue's text is escaped in the WEBVTT the module writes, as WebVTT asks,
   and a cue is read back tags first, then entities: `<`, `>` and `&` stand in the transcript as they were said (an
-  SRT's "x < y and y > z" lost its middle, a VTT's `&amp;` and `&gt;&gt;` stayed escaped; KNOWN-ISSUES 332). The
+  SRT's "x < y and y > z" lost its middle, a VTT's `&amp;` and `&gt;&gt;` stayed escaped; KNOWN-ISSUES 306). The
   file yt-dlp wrote is read by its BOM (UTF-8, UTF-16, UTF-32), else as UTF-8, else by the guess a page's bytes get:
-  a UTF-16 SRT gave no cue, a cp1251 one U+FFFD (KNOWN-ISSUES 333); `transcript.vtt` is UTF-8. An ASS line's
-  vector drawing (`{\p1}m 0 0 l ...{\p0}`, a sign's shape) is no words (KNOWN-ISSUES 334). A track a site names automatic (RuTube: `Русский • Авто`) is
+  a UTF-16 SRT gave no cue, a cp1251 one U+FFFD (KNOWN-ISSUES 307); `transcript.vtt` is UTF-8. An ASS line's
+  vector drawing (`{\p1}m 0 0 l ...{\p0}`, a sign's shape) is no words (KNOWN-ISSUES 308). A track a site names automatic (RuTube: `Русский • Авто`) is
   named so in the answer, though yt-dlp lists it among the human ones. The 13 RuTube videos read 2 100 to 17 400
   words each; the 18 with no track at all read as before.
 - **A dub.** A dubbed video offers its audio in several languages (60 of the 163 YouTube videos did: YouTube's

@@ -27,7 +27,7 @@ import time
 
 def _pymupdf():
     """PyMuPDF with MuPDF's messages on stderr, not on stdout, which is the answer's (readpage.pymupdf_quiet,
-    KNOWN-ISSUES 336); an older PyMuPDF is told not to show them."""
+    KNOWN-ISSUES 310); an older PyMuPDF is told not to show them."""
     import pymupdf
     try:
         pymupdf.set_messages(fd=2)

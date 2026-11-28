@@ -78,7 +78,7 @@ def _windows_job(k32):
     """What a job the read runs in holds it to: {"room": what is left under the job's memory limit, "per": its limit
     on each process's commit (JOB_OBJECT_LIMIT_PROCESS_MEMORY: a model process under it dies at its load), "why": a
     query that did not answer}; {} outside a job. Windows answers for the read's own job, the innermost: a limit of a
-    job around it (a sandbox's, a CI runner's) is not seen (KNOWN-ISSUES 343)."""
+    job around it (a sandbox's, a CI runner's) is not seen (KNOWN-ISSUES 317)."""
     import ctypes
     from ctypes import wintypes
 
@@ -266,7 +266,7 @@ def _macos():
 def started(pid):
     """When process `pid` started, as the OS keeps it - Windows: its creation time (100 ns since 1601), Linux: its start
     in clock ticks after boot (/proc/PID/stat) -, or None where the OS will not say (macOS here, a process gone): what
-    tells a process from a later one that got its pid (KNOWN-ISSUES 342)."""
+    tells a process from a later one that got its pid (KNOWN-ISSUES 316)."""
     if not pid or pid <= 0:
         return None
     try:

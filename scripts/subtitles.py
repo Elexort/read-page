@@ -13,7 +13,7 @@ import re
 from html import escape, unescape
 
 # the text formats a track may come in, in the order one is taken when a language has several; `xml` is a TTML or a
-# YouTube XML track whose address yt-dlp took its extension from (an EBU-TT file at `...deu.xml`, KNOWN-ISSUES 331)
+# YouTube XML track whose address yt-dlp took its extension from (an EBU-TT file at `...deu.xml`, KNOWN-ISSUES 305)
 EXTS = ("vtt", "srt", "sbv", "ttml", "dfxp", "srv3", "srv2", "srv1", "json3", "ass", "ssa", "lrc", "xml")
 
 
@@ -65,14 +65,14 @@ def _clean(text):
 
 def _vtt(cues):
     """WEBVTT from [(start, end, text)]; "" when there is no cue with text. A cue's text is escaped as WebVTT asks
-    (&, <, >): it is read back tags first, then entities, and "x < y and y > z" lost "< y and y >" (KNOWN-ISSUES 332)."""
+    (&, <, >): it is read back tags first, then entities, and "x < y and y > z" lost "< y and y >" (KNOWN-ISSUES 306)."""
     out = ["%s --> %s\n%s" % (_stamp(a), _stamp(max(a, b)), escape(t, quote=False)) for a, b, t in cues if t]
     return "WEBVTT\n\n" + "\n\n".join(out) + "\n" if out else ""
 
 
 def cue_text(line):
     """A WebVTT cue's line as text: its tags out (<c>, <i>, a word's time <00:00:01.500>), then its entities (&amp;,
-    &gt;&gt;, &lt;), which stayed in the transcript as they were written (KNOWN-ISSUES 332). In that order, so an
+    &gt;&gt;, &lt;), which stayed in the transcript as they were written (KNOWN-ISSUES 306). In that order, so an
     escaped tag stays text."""
     return unescape(re.sub(r"<[^>]+>", "", line or ""))
 
@@ -125,7 +125,7 @@ def _times(attrs, tick):
 
 def _ttml(raw):
     """TTML and DFXP: each paragraph a cue. Elements are known by their local name - EBU-TT-D, the broadcasters' TTML,
-    writes <tt:p>, and none of its cues was read (KNOWN-ISSUES 331) - and attributes in either quote. A paragraph's time
+    writes <tt:p>, and none of its cues was read (KNOWN-ISSUES 305) - and attributes in either quote. A paragraph's time
     is its own, else its spans' (the first begin, the last end); a time under a <div> that has one is relative to it,
     as TTML says; a paragraph with no time at all keeps its text, at the end of the cue before it."""
     m = re.search(r"""tickRate\s*=\s*["'](\d+)["']""", raw)
@@ -201,7 +201,7 @@ _ASS_DRAW = re.compile(r"\\p(\d+)")
 def _ass_words(text):
     """A Dialogue line's text without its drawings: an override block's `\\p1` (any scale past 0) starts a vector
     drawing - "m 0 0 l 100 0 100 100", a sign's or a karaoke effect's shape - which `\\p0` or the line's end ends
-    (they were words in the transcript, KNOWN-ISSUES 334). `\\pos` and `\\pbo` are other tags."""
+    (they were words in the transcript, KNOWN-ISSUES 308). `\\pos` and `\\pbo` are other tags."""
     out, drawing, pos = [], False, 0
     for m in _ASS_BLOCK.finditer(text):
         if not drawing:

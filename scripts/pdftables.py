@@ -173,7 +173,7 @@ def own_memory():
     """What this process takes, in bytes: {"ram": its peak working set, "commit": its private commit} on Windows
     (GetProcessMemoryInfo); on Linux its peak resident size and its private writable mappings, VmData and VmStk - what
     the kernel charges against its commit limit, touched or not, its threads' stacks among them: a process that said
-    401 MB took 1 238 of VmData with one set of engines, 554 against 490 with the lock's (KNOWN-ISSUES 340); on macOS,
+    401 MB took 1 238 of VmData with one set of engines, 554 against 490 with the lock's (KNOWN-ISSUES 314); on macOS,
     which has no commit limit, its peak resident size for both. {} when the OS will not say."""
     try:
         if os.name == "nt":

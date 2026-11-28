@@ -2544,7 +2544,7 @@ class _Body(ET.TreeBuilder):
         self.odt, self.stack, self.sheet, self.sheets, self.root = odt, [], None, False, None
         self.begun = []                        # the sheets begun: a cut names the others as lost (_cut_lost)
         # what the tree holds now, and each open element's count with what ended under it (0: not in the tree); past
-        # HELD a spreadsheet's tree keeps no more (KNOWN-ISSUES 338): what was open was built whole until it ended - a
+        # HELD a spreadsheet's tree keeps no more (KNOWN-ISSUES 312): what was open was built whole until it ended - a
         # row of 800 000 cells, 68 MB of XML in a 225 KB file, took 365 MB, and up to SHEET_BYTES 2.4-2.7 GB
         self.held, self.sizes, self.detached = 0, [], 0
         # the open row's cells so far, repeats counted, and the text of those past WIDTH, which leave the tree
@@ -2755,7 +2755,7 @@ def _cut_lost(zf, b, sheet):
     if settings:
         # the list's opening found once and its end once: a pattern that took what lies between them scanned the rest
         # of the file again from each opening with no end - 10.7 s for 398 KB, quadratic, and the readers' process
-        # was stopped with the workbook's text (KNOWN-ISSUES 339)
+        # was stopped with the workbook's text (KNOWN-ISSUES 313)
         start = re.search(rb'config:name="Tables"\s*>', settings)
         end = settings.find(b"</config:config-item-map-named>", start.end()) if start else -1
         names = [html.unescape(n.decode("utf-8", "replace")) for n in re.findall(
@@ -2764,7 +2764,7 @@ def _cut_lost(zf, b, sheet):
     gone = [n for n in names if n not in seen]
     # settings.xml lists the sheets by name, not in the workbook's order: they all follow the last sheet that arrived,
     # and among themselves they have no order the file knows - said, when there are several. LOST_SHEETS of them are
-    # named, then how many more: a file's list made a marker of each, as many as it said (KNOWN-ISSUES 339)
+    # named, then how many more: a file's list made a marker of each, as many as it said (KNOWN-ISSUES 313)
     out.extend(lost_marker("sheet", n, *(("order unknown",) if len(gone) > 1 else ())) for n in gone[:LOST_SHEETS])
     if len(gone) > LOST_SHEETS:
         out.append(lost_marker("sheet", "", "%d more" % (len(gone) - LOST_SHEETS)))
