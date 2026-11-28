@@ -170,7 +170,7 @@ check("the browser tier is what got it",
       any(str(t).startswith("browser") for t in (m1.get("chain") or {}).get("tried") or []),
       str((m1.get("chain") or {}).get("tried"))[:70])
 # the answer says whose text it is when a browser's was weighed: an --alternate read named an extractor alone, and an
-# agent could not tell whether the browser had run (KNOWN-ISSUES 322)
+# agent could not tell whether the browser had run (KNOWN-ISSUES 330)
 check("... and the manifest says the text is the browser's (content.source)",
       (m1.get("content") or {}).get("source") == "browser", str((m1.get("content") or {}).get("source")))
 m_alt = read("/tall", "--alternate")

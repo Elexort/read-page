@@ -8,20 +8,20 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
-- **KNOWN-ISSUES 325-329: the stress round's pages, investigated** (planned): NVIDIA's prices are drawn by its
-  scripts into no text, the browser's either (325); Aliyun's article is a Lake document in a script string its viewer
-  did not draw (326); Shockbyte's price cards are short blocks the block rule never puts back (327); Bloomberg Law's
-  teasers of other articles came back as blocks and kept a paywalled fragment from being named (328, for 0.5.1 once
-  measured); a remote reader's banner and a search hint open two texts (329).
-- **SKILL.md answers what the stress round asked of the answer's words** (KNOWN-ISSUES 323, 324): `advice:` comes on
+- **KNOWN-ISSUES 333-337: the stress round's pages, investigated** (planned): NVIDIA's prices are drawn by its
+  scripts into no text, the browser's either (333); Aliyun's article is a Lake document in a script string its viewer
+  did not draw (334); Shockbyte's price cards are short blocks the block rule never puts back (335); Bloomberg Law's
+  teasers of other articles came back as blocks and kept a paywalled fragment from being named (336, for 0.5.1 once
+  measured); a remote reader's banner and a search hint open two texts (337).
+- **SKILL.md answers what the stress round asked of the answer's words** (KNOWN-ISSUES 331, 332): `advice:` comes on
   any status, `--from N` goes to an outline's line, and `+ N blocks of page.md` are paragraphs the extractor missed,
   put back (6 162 -> 6 301 characters); references/answer.md says what a `reader:` engine is, and why a page's
   pictures and size grow between its calls (by design: each answer brings its lines' pictures).
-- **The first line says when the text is the browser's** (KNOWN-ISSUES 322): an `--alternate` read named the
+- **The first line says when the text is the browser's** (KNOWN-ISSUES 330): an `--alternate` read named the
   extractor alone, whether the browser's text was taken or not, and an agent could not tell whether the browser had
   run. `content.source` is `browser` or `server` wherever the browser's text was weighed, and the first line says
   `trafilatura (browser)` or `trafilatura (server; browser's text no better)`.
-- **SKILL.md says what `SKILL_DIR` is** (KNOWN-ISSUES 321): its command names `SKILL_DIR` and five of eight agents of
+- **SKILL.md says what `SKILL_DIR` is** (KNOWN-ISSUES 329): its command names `SKILL_DIR` and five of eight agents of
   the 0.5.0 stress round guessed it from the install path; the first line says it is this file's folder (5 words).
 - **A Windows job's limit on each process is read** (KNOWN-ISSUES 317): the memory rule read a job's limit on all its
   processes alone, so under a limit on each process smaller than a model process takes every process died at its

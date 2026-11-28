@@ -1192,7 +1192,7 @@ check("SKILL.md's `error` row fits both kinds of error: retry later, and a cut o
 with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as fh_:
     skill = fh_.read()
 # an --alternate read whose browser ran named an extractor alone, and an agent could not tell whether the browser had
-# run (KNOWN-ISSUES 322): the first line says whose text it is when a browser's was weighed
+# run (KNOWN-ISSUES 330): the first line says whose text it is when a browser's was weighed
 import answer as answer_m                                     # noqa: E402
 heads = [answer_m.header({"status": "ok", "content": {"engine": "trafilatura", "source": src, "restored": 2}},
                          "content.md", 10, 100)[0] for src in ("browser", "server", None)]
@@ -1201,11 +1201,11 @@ check("the first line names the browser's text, or the server's kept against it,
       and " · trafilatura (server; browser's text no better) + 2 blocks of page.md · " in heads[1]
       and " · trafilatura + 2 blocks of page.md · " in heads[2], str(heads)[:200])
 # SKILL_DIR, which the command names, is said once: five of eight agents of the 0.5.0 stress round guessed it from
-# the install path (KNOWN-ISSUES 321)
+# the install path (KNOWN-ISSUES 329)
 check("SKILL.md says what SKILL_DIR is, by its command", re.search(r"`SKILL_DIR` is this file's folder", skill) is not None
       and skill.find("`SKILL_DIR` is") < skill.find('"SKILL_DIR/scripts/readpage.py"'), "")
 # what agents of the stress round asked: advice comes on any status, --from takes a line number, and what "+ N blocks of
-# page.md" after the engine is (KNOWN-ISSUES 323)
+# page.md" after the engine is (KNOWN-ISSUES 331)
 flat = " ".join(skill.split())
 check("SKILL.md: advice on any status, --from N for an outline's line, + N blocks of page.md said",
       "`advice:`, on any status, names the next step" in flat and "`--from N` goes to line N" in flat

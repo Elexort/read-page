@@ -341,7 +341,7 @@ def header(manifest, view, total_lines, text_bytes):
     if content.get("engine"):
         engine = str(content["engine"])
         if content.get("source") == "browser":
-            engine += " (browser)"                          # the text is the browser's page's (KNOWN-ISSUES 322)
+            engine += " (browser)"                          # the text is the browser's page's (KNOWN-ISSUES 330)
         elif content.get("source") == "server":
             engine += " (server; browser's text no better)"  # the browser ran, and its text was no fuller
         if content.get("restored"):

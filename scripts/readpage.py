@@ -10868,7 +10868,7 @@ def read(args):
 
     raw_name, text, page_text, engine, visible, html = "raw.bin", "", "", "", None, ""
     tabs_info = None                       # the markers of the extraction whose text this is (tabs.py)
-    browser_weighed = False                # the browser's text was weighed against the server's (KNOWN-ISSUES 322)
+    browser_weighed = False                # the browser's text was weighed against the server's (KNOWN-ISSUES 330)
     route_skipped = False                  # a #/ route's landing page, left for the browser
     browser_inside = ""                    # where the browser reached inside, when its text was dropped
     visible_words = None
@@ -11246,7 +11246,7 @@ def read(args):
                     "its text is a wall the HTTP text was not" if b_wall and not wall_http else
                     "its text has fewer words than the HTTP text")})
             # the browser's text was weighed against the server's (not a screenshot alone): the answer says which it
-            # shows, an --alternate read too, whose header named an extractor and no browser (KNOWN-ISSUES 322)
+            # shows, an --alternate read too, whose header named an extractor and no browser (KNOWN-ISSUES 330)
             browser_weighed = bool(args.alternate or hash_route or text_reason)
         else:
             manifest["chain"]["skipped"].append({"tier": "browser", "why": err})
