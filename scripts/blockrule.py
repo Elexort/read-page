@@ -1,6 +1,7 @@
 """The extractor only suggests. A block of page.md that the text lacks goes back after
 its kept neighbour when it is prose, code, a table or a captioned figure; menus, lists of links,
-fragments and cookie banners stay out, and the answer says how much stayed out.
+fragments and cookie banners stay out, and the answer says how much stayed out. A list of files in a
+collapsed section (tabs.py names such a section's text) goes back whatever it looks like.
 
     import blockrule; text, info = blockrule.restore(content_md, page_md)
 
@@ -123,7 +124,7 @@ def kind(b, ws=None):
     return "short"
 
 
-def restore(content, page, base="", out=()):
+def restore(content, page, base="", out=(), keep=(), ends=False):
     """The text with the dropped blocks of page.md back in place, and the numbers for the manifest:
     {"restored": blocks put back, "restored_bytes": their size, "pictures": pictures put back,
     "outside": bytes still only in page.md}. A text that already holds every block comes back
@@ -134,7 +135,9 @@ def restore(content, page, base="", out=()):
     after that paragraph. A picture next to a menu or a footer stays out with it. `base` resolves
     page.md's relative addresses, so the same picture is recognised in both files. `out` are texts
     that stay in page.md alone (a hidden tab panel too long for the text): a block of theirs is not
-    put back."""
+    put back. `keep` are texts that are the page's content whatever their blocks look like (a list of
+    files in a collapsed section, tabs.py): a block of theirs the text lacks goes back, a list of links too.
+    `ends`: the text ends the page's own part (a paywalled page), so nothing past its last block goes back."""
     info = {"restored": 0, "restored_bytes": 0, "pictures": 0, "outside": 0}
     if not (content or "").strip() or not (page or "").strip() or len(page) > MAX_PAGE:
         return content, info
@@ -167,9 +170,15 @@ def restore(content, page, base="", out=()):
         rs = runs(pw[i]) if away else []
         return bool(rs) and sum(1 for r in rs if r in away) / len(rs) >= 0.5
 
+    own = [" %s " % " ".join(words(t)) for t in keep or ()]
+
+    def kept_back(i):
+        # a block of a text that is the page's content however it looks: all its words, in their order, are there
+        return bool(pw[i]) and any(" %s " % " ".join(pw[i]) in t for t in own)
+
     back, seen = [False] * len(pb), set()
     for i, k in enumerate(kinds):
-        if kept[i] is False and k in BACK:
+        if kept[i] is False and (k in BACK or (own and k not in ("heading", "marker") and kept_back(i))):
             if stays(i):
                 continue                       # a block of a text that stays in page.md
             key = " ".join(pw[i])
@@ -228,6 +237,13 @@ def restore(content, page, base="", out=()):
             if new:
                 back[i] = True
                 placed.update(new)
+    if ends:
+        # a page that says it is paywalled: past the last block the text holds, page.md is the site's - the paywall's
+        # prompt, other articles' teasers, the imprint - and none of it goes back; the open part's own standfirst,
+        # captions and embeds before or inside the text do (91 paywalled pages, KNOWN-ISSUES 336)
+        last = max([i for i, ws in enumerate(pw) if kept[i] and len(ws) >= K] or [len(pb)])
+        for i in range(last + 1, len(pb)):
+            back[i] = False
     adds = {}                                  # pictures taken out of a paragraph that stayed
     for i in range(len(pb)):
         if kept[i] and kinds[i] != "image":

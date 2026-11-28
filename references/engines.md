@@ -247,7 +247,26 @@ them the screens come one by one and `improve:` names Pillow. Nothing is scaled.
   lists, fragments and cookie banners stay out, and the header says `outside the text: N KB`. On
   the 60 extracted pages of a measured corpus 23 change: 22 of 59 ordinary ones gain 95 KB in all
   (+2.1 %), and RFC 9110, where trafilatura kept 5.5 KB of a 470 KB page, goes from 5.5 to 374 KB.
-  At worst 0.3 s a page.
+  At worst 0.3 s a page. defuddle keeps a table with a `colspan` or `rowspan` as its HTML, which the rule cannot
+  compare: `scripts/mdtable.py` writes it in defuddle's own table form first (a spanning cell's text in the first
+  column of its span, the rest of the span empty, so the words are `page.md`'s in their order), and no copy of it
+  comes back (on 290 pages with such tables: 149 of 170 became Markdown, the rest code examples; 134 copies stayed out).
+  On a page that says it is paywalled nothing past the text's last block comes back: there `page.md` is the site's
+  (the paywall's prompt, other articles' teasers, the imprint), while the open part's own standfirst or caption before
+  or inside the text still does - on 91 paywalled pages a rule of no blocks at all would have lost the open part's own
+  paragraphs on 12 (standfirsts, first paragraphs, embedded posts; two of them Il Fatto Quotidiano's whole articles,
+  which trafilatura left for the site's news feed) and captions or pictures on 6 more.
+- **An article a script holds is drawn first** (`scripts/lake.py`). Aliyun's developer articles keep the article as a
+  Lake document (the format of Yuque's editor) in a JavaScript string, `GLOBAL_CONFIG.larkContent = '<!doctype
+  lake>...'`, beside the empty `<div id="lark-content">` the site's viewer draws it into; the server's HTML and a
+  headless browser whose viewer did not run had the menus and the footer alone, where a user's browser showed the
+  article. The read puts the document, its escapes undone and its cards (code, pictures, tables, rules) made the tags
+  they stand for, into that empty element of the HTML and of the browser's DOM, before any extractor or `page.md`
+  sees the page; a viewer that drew it already leaves nothing to draw. 16 articles of developer.aliyun.com
+  (2026-11-28; 16 of the 23 that answered held one, the others are server-made Markdown) went from 29-30 words of
+  footer, a fragment shown as `page.md`, to their articles, whole and shown as `content.md`: 98-100 % of the
+  document's words, defuddle's text on 15 and readability's on 1. Yuque's own pages fetch their documents with a
+  request of their own: nothing in their HTML to draw.
 - **Internal hosts never go to a third party and never use TLS impersonation** - plain curl fails
   fast and nothing leaves the machine. A redirect that would leave the public internet is refused.
 - **Pin more than one fingerprint.** Sites add rules against the freshest Chrome profile: on 2026-10-30
