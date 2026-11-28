@@ -965,16 +965,18 @@ try:
             # another process, and a hold of 512 MB lived as long as that one -; a replace a scanner refused lost the
             # update at once and left its .tmp
             note_path = os.path.join(mod3.cache_root(), mod3.TABLES_NOTE + ".json")
-            mine = mod3.hostmem.started(os.getpid())
-            if mine is None:
+            started = getattr(mod3.hostmem, "started", None)          # (an API the old code lacks fails the check)
+            mine = started(os.getpid()) if started else None
+            if started is not None and mine is None:
                 check.skip("342: a pid another process got", "the OS gives no process start here")
             else:
                 with open(note_path, "w", encoding="utf-8") as fh:
-                    json.dump([{"pid": os.getpid(), "read": os.getpid(), "pid_at": mine + 1, "read_at": mine + 1,
-                                "ram": 1 << 30, "commit": 1 << 30, "said": False, "hold": True}], fh)
+                    json.dump([{"pid": os.getpid(), "read": os.getpid(), "pid_at": (mine or 0) + 1,
+                                "read_at": (mine or 0) + 1, "ram": 1 << 30, "commit": 1 << 30, "said": False,
+                                "hold": True}], fh)
                 left = mod3.tables_note()
                 check("342: a note's entry whose pid now belongs to a process that started later is dropped (it was "
-                      "kept, 1 GB counted against every read)", left == [], str(left)[:160])
+                      "kept, 1 GB counted against every read)", started is not None and left == [], str(left)[:160])
             refused, real_replace = [0], os.replace
 
             def refusing(src, dst):
