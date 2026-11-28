@@ -8,6 +8,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A subtitle file is read in its own encoding** (KNOWN-ISSUES 333): yt-dlp writes a site's file as it came, and it
+  was read as UTF-8 whatever it was in - a UTF-16 SRT gave no cue, a cp1251 one U+FFFD. Its BOM decides, else UTF-8,
+  else the guess a page's bytes get; `transcript.vtt` is UTF-8.
 - **A cue's `<`, `>` and `&` reach the transcript as they were said** (KNOWN-ISSUES 332): a converted track's text
   was unescaped and written into WEBVTT as it was, and the transcript took out everything between `<` and `>` - an
   SRT's "x &lt; y and y &gt; z" became "x  z" -, while a VTT read as it came kept its escapes (`AT&amp;T`,

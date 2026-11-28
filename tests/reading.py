@@ -219,8 +219,9 @@ try:
                     continue
                 formats = available[key]
                 ext = next((e for e in prefs if e in formats), list(formats)[-1])
-                with open(os.path.join(folder, "video.%s.%s" % (key, ext)), "w", encoding="utf-8") as fh:
-                    fh.write(formats[ext])
+                body = formats[ext]                  # a site's file as it came: text, or the bytes it was in
+                with open(os.path.join(folder, "video.%s.%s" % (key, ext)), "wb") as fh:
+                    fh.write(body if isinstance(body, bytes) else body.encode("utf-8"))
             if refused:
                 return 0, b"", ("WARNING: Unable to download video subtitles for '%s': HTTP Error 429: Too Many Requests\n"
                                 % refused[0]).encode()
@@ -337,6 +338,16 @@ try:
     got, calls, folder = yt_video(rutube, {"ru": {"srt": RU_SRT}}, lang="en")
     check("... for an English reader too: the video's own language is asked for once more",
           "Добрый день" in got[0] and len(calls) == 2 and langs_of(calls[1]) == "ru", "%s | %d calls" % (got[0][:40], len(calls)))
+    # yt-dlp writes a site's file as it came: a UTF-16 SRT read as UTF-8 had no cue, a cp1251 one was U+FFFD throughout
+    # (KNOWN-ISSUES 333)
+    said8 = []
+    for codec in ("utf-16", "cp1251"):
+        got, calls, folder = yt_video(rutube, {"ru": {"srt": RU_SRT.encode(codec)}}, lang="ru")
+        vtt8 = open(os.path.join(folder, "transcript.vtt"), encoding="utf-8").read() if os.path.isfile(
+            os.path.join(folder, "transcript.vtt")) else ""
+        said8.append((codec, "Добрый день, коллеги" in got[0] and "Сегодня говорим о субтитрах" in vtt8, got[0][:40]))
+    check("333: an SRT in UTF-16 (with its BOM) and one in cp1251 are read, transcript.vtt in UTF-8 (they read as no "
+          "cue, and as U+FFFD)", all(ok for _c, ok, _g in said8), str(said8))
     got, calls, _ = yt_video({"title": "T", "language": "de", "subtitles": {"de": [{"ext": "ttml", "name": "Deutsch"}]}},
                              {"de": {"ttml": formats8["ttml"]}}, lang="en")
     check("a site that has TTML only: its track is read all the same", "Hello," in got[0] and got[2] == "subtitles de",

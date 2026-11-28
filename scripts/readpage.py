@@ -8210,7 +8210,24 @@ def vtt_to_text(vtt, block_seconds=30):
 
 
 SUB_FORMATS = "vtt/srt/best"      # a site without VTT gives SRT (RuTube), else the best it has: subtitles.py reads them
-SUB_LIMIT = 16 * 1024 * 1024      # characters of a subtitle file read: a ten-hour video's track is a few MB
+SUB_LIMIT = 16 * 1024 * 1024      # bytes of a subtitle file read: a ten-hour video's track is a few MB
+
+
+def subtitle_text(data):
+    """A subtitle file's bytes as text: by its BOM (UTF-8, UTF-16, UTF-32), else UTF-8 (a character cut at the read's
+    end is no reason to doubt it), else the guess a page's bytes get (smart_decode). yt-dlp writes a site's file as it
+    came: a UTF-16 SRT or ASS read as UTF-8 had no cue ("subtitles were empty"), a cp1251 one was U+FFFD throughout
+    (KNOWN-ISSUES 333)."""
+    for bom, codec in ((b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"),
+                       (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if data.startswith(bom):
+            return data[len(bom):].decode(codec, "replace")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        if e.start >= len(data) - 3 and e.reason == "unexpected end of data":
+            return data.decode("utf-8", "replace")
+    return smart_decode(data, "")[0]
 _VIDEO = {"kind": "", "advice": "", "fix": ""}     # what video_text() learned about a failure, for the answer's advice
 
 
@@ -8306,19 +8323,14 @@ def video_text(url, c, workdir):
             return "", title, "yt-dlp stopped with: %s" % msg
         return "", title, "no subtitles in %s (set READ_PAGE_SUB_LANGS to change)" % langs
     lang, ext = subtitles.track_of(sub)
-    with open(os.path.join(workdir, sub), encoding="utf-8-sig", errors="replace") as fh:
-        raw = fh.read(SUB_LIMIT)                 # a site's file, whatever its size: the read holds this much at most
+    with open(os.path.join(workdir, sub), "rb") as fh:
+        raw = subtitle_text(fh.read(SUB_LIMIT))  # a site's file, whatever its size: the read holds this much at most
     vtt = subtitles.to_vtt(raw, ext)
     rolled = subtitles.unrolled(vtt)             # YouTube's rolling captions, each line once; "" for any other track
     try:
-        if rolled:
+        if rolled or vtt:                        # (in UTF-8, whatever the site's file was in)
             with open(os.path.join(workdir, "transcript.vtt"), "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(rolled)
-        elif ext == "vtt":
-            shutil.copyfile(os.path.join(workdir, sub), os.path.join(workdir, "transcript.vtt"))
-        elif vtt:
-            with open(os.path.join(workdir, "transcript.vtt"), "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(vtt)
+                fh.write(rolled or vtt)
     except OSError:
         pass
     text = vtt_to_text(vtt)
