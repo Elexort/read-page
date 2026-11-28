@@ -32,6 +32,10 @@
   that traceback took the place of the run's first lines (its sources, the network and uv steps). The lock is let go of
   once; a detached child gets a handle that can only append. Tests: a worker's real start and end raise nothing and leave
   both locks free; a detached child's late line lands after what was written meanwhile.
+- **A `--setup` that follows another's run says what that run will not do** (KNOWN-ISSUES 355): `--setup --ocr-langs
+  eng+hin` started while a run worked followed it and ended with exit 0 and "Nothing is missing", no hin fetched. The
+  work's state keeps what it was asked (the packs named for it, its copy's pins); a follower asked otherwise names it,
+  with the command to run once the run ends, and exits 1.
 
 ## 0.5.0 - 2026-11-28
 

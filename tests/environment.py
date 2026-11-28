@@ -3921,6 +3921,39 @@ attempt("a detached child's own output lands at the end of the log, after what t
         lambda: (lines354 == ["line 0, before the child"] + ["line %d of the run's own log" % n_ for n_ in range(1, 6)]
                  + ["CHILD LATE LINE"], "%s | %s" % (how354, lines354)))
 
+# ---------------------------------------------------------------- a --setup that follows another's run (row 355)
+# A --setup started while another's run works follows that run and ended with its result - exit 0, "Nothing is missing" -
+# its own --ocr-langs never applied (measured: hin not fetched, and the step's line said to name it with --ocr-langs).
+st355 = {"run": "theirs", "pid": os.getpid(), "started": time.time() - 30, "updated": time.time(), "steps": 10,
+         "finished": 3, "done": False}
+try:
+    pins355 = envsetup.env_id(envsetup.PYTHON_VERSION)
+except OSError:
+    pins355 = ""
+saved355 = os.environ.get("READ_PAGE_OCR_LANGS")
+os.environ["READ_PAGE_OCR_LANGS"] = "eng+hin"
+try:
+    rc355a, out355a, l355a = follow(True, dict(st355, asked={"ocr_langs": "", "pins": pins355}))
+    rc355b, out355b, l355b = follow(True, dict(st355, asked={"ocr_langs": "eng+hin", "pins": pins355}))
+    rc355c, out355c, l355c = follow(True, st355)                         # a state of before: asked nothing
+    d355, w355 = work_in("rp-env-asked-")
+finally:
+    if saved355 is None:
+        os.environ.pop("READ_PAGE_OCR_LANGS", None)
+    else:
+        os.environ["READ_PAGE_OCR_LANGS"] = saved355
+rc355d, out355d, l355d = follow(True, dict(st355, asked={"ocr_langs": "", "pins": "envs/py3.13.18-0000000000"}))
+attempt("a --setup given --ocr-langs that follows another's run, started without them, says they were not applied and "
+        "what to run once that run ends, exit 1 (it ended 0, \"Nothing is missing\"), and starts nothing",
+        lambda: (rc355a == 1 and "following it" in out355a and "--ocr-langs eng+hin" in out355a and "once more" in out355a
+                 and not l355a and rc355c == 1 and "--ocr-langs eng+hin" in out355c, out355a.replace("\n", " | ")[-240:]))
+attempt("... says nothing where that run was given the same, and says a newer copy's pins too",
+        lambda: (rc355b == 0 and "not done" not in out355b and rc355d == 1 and "pins" in out355d,
+                 "%s %s | %s" % (rc355b, rc355d, out355d.replace("\n", " | ")[-160:])))
+asked355 = real_read_json(os.path.join(d355, "setup.state")).get("asked") or {}
+attempt("the work's state keeps what it was asked: the packs named for it, and its copy's pins",
+        lambda: (asked355 == {"ocr_langs": "eng+hin", "pins": pins355}, str(asked355)))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)

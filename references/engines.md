@@ -679,7 +679,10 @@ long command does not kill it; its own output goes to the end of `setup-detail.l
 only append: one inherited from `open(log, "ab")` wrote where the log ended when the work started, over that run's
 first lines - KNOWN-ISSUES 354); the command shows its progress for 100 s (in a terminal, to the
 end), then says it goes on in the background, and a second `--setup` follows the one at work - a run
-that is not done, whose process is alive and whose `setup.lock` is held; nothing else counts as one.
+that is not done, whose process is alive and whose `setup.lock` is held; nothing else counts as one. The work's
+state keeps what it was asked (`asked`: the packs `--ocr-langs` named, its copy's pins), and a follower asked
+otherwise says what that run will not do and what to run once it ends, and exits 1 - it ended 0 with that run's
+"Nothing is missing", its own `--ocr-langs` never applied (KNOWN-ISSUES 355).
 The command follows the work's `setup.state`, which the work replaces whole (a temp file, then a rename). A read that
 finds nothing is no news - on Windows one made while the file is replaced cannot open it - so what was seen last
 stands: only a run never seen within 20 s is one that did not start, and where the work's lock is let go, or a run

@@ -235,11 +235,15 @@ def setup(script, skill_version):
     if not st0 and _locked(lock):
         st0 = _read_again(state, {})           # made while the run at work replaced it (Windows): read it again
     attached = False
+    unmet = ""
     if _locked(lock) and st0.get("done") is False and _pid_alive(st0.get("pid")):
         # only a run still at work is followed: the lock alone, or a state of a run that ended, is
         # not one (it replayed the last run's log and exited 0 with nothing done)
         target = st0.get("run") or ""
         print("a --setup started earlier is still working; following it")
+        unmet = follower_unmet(st0)
+        if unmet:
+            print(unmet)
     else:
         target = run
         err, attached = _launch(d, run, skill_version)
@@ -283,7 +287,9 @@ def setup(script, skill_version):
             print("--setup goes on in the background (%s of %s steps done, now: %s). Run `readpage.py --setup` "
                   "again to follow it; reads work meanwhile with what is ready."
                   % (_done(st), st.get("steps") or "?", st.get("name") or "starting"))
-            return 0
+            if unmet:
+                print(unmet)
+            return 1 if unmet else 0
         time.sleep(0.3)
     _show_log(d, seen)
     info = load(d)
@@ -297,7 +303,39 @@ def setup(script, skill_version):
             sys.stdout.write(p.stdout.decode("utf-8", "replace"))
         except (OSError, subprocess.SubprocessError) as e:
             print("the setup report did not come: %s" % e)
+    if unmet:
+        print(unmet)                           # (after the report: its "Nothing is missing" is that run's, not this one's)
+        return 1
     return 0 if st.get("ok") else 1
+
+
+def asked_of_work(env=None):
+    """What a --setup is asked to do beyond its defaults, as its work's state keeps it (Work.asked) and a --setup that
+    follows that work compares (follower_unmet): the OCR packs named for it, and the pins of the skill's copy it came
+    from (its environment's folder for them)."""
+    env = os.environ if env is None else env
+    try:
+        pins = env_id(PYTHON_VERSION)
+    except OSError:
+        pins = ""
+    return {"ocr_langs": str(env.get("READ_PAGE_OCR_LANGS") or "").strip(), "pins": pins}
+
+
+def follower_unmet(st):
+    """What this --setup was asked that the run it follows - another --setup's - was not, as a line to print, or ''.
+    It used to follow that run and end with its result, exit 0 and "Nothing is missing", its own --ocr-langs (or a
+    newer copy's pins) never applied (KNOWN-ISSUES 355). A state of before Work.asked counts as asked nothing."""
+    theirs = st.get("asked") if isinstance(st.get("asked"), dict) else {}
+    mine, out = asked_of_work(), []
+    if mine["ocr_langs"] and mine["ocr_langs"] != str(theirs.get("ocr_langs") or ""):
+        out.append("--ocr-langs %s" % mine["ocr_langs"])
+    if mine["pins"] and theirs.get("pins") and theirs["pins"] != mine["pins"]:
+        out.append("this copy of the skill's pins")
+    if not out:
+        return ""
+    return ("not done: the run at work was started by another --setup, without %s - it is followed to its end, and "
+            "`readpage.py --setup%s` then is to be run once more" % (
+                " and without ".join(out), (" --ocr-langs %s" % mine["ocr_langs"]) if mine["ocr_langs"] else ""))
 
 
 def home_too_long(d, windows=None):
@@ -1518,6 +1556,7 @@ class Work:
                         # npm (Node 22.1+) keeps its compiled modules in the temp folder otherwise
                         # (`node-compile-cache`, 2.7 MB): inside the one folder, so deleting it removes them
                         NODE_COMPILE_CACHE=os.path.join(d, "cache", "node-compile"))
+        self.asked = asked_of_work()             # in every state: a --setup that follows this work compares its own
         self.state(done=False)
 
     # progress
@@ -1539,7 +1578,8 @@ class Work:
         with self.lock:
             st = {"run": self.run, "pid": os.getpid(), "started": self.t0, "updated": time.time(),
                   "steps": len(self.STEPS), "finished": len(self.parts),
-                  "step": len(self.parts) + 1, "name": ", ".join(self.running) or "starting"}
+                  "step": len(self.parts) + 1, "name": ", ".join(self.running) or "starting",
+                  "asked": getattr(self, "asked", {})}
             st.update(kw)
             path = os.path.join(self.d, "setup.state")
             try:
