@@ -12,8 +12,8 @@ description: >
 license: MIT
 compatibility: Any OS; Python 3.8+, stdlib core; `--setup` installs the engines on the user's yes.
 metadata:
-  version: "0.4.6"
-  updated: "2026-11-06"
+  version: "0.5.0"
+  updated: "2026-11-28"
 ---
 
 # read-page

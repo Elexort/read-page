@@ -3,7 +3,7 @@
 **One call for every reader on the machine — and a receipt for what came back.**
 
 ![tests](https://github.com/Elexort/read-page/actions/workflows/tests.yml/badge.svg?branch=dev)
-Python 3.8+ · MIT · no keys required · CLI + MCP server · v0.4.6 · **[install in three steps](#install)**
+Python 3.8+ · MIT · no keys required · CLI + MCP server · v0.5.0 · **[install in three steps](#install)**
 
 ---
 

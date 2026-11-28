@@ -123,7 +123,7 @@ from engines import (crude_text, html2text_full, readability_text,  # noqa: E402
                      trafilatura_text, visible_len, visible_text)
 
 SCHEMA = 1
-VERSION = "0.4.6"
+VERSION = "0.5.0"
 BUILD = 12         # bump when the manifest shape or the cache key changes
 CACHE_TTL = 900                    # a page answer is fresh for 15 minutes
 COOKIE_TTL = 6 * 3600             # a host's cookies live 6 hours; 2-24 h via READ_PAGE_COOKIE_HOURS

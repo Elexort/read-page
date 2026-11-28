@@ -5,8 +5,8 @@ about it. Status: **fixed** (this cut), **planned** (backlog), **by design** (ac
 reason), **deferred** (a feature, agreed to be built later). Row numbers are stable: code and tests
 refer to them, so a row that is retired leaves a gap.
 
-State: the 0.4.6 release and the 0.5.0 work after it, 2026-11-22. The numbers come from the test
-suites and from the measurements dated in the rows.
+State: the 0.5.0 release, 2026-11-28. The numbers come from the test suites and from the measurements
+dated in the rows.
 
 | # | Area | Problem | Cost | Treatment | Status |
 |---|---|---|---|---|---|
