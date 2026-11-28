@@ -32,7 +32,7 @@ import sys
 import threading
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-SERVER_VERSION = "0.4.6"
+SERVER_VERSION = "0.5.0"
 PROTOCOL = "2025-06-18"
 
 # no compiled readpage beside the scripts (some harnesses list every file of a skill's folder to the

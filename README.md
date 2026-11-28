@@ -3,7 +3,7 @@
 **One call for every reader on the machine — and a receipt for what came back.**
 
 ![tests](https://github.com/Elexort/read-page/actions/workflows/tests.yml/badge.svg?branch=dev)
-Python 3.8+ · MIT · no keys required · CLI + MCP server · v0.4.6 · **[install in three steps](#install)**
+Python 3.8+ · MIT · no keys required · CLI + MCP server · v0.5.0 · **[install in three steps](#install)**
 
 ---
 
@@ -54,6 +54,13 @@ calls for it. You need **Python 3.8 or newer** and **git**. Three steps:
 `cmd` - it would make a folder named `~`). No git: download the ZIP from the green **Code**
 button, unpack it into that place and name the folder `read-page`. Not sure where your agent
 looks: ask it "where do you load skills from?".
+
+Or, with Node.js 22.20 or newer, the [skills CLI](https://github.com/vercel-labs/skills) does step 1 for you:
+`npx skills add Elexort/read-page -g` (`-a claude-code -y` names the agent and skips its questions). It puts the
+folder, named `read-page`, in `$HOME/.agents/skills` - the shared folder that Codex, Cline, Cursor, Gemini CLI,
+OpenCode and GitHub Copilot read - and links it into the skills folder of an agent that has its own (Claude Code:
+`$HOME/.claude/skills/read-page`); without `-g` it installs into the current project. It is Vercel Labs' tool, not
+this skill's: `DISABLE_TELEMETRY=1` turns off its usage statistics.
 
 **2. Let it install its engines** - optional: it reads without them, and much better with them.
 Tell your agent *"set up the read-page skill"*, or run it yourself (the path of step 1):
@@ -470,7 +477,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | The 226-page check (2026-11-06), pages picked to be hard | **202 ok, 6 blocked, 4 login_required, 5 not_found, 7 error, 2 empty**, each with its reason; p50 2.1 s, max 22.9 s on a fast machine, p50 4.8 s, max 30.9 s on an emulated weak laptop |
 | A set read the way `SKILL.md` says (2026-11-07): `--allow-external` first, advice followed, the outline to jump | a 34-page set **34 of 34**, 37 held-out pages no rule was tuned on **37 of 37** (each fact taken from a real Chrome; walls and paywalls by an honest status or through a reader); **1.10 calls** a question; every answer within 9 911 bytes and 309 lines, no CR; from the cache p50 0.22 s, max 0.26; UTF-8 whole in cmd, PowerShell 5.1 and 7, Git Bash and WSL under five code pages |
 | Contract | every manifest in the suite validated against `references/manifest-schema.json` (17 manifests, 0 errors) |
-| Tests | answer contract **239** (one check a shell the machine has - cmd, bash, PowerShell 5.1 and 7: 230 with bash alone), statuses **86**, timeouts **18**, deadline **22**, formats **167** (164 on Linux, 162 on macOS), reading **67**, sources **42**, blocks **46**, images **55**, speed **8**, MCP parallel **30**, security **53** (49 on Windows), props **83**, fixes **167**, channel **9**, setup audit **40**, environment **255** (246 off Windows; 2 fewer where no uv is found, 2 fewer with an environment set up before 2026-11-23, 4 before 2026-11-22), MCP **33**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **169** (167 on macOS), Chinese, Japanese and Korean input **228** (225 on Linux, 227 where a GBK locale is installed, 221 on macOS; 193 without curl_cffi and charset_normalizer), browser live **37**; against the real services: sources live **20** (15 without the paid readers' keys: with no Firecrawl, Exa or Tavily key set, their five checks are skipped, not failed) |
+| Tests | answer contract **239** (one check a shell the machine has - cmd, bash, PowerShell 5.1 and 7: 230 with bash alone), statuses **86**, timeouts **18**, deadline **22**, formats **168** (165 on Linux, 163 on macOS), reading **67**, sources **42**, blocks **46**, images **55**, speed **8**, MCP parallel **30**, security **53** (49 on Windows), props **83**, fixes **167**, channel **9**, setup audit **40**, environment **255** (246 off Windows; 2 fewer where no uv is found, 2 fewer with an environment set up before 2026-11-23, 4 before 2026-11-22), MCP **33**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **169** (167 on macOS), Chinese, Japanese and Korean input **228** (225 on Linux, 227 where a GBK locale is installed, 221 on macOS; 193 without curl_cffi and charset_normalizer), browser live **37**; against the real services: sources live **20** (15 without the paid readers' keys: with no Firecrawl, Exa or Tavily key set, their five checks are skipped, not failed) |
 | CI | the offline suites on ubuntu (3.9 and 3.12), windows, macOS; a browser job on all three; and a real install - `--setup` from nothing into a folder with a space and Cyrillic in its path, every engine checked, the suites and a scanned PDF read through OCR under the environment's Python, `--setup` again with nothing to fetch - on Linux, Windows and macOS, x64 and arm64, a user's own clone-and-read, a bare Python, and containers of Alpine, Ubuntu 20.04 and 24.04, Debian 11, Rocky Linux 8, Fedora, Arch and openSUSE, a proxy that inspects TLS (Linux, Windows, macOS), a Windows whose Python has the code page 936 or 950 in a profile named in Chinese, README's ZIP, and the suites in a GBK locale on Linux, `tests/cjk.py` once more in UTF-8 mode there (`install.yml`) |
 | Coverage | 65 % of the engine's statements |
 
@@ -541,3 +548,6 @@ its files, statuses, flags, privacy, limits, cookies, pictures, video) · `refer
 MIT. `--setup` fetches each engine from its own source under its own license (html2text GPL-3.0+,
 PyMuPDF, pymupdf4llm and its layout model AGPL-3.0 or Artifex's commercial license, the rest
 permissive); the skill ships none of them.
+
+A vulnerability is reported privately, through the repository's **Security** tab (**Report a vulnerability**),
+not in an issue: [SECURITY.md](https://github.com/Elexort/read-page/blob/dev/SECURITY.md) says what is in scope.
