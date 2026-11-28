@@ -158,8 +158,10 @@ naming the rule that fired (`a challenge page: Just a moment...`), so a status c
 instead of trusted. Content is never hidden, whatever the status.
 
 Exit code: 0 whenever an answer is printed, whatever its status; 1 an internal error (the answer
-says so); 2 a wrong call - no URL, or one that is neither http(s) nor a file here - with the reason
-on stderr. A flag that is not read-page's, or a value it cannot use (`--to 407`, `--from abc`,
+says so); 2 a wrong call - no URL, or one that is neither http(s) nor a file here, a bare file's name among them
+(`README.md` with no such file in this folder is `no such file`, never asked of the web as a host: a site so named
+takes its `https://`, KNOWN-ISSUES 298) - with the reason on stderr. A flag that is not read-page's, or a value it
+cannot use (`--to 407`, `--from abc`,
 `--file notes.md`), does not stop the read: it is left out and an `ignored:` line names it. A
 misspelled flag is the flag meant, silently (`--screenshot`, `--allow-extrnal`, `--form`): one edit
 for a short name, two for a longer one, and only when one flag is that near.

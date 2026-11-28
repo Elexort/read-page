@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A bare file's name with no such file here is a wrong call, never a host** (KNOWN-ISSUES 298): `notes.md` from
+  the wrong folder was read as `https://notes.md`, a request to a stranger's site (`.md`, `.py`, `.zip` are TLDs) or a
+  DNS request that names the file. A name with no `/` and a file's extension is `no such file: notes.md (a file
+  here: give its path; a site: https://notes.md)`, exit 2, with no request.
 - **A short page whose code shows a loading line is `ok`** (KNOWN-ISSUES 297): row 259's rule took `Loading
   configuration...` in a page's code - a tool's output in its documentation - for the page's own loading message, and
   answered `empty` with the sign-in advice. The message is looked for outside fenced code alone.

@@ -2430,6 +2430,22 @@ LOCAL_TYPES = {".html": "text/html", ".htm": "text/html", ".xhtml": "text/html",
                ".markdown": "text/markdown", ".txt": "text/plain", ".json": "application/json",
                ".xml": "text/xml", ".csv": "text/plain", ".pdf": "application/pdf", ".rtf": "application/rtf",
                ".odt": "application/vnd.oasis.opendocument.text"}
+# a file's extension a bare name is told by (file_like): the local types, the documents' and archives', pictures,
+# sound and video, a notebook's and code's - not those that name many sites (.ai .io .so .sh .pl .me .tv .ly ...)
+FILE_EXTS = frozenset(LOCAL_TYPES) | frozenset(
+    ".doc .docx .docm .dotx .xls .xlsx .xlsm .ppt .pptx .ppsx .potx .epub .ods .odp .zip .png .jpg .jpeg .gif .webp "
+    ".svg .mp3 .mp4 .wav .log .yaml .yml .toml .ini .ipynb .py .js .ts".split())
+
+
+def file_like(name):
+    """A bare name that names a file, not a site: no `/`, no `www.`, no scheme or port, and a file's extension
+    (FILE_EXTS) - `README.md`, `report.zip`. A missing one was read as a host, `https://README.md`: from the wrong folder
+    a request to whatever site holds that name - `.md`, `.py`, `.zip` are delegated TLDs - answered as the file, or a
+    DNS request naming it (KNOWN-ISSUES 298). A site so named is asked with its https://."""
+    s = (name or "").strip()
+    if not s or "/" in s or "\\" in s or ":" in s or s.lower().startswith("www."):
+        return False
+    return os.path.splitext(s)[1].lower() in FILE_EXTS
 
 
 def read_local_file(path, workdir):
@@ -10185,6 +10201,9 @@ def read(args):
     else:
         url = ownenv.arg_text(url)              # an address typed in the locale's code set (KNOWN-ISSUES 274)
         scheme = (urllib.parse.urlparse(url).scheme or "").lower()
+    if not local and not scheme and file_like(url):
+        # a file's name with no file of it here, never a host: `README.md` from another folder was asked of the web
+        return usage_error("no such file: %s (a file here: give its path; a site: https://%s)" % (url[:200], url[:200]))
     if not local and not scheme and re.match(r"^[\w-]+(\.[\w-]+)+([/:?#]|$)", url):
         url = "https://" + url                  # "example.com/a" is a host, not a scheme
         scheme = "https"

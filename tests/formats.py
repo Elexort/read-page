@@ -385,6 +385,12 @@ try:
     r = run_read(os.path.join(tmp, "no-such-file.pdf"), env={})
     check("a path that is no file is a wrong call (exit 2), not a URL guess",
           r.rc == 2 and b"no such file" in r.err.lower() or r.rc == 2, "rc=%s %s" % (r.rc, r.err[-80:]))
+    # a bare file's name with no file of it in this folder was read as a host - `https://README.md`, a delegated
+    # TLD's site answered as the file, or a DNS request naming it (KNOWN-ISSUES 298)
+    r = run_read("rp-no-such-notes.md", env={})
+    check("a bare name with a file's extension and no such file here: a wrong call (exit 2), never a host",
+          r.rc == 2 and b"no such file: rp-no-such-notes.md" in r.err and not r.manifest,
+          "rc=%s %s" % (r.rc, (r.err or b"")[-90:]))
 
     # ------------------------------------------------ over MCP: only inside read-page's folders
     proc = subprocess.Popen([sys.executable, "-X", "utf8", SERVER], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
