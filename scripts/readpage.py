@@ -11423,8 +11423,10 @@ def read(args):
             and str(engine or "").split("(")[0].split(":")[0] in EXTRACTORS):
         t_bl = now()
         # a hidden panel too long for the text stays in page.md: its marker in the text says where
+        # ...and a collapsed section's list of files, which an extractor drops, goes back under its marker (339)
         text, restored = blockrule.restore(text, page_text, base=pic_base,
-                                           out=[x["text"] for x in (tabs_info or {}).get("long") or []])
+                                           out=[x["text"] for x in (tabs_info or {}).get("long") or []],
+                                           keep=(tabs_info or {}).get("links") or [])
         budget.record("blocks", t_bl, note="+%d blocks" % (restored.get("restored") or 0))
         if restored.get("restored") or restored.get("pictures"):
             manifest["chain"]["tried"].append("blocks:+%d" % (restored.get("restored") or 0))

@@ -367,7 +367,10 @@ or by role. A tab set is `role=tablist` with its `role=tab`s and their panels (`
 the tabpanels in order); a set of links is navigation and stays as it is. The shown tab is the one `aria-selected`,
 else `data-state=active`, else the one panel not hidden, else the first. A section is a closed `<details>` with a
 summary, or a button with `aria-expanded` whose `aria-controls` region the page holds as text - not a menu of links or
-a form folded away (a responsive menu, a feedback popover). A table whose header cell holds two to eight buttons and
+a form folded away (a responsive menu, a feedback popover). A button that is a heading's is an accordion's, and its
+region is a section whatever it holds: a list of files there is the page's (statistik.at's "Historische Daten"), and
+its links come under the marker even when the extractor dropped them; on 1 602 saved pages the 8 regions of links in a
+heading were all content, the 49 behind other toggles menus. A table whose header cell holds two to eight buttons and
 nothing else has tabs of its own (Groq's plans: the shown tab is named above the table, the others below it). A select
 names its chosen option and five others. A panel keeps its place and its attributes, but those that hide it; the
 engines are weighed without the markers and without the text they did not see before, so no engine is chosen by them.

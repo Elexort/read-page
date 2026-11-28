@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A collapsed section's list of files is in the text, under its marker** (KNOWN-ISSUES 339): statistik.at's VPI/HVPI
+  page folds "Historische Daten" - two .ods files, the HVPI on base 2015 among them - into an accordion whose region is
+  all links, which the rule for a menu folded away passed over, and defuddle dropped the list: the text had the heading
+  with nothing under it and no marker. A button that is a heading's is an accordion's, and its region is a section
+  whatever it holds; such a list goes back from page.md under the marker (`tabs.py` hands its text to the block rule).
+  On 1 602 saved pages the 8 regions of links in a heading were all content, the 49 behind other toggles menus.
 - **A table whose cells span rows or columns comes once, as a table** (KNOWN-ISSUES 338): defuddle keeps such a table
   as its HTML, and the block rule did not know it for the rows page.md has, so it put them back beside it -
   japanrailpass.net's price tables came twice, once through HTML tags. The table is written in defuddle's own Markdown

@@ -222,6 +222,25 @@ TABS = ("<!doctype html><html><head><meta charset='utf-8'><title>Rate limits</ti
         + "</code></pre></div><p>TABS-END The limits above are what the service enforces today; they may change "
         "with notice, and the console shows the ones of your own account at any time.</p></article></main>"
         "<footer><p>&copy; 2026 Example Inc.</p></footer></body></html>")
+FILE_LINK = ("<div class='frame frame-default frame-type-uploads'><div role='heading' aria-level='4' class='h4'>%s</div>"
+             "<ul class='ce-uploads'><li><a href='/fileadmin/pages/214/%s' target='_blank' class='ce-uploads-link'>"
+             "<span class='ce-uploads-fileName i-download'></span><span class='ce-uploads__text'>%s</span></a></li></ul>"
+             "</div>")
+FILES = ("<!doctype html><html><head><meta charset='utf-8'><title>VPI</title></head><body><main><article><h1>VPI und HVPI"
+         "</h1><p>FILES-INTRO Der Verbraucherpreisindex misst die Preisentwicklung eines Warenkorbs, der die Ausgaben "
+         "der privaten Haushalte abbildet, und wird jeden Monat veröffentlicht.</p>"
+         "<p><button aria-expanded='false' aria-controls='share-1'>Share</button></p><div id='share-1' class='collapse'>"
+         "<a href='https://www.facebook.com/sharer'>Facebook</a> <a href='https://x.com/share'>X</a></div>"
+         "<div class='accordion__card' id='gtc-hd'><h3 class='accordion__header mb-0' id='ah-2'>"
+         "<button class='accordion__toggle collapsed' data-bs-toggle='collapse' data-bs-target='#ab-2' "
+         "aria-expanded='false' aria-controls='ab-2'><span class='accordion-text'>Historische Daten</span></button></h3>"
+         "<div id='ab-2' class='accordion__body collapse' role='region' aria-labelledby='ah-2'>"
+         + FILE_LINK % ("Historische Publikationstermine", "VPI_1977_bis_2025.ods", "Historische Publikationstermine (.ods)")
+         + FILE_LINK % ("Harmonisierter Verbraucherpreisindex (HVPI)", "3_HVPI_2015.ods",
+                        "Harmonisierter Verbraucherpreisindex, Basis 2015 (.ods)")
+         + "</div></div><h2>Methodik</h2><p>FILES-AFTER Die Gewichte des Warenkorbs werden jedes Jahr aus der "
+         "Volkswirtschaftlichen Gesamtrechnung neu berechnet, und die Preise erheben Mitarbeiter in zwanzig Städten."
+         "</p></article></main></body></html>")
 if tabs is None:
     check("tabs.py marks tabs, sections and selects", False, "no tabs module")
 else:
@@ -271,6 +290,28 @@ else:
              "<a href='/c'>C</a></details></main></body></html>")
     check("a page with none of them is left as it is: a menu folded under a button, an icon's popover",
           tabs.mark(plain)[0] == plain, tabs.mark(plain)[1]["counts"])
+    # a collapsed section that holds only links lost them: statistik.at's "Historische Daten", two .ods files, came as
+    # a heading with nothing under it and no marker - its region is links by half or more, which the rule took for a
+    # menu folded away, and defuddle drops the site's file lists (KNOWN-ISSUES 339). A toggle that heads no heading
+    # and folds away links (a share menu) is still no section
+    marked_f, finfo = tabs.mark(FILES)
+    mdf = tabs.unescape_markers(engines.html2text_full(marked_f))
+    check("339: an accordion's section whose region is a list of files is a section: its marker in its heading",
+          "### [section · hidden, but extracted · Historische Daten]" in mdf
+          and "Basis 2015" in " ".join(finfo.get("links") or []),
+          "%s | %s" % ([ln for ln in mdf.split("\n") if "Historische Daten" in ln][:1], finfo.get("links")))
+    check("... a toggle that heads no heading and folds away links is a menu: no marker", "[section · hidden, but "
+          "extracted · Share]" not in mdf and "Share" in mdf, [ln for ln in mdf.split("\n") if "Share" in ln][:2])
+    text_f = "\n\n".join(b for b in blockrule.blocks(mdf) if ".ods" not in b and "Publikationstermine" not in b
+                         and "(HVPI)" not in b)
+    try:
+        out_f, _info_f = blockrule.restore(text_f, mdf, keep=finfo.get("links") or [])
+    except TypeError as e:                                   # a block rule with no `keep`
+        out_f = "TypeError: %s" % e
+    a, b, c = (out_f.find("[section · hidden, but extracted · Historische Daten]"),
+               out_f.find("VPI_1977_bis_2025.ods"), out_f.find("3_HVPI_2015.ods"))
+    check("339: the block rule puts such a section's links back under its marker, when the extractor dropped them",
+          0 <= a < b < c and out_f.find("FILES-AFTER") > c, "%s | %s" % ((a, b, c), out_f[:120]))
     # a section's or a panel's tree walked from the head of a list took 11.5 s for 80 000 items (a fast machine),
     # a minute on a weak laptop: the read's whole time, spent before any extractor ran
     # Walked once, four times the items take about four times as long (sixteen when walked so), on any machine
@@ -349,6 +390,7 @@ PRICES = ("<!doctype html><html><head><meta charset='utf-8'><title>Prices</title
           "</article></main></body></html>").encode("utf-8")
 s = serve({"/guide": (200, {"Content-Type": "text/html; charset=utf-8"}, HTML),
            "/prices": (200, {"Content-Type": "text/html; charset=utf-8"}, PRICES),
+           "/files": (200, {"Content-Type": "text/html; charset=utf-8"}, FILES.encode("utf-8")),
            "/tabs-long": (200, {"Content-Type": "text/html; charset=utf-8"}, TABS_LONG),
            "/spec": (200, {"Content-Type": "text/html; charset=utf-8"}, SPEC),
            "/svg": (200, {"Content-Type": "text/html; charset=utf-8"}, SVGPAGE),
@@ -422,6 +464,15 @@ try:
           and "PRICES-NOTE" in body, "%s: %d, %d, html %s | %s" % (
               eng, body.count("70,000 YEN"), body.count("110,000 YEN"), "<table" in body,
               [ln[:60] for ln in body.split("\n") if "YEN" in ln][:4]))
+    r = run_read(s.url("/files"), env={"READ_PAGE_SKIP": "browser"})
+    body = r.file("content.md")
+    eng = str((r.manifest.get("content") or {}).get("engine") or "")
+    a, b, c, d = (body.find("[section · hidden, but extracted · Historische Daten]"), body.find("VPI_1977_bis_2025.ods"),
+                  body.find("3_HVPI_2015.ods"), body.find("FILES-AFTER"))
+    check("339: a read: a collapsed section's two .ods links are in content.md under its marker, once each (the text "
+          "had its heading with nothing under it)", 0 <= a < b < c < d and body.count("3_HVPI_2015.ods") == 1
+          and body.count("VPI_1977_bis_2025.ods") == 1, "%s: %s | %s" % (
+              eng, (a, b, c, d), [ln[:70] for ln in body.split("\n") if "Historische" in ln or ".ods" in ln][:4]))
     r = run_read(s.url("/linky"), env={"READ_PAGE_SKIP": "browser"})
     page = r.file("page.md")
     check("page.md is the whole page, menu included, though the text's absolute links are longer",

@@ -26,7 +26,8 @@ marked: nothing inside a nav, header, footer, aside, form, dialog or template, o
 tab set is role=tablist with its role=tab and their panels (aria-controls, aria-labelledby, or the
 tabpanels in order); a set of links is navigation and stays as it is. A section is a closed <details>, or
 a button with aria-expanded and aria-controls whose region the HTML holds as text, not as a list of links
-(a responsive menu). A table whose header cell holds two buttons or more and nothing else has tabs of its
+(a responsive menu) - unless the button is a heading's, an accordion's: a list of files there is the page's, and
+its text goes to the block rule (`links`). A table whose header cell holds two buttons or more and nothing else has tabs of its
 own (Groq's plans). A hidden panel longer than PANEL_LIMIT stays in page.md: the text's marker says where.
 Standard library only; a page over MAX_HTML is left as it is.
 """
@@ -405,10 +406,13 @@ def _hidden(el):
             or ("collapse" in cls and not cls & {"show", "in"}))
 
 
+def _a_form(el):
+    return any(d.tag in ("form", "input", "textarea", "select", "fieldset") for d in _descendants(el))
+
+
 def _a_widget(src, el):
     """A popover or a form folded into a section (a menu of links, a feedback form): no content of the page."""
-    return (_link_share(src, el) >= 0.5
-            or any(d.tag in ("form", "input", "textarea", "select", "fieldset") for d in _descendants(el)))
+    return _link_share(src, el) >= 0.5 or _a_form(el)
 
 
 def _details(tree, src, page, edits, info):
@@ -452,8 +456,14 @@ def _sections(tree, src, page, edits, info):
                 break
         if region is None or region.end is None or _inside(b, region) or _inside(region, b):
             continue
+        # a button that is a heading's is an accordion's (ARIA's pattern), whatever its region holds: a list of files
+        # in one is the page's content (statistik.at's "Historische Daten", two .ods files), where a toggle that heads
+        # no heading folding away a list of links is a menu - on 1 602 pages of the bench and the corpora, the 8 such
+        # regions in a heading were all content, the 49 others menus (KNOWN-ISSUES 339)
+        heading = b.parent if b.parent is not None and re.match(r"h[1-6]$", b.parent.tag) else None
+        links = heading is not None and _link_share(src, region) >= 0.5
         if (_out_of_main(region) or region.tag in OUT_TAGS or region.get("role").lower() in OUT_ROLES
-                or not _text(src, region) or _a_widget(src, region)):
+                or not _text(src, region) or (_a_form(region) if links else _a_widget(src, region))):
             continue                                     # nothing in the page, a menu folded away, a form
         if edits.taken(region.start, region.end):
             continue
@@ -461,10 +471,11 @@ def _sections(tree, src, page, edits, info):
         if not name:
             continue
         m = marker("section", "shown" if exp == "true" else "hidden", name)
-        heading = b.parent if b.parent is not None and re.match(r"h[1-6]$", b.parent.tag) else None
         edits.add(b.start, b.end, _escape(m) if heading is not None else _p(m))
         edits.add(region.start, region.open_end, _unhidden(region))
         info["counts"]["sections"] += 1
+        if links:
+            info["links"].append(_text(src, region))      # an extractor drops such a list: the block rule puts it back
         if _dropped(region):
             info["extra"] += len(_text(src, region))
 
@@ -554,7 +565,7 @@ def mark(html, page=False):
     done: {"counts": {...}, "long": [{"token", "text"}], "page_long": {token: marker}}. page=True is
     page.md's copy: every hidden panel stays whole there."""
     info = {"counts": {"tabs": 0, "extracted": 0, "not_extracted": 0, "long": 0, "sections": 0, "selects": 0},
-            "long": [], "page_long": {}, "seen": {}, "extra": 0}
+            "long": [], "page_long": {}, "seen": {}, "extra": 0, "links": []}
     if not html or len(html) > MAX_HTML or not re.search(
             r"(?i)role\s*=\s*[\"']?tablist|<details\b|aria-expanded|<select\b|<th\b[^>]*>(?:(?!</th>).){0,600}<button",
             html):
