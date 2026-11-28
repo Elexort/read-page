@@ -174,6 +174,8 @@ class Versioned:
 VERSIONED = Versioned()
 ROUTES["/v"] = VERSIONED
 ROUTES["/dollar$sign"] = ROUTES["/long"]      # an address a shell would read inside double quotes (KNOWN-ISSUES 276)
+# an address whose escapes alone stand in the way: as a browser copies a page named in Russian, a query with a space
+ROUTES["/pct/%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0"] = ROUTES["/q"] = ROUTES["/long"]     # (KNOWN-ISSUES 294)
 srv = serve(ROUTES)
 
 
@@ -369,9 +371,10 @@ try:
     n = next_line(first.text)
     line = last_rows(first.text, 1)[0]
     python_name = getattr(ownenv, "python_name", None) or (lambda exe: "python")   # none before KNOWN-ISSUES 276
-    me = python_name(sys.executable)
-    argv_want = [me, "-X", "utf8", slashed(SCRIPT), srv.url("/long"), "--dir", slashed(first.dir), "--from", str(n),
-                 "--chars", "7900", "--file", "content.md"]
+    # the interpreter as a shell reaches this one from this PATH: its name, its path or `py -X.Y` (KNOWN-ISSUES 293)
+    me = (getattr(ownenv, "python_command", None) or python_name)(sys.executable)
+    argv_want = me.split() + ["-X", "utf8", slashed(SCRIPT), srv.url("/long"), "--dir", slashed(first.dir), "--from",
+                              str(n), "--chars", "7900", "--file", "content.md"]
     check("next: two lines - where it goes on, then the command that reads on, alone and literal",
           last_rows(first.text, 2) == ["── next: line %d of %d ──" % (n, len(saved)),
                                        '%s -X utf8 "%s" "%s" --dir "%s" --from %d --chars 7900 --file content.md' % (
@@ -401,18 +404,102 @@ try:
           [a for a in k_argv if a.startswith("--") and a not in ("--dir", "--from", "--chars", "--file")]
           == ["--allow-external", "--deny-images", "--download"], str(k_argv[5:])[:140])
     named = run_read(srv.url("/long"), env={"READ_PAGE_PYTHON_NAME": "python3.99"})
-    check("... the interpreter by the name the agent started the skill with, which the first process hands on",
+    check("... the interpreter as the first process names it, which it hands on to the environment's child",
           last_rows(named.text, 1)[0].startswith("python3.99 -X utf8 "), last_rows(named.text, 1)[0][:60])
     check("ownenv.python_name: a Python as a command names it, \"python\" for anything else",
           [python_name(x) for x in ("C:\\Python313\\python.exe", "/usr/bin/python3.12", "", "C:\\x\\pythonw.exe",
                                            "/opt/app/host", "C:\\a b\\my python.exe", "pypy3")]
           == ["python", "python3.12", "python", "python", "python", "python", "pypy3"], "")
+    # ... and the name only where a shell's PATH leads it to this interpreter (KNOWN-ISSUES 293): after a read started
+    # by `py -3.13`, `python` was the Store's alias ("Python was not found") in every shell
+    command_of = getattr(ownenv, "python_command", None)
+    got_cmd = []
+    if command_of:
+        real_which = ownenv.shutil.which
+        nt = os.name == "nt"
+        here, spaced = ("C:\\Py313\\python.exe", "C:\\Program Files\\Py313\\python.exe") if nt else \
+            ("/opt/py313/bin/python3", "/opt/my py/bin/python3")
+        cases = ((here, {"python" if nt else "python3": here}), (here, {}),
+                 (here.replace("python", "pythonw") if nt else here, {"python" if nt else "python3": here}),
+                 (spaced, {"py": "C:\\Windows\\py.exe"} if nt else {}))
+        try:
+            for exe, on_path in cases:
+                ownenv.shutil.which = lambda name, on_path=on_path: on_path.get(name)
+                got_cmd.append(command_of(exe))
+        finally:
+            ownenv.shutil.which = real_which
+    want_cmd = ["python", "C:/Py313/python.exe", "python", "py -%d.%d" % sys.version_info[:2]] if os.name == "nt" else \
+        ["python3", "/opt/py313/bin/python3", "python3", ""]
+    check("ownenv.python_command: the name where PATH leads it here, else the path, else py -X.Y, else none",
+          got_cmd == want_cmd, str(got_cmd))
+    fake_dir = tempfile.mkdtemp(prefix="rp-fake-python-")
+    fake_name = python_name(sys.executable)
+    if os.name == "nt":
+        # an interpreter's name that leads elsewhere, as the Store's alias does: find.exe, "Parameter format not correct"
+        shutil.copy2(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "find.exe"),
+                     os.path.join(fake_dir, fake_name + ".exe"))
+    else:
+        with open(os.path.join(fake_dir, fake_name), "w") as fh_:
+            fh_.write("#!/bin/sh\necho not this python >&2\nexit 3\n")
+        os.chmod(os.path.join(fake_dir, fake_name), 0o755)
+    e_fake = dict(e_sh, PATH=fake_dir + os.pathsep + os.environ.get("PATH", ""))
+    other = run_read(srv.url("/long"), env={"PATH": e_fake["PATH"]})
+    o_line = last_rows(other.text, 1)[0]
+    n_o = next_line(other.text)
+    check("... a read whose interpreter `%s` on PATH does not reach: the command does not name it so" % fake_name,
+          bool(n_o) and not o_line.startswith(fake_name + " "), o_line[:90])
+    for name, run in shells():
+        p = run(o_line, e_fake)
+        said = p.stdout.decode("utf-8", "replace")
+        check("... and runs as printed in %s with that PATH: the next block, from line %s" % (name, n_o),
+              p.returncode == 0 and "── content.md: from line %s of " % n_o in said,
+              "rc %s %s" % (p.returncode, (said.split("\n")[0] or p.stderr.decode("utf-8", "replace")[-120:])[:100]))
     dollar = run_read(srv.url("/dollar$sign"))
     n_d = next_line(dollar.text)
     check("an address a shell reads inside double quotes ($): the words instead of the command",
           n_d and last_rows(dollar.text, 2) == ["── next: line %d of %d ──" % (n_d, len(lines_of(dollar))),
                                                 "the same command with --from %d --chars 7900 --file content.md" % n_d],
           str(last_rows(dollar.text, 1))[:120])
+    # an address whose escapes alone stand in the way (cmd reads % inside double quotes) got the words: every page of a
+    # Wikipedia outside English as a browser copies it, a query with a space. The command names its IRI and the page's
+    # folder, and the continuation is the saved copy's, by its folder, in every shell (KNOWN-ISSUES 294)
+    for path, iri_path in (("/pct/%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0", "/pct/Москва"), ("/q?s=a%20b", "/q?s=a b")):
+        enc = run_read(srv.url(path), own_dir=False)
+        e_line = last_rows(enc.text, 1)[0]
+        n_e = next_line(enc.text)
+        check("an address with escapes (%s): its IRI and the page's folder in the command, not the words" % path,
+              bool(n_e) and ('"%s"' % srv.url(iri_path)) in e_line and (' --dir "%s"' % slashed(enc.dir)) in e_line
+              and "%" not in e_line, e_line[:120])
+        if not path.startswith("/pct/"):
+            continue
+        e_cache = dict(e_sh, READ_PAGE_CACHE=os.path.join(enc.root, "cache"))
+        for name, run in shells():
+            p = run(e_line, e_cache)
+            said = p.stdout.decode("utf-8", "replace")
+            check("... run as printed in %s: the saved copy's next block, from cache" % name,
+                  p.returncode == 0 and "from cache" in said.split("\n")[0]
+                  and "── content.md: from line %s of " % n_e in said,
+                  "rc %s %s" % (p.returncode, (said.split("\n")[0] or p.stderr.decode("utf-8", "replace")[-120:])[:100]))
+    # ... and a web address alone: a file's name is its bytes, `x%20y.html` is not `x y.html`, so a path keeps its
+    # escapes and gets the words (KNOWN-ISSUES 294)
+    pct_file = os.path.join(tempfile.mkdtemp(prefix="rp-pct-"), "x%20y.html")
+    with open(pct_file, "wb") as fh_:
+        fh_.write(ROUTES["/long"][2])
+    pf = run_read(pct_file)
+    n_pf = next_line(pf.text)
+    check("... a file whose name holds escapes keeps them: the words, never another file's name",
+          bool(n_pf) and last_rows(pf.text, 1) == ["the same command with --from %d --chars 7900 --file content.md"
+                                                   % n_pf], str(last_rows(pf.text, 1))[:120])
+    # PowerShell takes “ ” and „ for `"`, and Windows forbids `"` in a file name, so a name holds them: in PowerShell
+    # 5.1 and 7 the command split the path there and read its second half as a host (KNOWN-ISSUES 292)
+    curly = os.path.join(tempfile.mkdtemp(prefix="rp-curly-"), "Report “Final” „de“.html")
+    with open(curly, "wb") as fh_:
+        fh_.write(ROUTES["/long"][2])
+    cq = run_read(curly)
+    n_c = next_line(cq.text)
+    check("a path holding PowerShell's other double quotes (“ ” „): the words instead of the command",
+          bool(n_c) and last_rows(cq.text, 1) == ["the same command with --from %d --chars 7900 --file content.md" % n_c],
+          str(last_rows(cq.text, 1))[:120])
     stray = run_read(srv.url("/long"), "--from", "5", "--file", "content.md", "──", reuse=first)
     ign = next((ln for ln in stray.text.split("\n") if ln.startswith("ignored: ")), "")
     check("a stray ── (a model copied the decoration): left out and named, the read goes on",
@@ -438,7 +525,7 @@ try:
 
     # --chars C, one knob in characters (KNOWN-ISSUES 277): the whole answer - header, outline, the lines above and
     # below the text - within C characters (UTF-16 units), C x 9 980 / 7 900 bytes and C x 495 / 7 900 lines, whole
-    # lines; on a first read, --from N and --from "text"; clamped to 1 000 .. 150 000, named on ignored: with what was
+    # lines; on a first read, --from N and --from "text"; clamped to 7 000 .. 150 000, named on ignored: with what was
     # used; no --chars is --chars 7900. --to is gone: named on ignored:, the read goes on
     import answer                                              # noqa: E402
     plain = run_read(srv.url("/plainlong"))
@@ -461,9 +548,9 @@ try:
           within(on, 20000) and u16(on.text) > 15000 and n_on and body(on.text) == saved[(n_big or 1) - 1:n_on - 1],
           size(on))
     at_q = next(i for i, ln in enumerate(saved, 1) if "Sentence 300.4 explains" in ln)
-    q = run_read(srv.url("/plainlong"), "--from", "Sentence 300.4 explains", "--chars", "3000", reuse=plain)
-    check("--from \"text\" --chars 3000: from the quote's line, within 3 000 characters",
-          within(q, 3000) and "── content.md: from line %d of " % at_q in q.text and body(q.text)[:1] == saved[at_q - 1:at_q],
+    q = run_read(srv.url("/plainlong"), "--from", "Sentence 300.4 explains", "--chars", "7000", reuse=plain)
+    check("--from \"text\" --chars 7000: from the quote's line, within 7 000 characters",
+          within(q, 7000) and "── content.md: from line %d of " % at_q in q.text and body(q.text)[:1] == saved[at_q - 1:at_q],
           size(q))
     d0 = run_read(srv.url("/plainlong"), "--from", "5", reuse=plain)
     d79 = run_read(srv.url("/plainlong"), "--from", "5", "--chars", "7900", reuse=plain)
@@ -471,7 +558,7 @@ try:
           d0.text.split("\n")[1:] == d79.text.split("\n")[1:] and within(d0, 7900)
           and answer.limits(7900) == answer.limits() == {"chars": 7900, "budget": 9980, "max_lines": 495},
           size(d0))
-    for value, used, note in (("500", 1000, "--chars 500 (1000 at the least: 1000 used)"),
+    for value, used, note in (("500", 7000, "--chars 500 (7000 at the least: 7000 used)"),
                               ("999999", 150000, "--chars 999999 (150000 at the most: 150000 used)"),
                               ("abc", 7900, "--chars abc (a number of characters: 7900 used)")):
         r = run_read(srv.url("/plainlong"), "--from", "5", "--chars", value, reuse=plain)
@@ -479,9 +566,39 @@ try:
         check("--chars %s: %d used, named on ignored:, the read goes on" % (value, used),
               r.rc == 0 and note in ign and within(r, used) and "── content.md: from line 5 of " in r.text
               and (used < 100000 or u16(r.text) > 100000), ign[:90] + " | " + size(r))
+    # below 7 000 a line of 1 998 characters, or of 6 000 bytes of Chinese, did not fit beside the header and the
+    # command: it was shown in part and next: went past its rest (KNOWN-ISSUES 295)
     one = run_read(srv.url("/oneline"), "--chars", "1000")
-    check("--chars 1000, lines of 1 998 characters: one line at least, its head, within 1 000",
-          within(one, 1000) and "is longer than one answer" in one.text and next_line(one.text) == 2, size(one))
+    ign1 = next((ln for ln in one.text.split("\n") if ln.startswith("ignored: ")), "")
+    pieces, k_one = [one.text], next_line(one.text)
+    while k_one and len(pieces) < 80:
+        pieces.append(run_read(srv.url("/oneline"), "--from", str(k_one), "--chars", "1000", reuse=one).text)
+        k_one = next_line(pieces[-1])
+    check("--chars 1000, lines of 1 998 characters: 7 000 used, named on ignored:, and paging to the end cuts no line",
+          "--chars 1000 (7000 at the least: 7000 used)" in ign1 and "── EOF " in pieces[-1]
+          and not [t for t in pieces if "is longer than one answer" in t], "%s | %d answers" % (ign1[:60], len(pieces)))
+    cjk_long = "\n\n".join([("北京是中华人民共和国的首都也是全国的政治文化和国际交往中心" * 70)[:1998]] * 12)
+    deep = "C:/" + "/".join(["d" * 40] * 5)
+    # a header of its longest rows: a redirect's url:, a 400-character advice, missing: and improve:, outside the text:
+    m_deep = {"status": "ok", "url": {"requested": "https://e.example/" + "f" * 180,
+                                       "final": "https://e.example/moved/" + "g" * 200}, "dir": deep,
+              "content": {"engine": "defuddle", "outside": 9000}, "files": {"content": deep + "/content.md"},
+              "elapsed_ms": 1, "advice": "x " * 199, "missing": [{"what": "browser", "fix": "y " * 140}],
+              "improve": [{"what": "tables", "fix": "z " * 140}]}
+
+    def deep_hint(k, total, view):
+        return '── next: line %d of %d ──\npython -X utf8 "%s/readpage.py" "%s" --dir "%s" --from %d --chars %d ' \
+               '--file %s' % (k, total, deep, m_deep["url"]["requested"], deep, k, 7000, view)
+    at_min, k_min = [], 1
+    while k_min and len(at_min) < 40:
+        said_min, k_min = answer.render(m_deep, cjk_long, "content.md", k_min, deep_hint,
+                                        **answer.limits(getattr(answer, "CHARS_MIN", 1000)))
+        at_min.append(said_min)
+    check("... at the least, a Chinese text with no headings, 6 000 bytes a line, under deep paths: every line whole, "
+          "the first block's too (the outline gives up its room)",
+          getattr(answer, "CHARS_MIN", 0) == 7000 and not [t for t in at_min if "is longer than one answer" in t]
+          and "── EOF " in at_min[-1], "%d answers, %d cut" % (len(at_min),
+                                                              len([t for t in at_min if "is longer than one" in t])))
     gone = run_read(srv.url("/plainlong"), "--from", "50", "--to", "60", reuse=plain)
     ign = next((ln for ln in gone.text.split("\n") if ln.startswith("ignored: ")), "")
     check("--to is gone: left out and named, the usual block from --from",
@@ -538,6 +655,13 @@ try:
     check("... and the line above its text names no end, which a model whose next: was cut off would take for the end "
           "of what it saw (KNOWN-ISSUES 279)",
           tops(zed.text) == ["── content.md: from line 1 of %d ──" % len(lines_of(zed))], str(tops(zed.text))[:120])
+    filed = run_read(srv.url("/plainlong"), "--chars", "40000", env={"READ_PAGE_TEST_CUT": "file:30000"})
+    f_m = re.match(r"Output too large \([\d.]+KB\)\. Full output saved to: (.+)\n", filed.text)
+    f_at = f_m.group(1).strip() if f_m else ""
+    check("... file:30000 on the CLI: the whole answer kept in the page's folder, which the cache's prune takes, not "
+          "left in the temp folder at every cut (KNOWN-ISSUES 300)",
+          bool(f_at) and os.path.isfile(f_at) and os.path.normcase(os.path.dirname(os.path.abspath(f_at)))
+          == os.path.normcase(os.path.abspath(filed.dir)), f_at[-80:])
     js = run_read(srv.url("/plainlong"), "--json", env={"READ_PAGE_TEST_CUT": "middle:2000"})
     check("... --json is never cut", js.text.lstrip().startswith("{") and "...[truncated" not in js.text, js.text[:40])
 
@@ -576,11 +700,11 @@ try:
     pm = lines_of(first, "page.md")
     at_p = next(i for i, ln in enumerate(pm, 1) if "Sentence 20.4 explains" in ln)
     check("--from \"text\" in page.md alike", "── page.md: from line %d of " % at_p in r.text, first_line(r)[:80])
-    r = run_read(srv.url("/long"), "--from", "Sentence 20.4 explains", "--chars", "1500", "--file", "content.md",
+    r = run_read(srv.url("/long"), "--from", "Sentence 20.4 explains", "--chars", "7000", "--file", "content.md",
                  reuse=first)
-    check("--from \"text\" --chars 1500: from the quote's line, within 1 500 characters",
+    check("--from \"text\" --chars 7000: from the quote's line, within 7 000 characters",
           "── content.md: from line %d of " % at in r.text and body(r.text)[:1] == saved[at - 1:at]
-          and u16(r.text) <= 1500, "%d characters" % u16(r.text))
+          and u16(r.text) <= 7000, "%d characters" % u16(r.text))
     tabs_r = run_read(srv.url("/tabs"))
     tl = lines_of(tabs_r)
     for quote, want in (("[tab · Developer Plan Limits]", "[tab · hidden, but extracted · Developer Plan Limits]"),
@@ -811,13 +935,13 @@ try:
     check("MCP read_url chars=20000: past one block, as Cline counts it within 20 000 characters, the size carried on",
           15000 < cline_form(rc20) <= 20000 and "chars=20000" in mcp_said(rc20).rstrip("\n").split("\n")[-1],
           "%d characters as JSON; %s" % (cline_form(rc20), mcp_said(rc20).rstrip("\n").split("\n")[-1][-60:]))
-    rc3 = mcp({"dir": d, "from": 121, "chars": 3000}, "read")
-    check("MCP read chars=3000: from line 121, as Cline counts it within 3 000 characters",
-          cline_form(rc3) <= 3000 and "── content.md: from line 121 of " in mcp_said(rc3) and "chars=3000" in mcp_said(rc3),
+    rc3 = mcp({"dir": d, "from": 121, "chars": 7000}, "read")
+    check("MCP read chars=7000: from line 121, as Cline counts it within 7 000 characters",
+          cline_form(rc3) <= 7000 and "── content.md: from line 121 of " in mcp_said(rc3) and "chars=7000" in mcp_said(rc3),
           "%d characters as JSON" % cline_form(rc3))
     rc1 = mcp({"dir": d, "from": 121, "chars": "99"}, "read")
-    check("MCP chars=99: 1 000 used, named on ignored:", "chars 99 (1000 at the least: 1000 used)" in mcp_said(rc1)
-          and cline_form(rc1) <= 1000, next((ln for ln in mcp_said(rc1).split("\n") if ln.startswith("ignored")), ""))
+    check("MCP chars=99: 7 000 used, named on ignored:", "chars 99 (7000 at the least: 7000 used)" in mcp_said(rc1)
+          and cline_form(rc1) <= 7000, next((ln for ln in mcp_said(rc1).split("\n") if ln.startswith("ignored")), ""))
     rt = mcp({"url": srv.url("/long"), "from": 1, "to": 120})
     check("MCP read_url to= is gone: named on ignored:, the usual block",
           "to 120 (gone: chars sets the size)" in mcp_said(rt) and "── content.md: from line 1 of " in mcp_said(rt)

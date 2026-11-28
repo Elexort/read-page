@@ -182,6 +182,23 @@ check("unknown tool", "error" in bad_tool, bad_tool.get("error", {}).get("messag
 bad_url = call("read_url", {"url": "http://localhost:9/none"})
 check("bad url is an error", bad_url["isError"] and mcp_status(bad_url) == "error", mcp_status(bad_url))
 
+# an address that is a flag reaches no child: `read_url(url="--setup")` ran the installer, with no yes of the
+# user's (KNOWN-ISSUES 291). Over the wire the harmless one; the installer's own in process, with no child at all
+flag = call("read_url", {"url": "--version"})
+check("a url that is a flag is refused", flag["isError"] and "not a flag" in mcp_said(flag), mcp_said(flag)[:70])
+import importlib.util                                        # noqa: E402
+_spec = importlib.util.spec_from_file_location("mcp_inproc", SERVER)
+mcp = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(mcp)
+seen = []
+mcp.run_cli = lambda argv: (seen.append(list(argv)), (1, "", "no child in this check"))[1]
+refused = [u for u in ("--setup", "--stup", "-h", " --caps") if mcp.tool_read_url({"url": u}).get("isError")]
+check("... --setup and its typo start no child", not seen and len(refused) == 4, "children: %s" % seen[:2])
+mcp.tool_read_url({"url": "https://example.com/a", "from": 5, "chars": 9000})
+last = seen[-1] if seen else []
+check("... a child gets the address last, after --", last[-2:] == ["--", "https://example.com/a"]
+      and "--from" in last and last.index("--from") < last.index("--"), str(last)[:120])
+
 # 11. no result carries structuredContent: Cline's SDK runtime counted it against its 8 000 characters, a client
 # may show it instead of the text (KNOWN-ISSUES 275)
 check("no result carries structuredContent", not [n for n, r in results if "structuredContent" in r],

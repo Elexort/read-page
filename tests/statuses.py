@@ -299,6 +299,28 @@ r_.update({
     "/loading-comments": (200, H, page("Story", "<article><h1>Story</h1><p>" + LONG_EN + "</p></article><section>"
                                                 "<h2>Comments</h2><p>Loading comments...</p></section>")),
 })
+# a Chinese and a Japanese article with a list's placeholder after it: their words are counted by character, as
+# words_of counts them - by spaces the 1 690 characters of the first were 36 words, and it read `empty` (KNOWN-ISSUES 290)
+ZH_PARA = ("北京是中华人民共和国的首都，也是全国的政治、文化和国际交往中心。这座城市有三千多年的建城史，历史上曾是多个朝代的"
+           "都城，留下了故宫、天坛、颐和园等大量文物古迹。今天的北京既保留着传统的胡同和四合院，也有现代化的商务区和科技园区，"
+           "每年吸引数以千万计的游客前来参观。")
+JA_PARA = ("東京は日本の首都であり、政治、経済、文化の中心地です。江戸時代から続く歴史を持ち、浅草寺や皇居などの名所が数多く"
+           "あります。現在では世界有数の大都市として、多くの人々が暮らし、働いています。")
+r_.update({
+    "/loading-zh": (200, H, page("北京", "<main><article><h1>北京</h1>" + "".join(
+        "<h2>第%d节</h2><p>%s</p>" % (i, ZH_PARA) for i in range(1, 13))
+        + "<div id='list-more'><p>加载中...</p></div></article></main>")),
+    "/loading-ja": (200, H, page("東京", "<main><article><h1>東京</h1>" + "".join(
+        "<h2>第%d節</h2><p>%s</p>" % (i, JA_PARA) for i in range(1, 13))
+        + "<div id='more'><p>読み込み中...</p></div></article></main>")),
+    # a short page of a tool's documentation whose code shows the tool's output: the code is its text (KNOWN-ISSUES 297)
+    "/loading-code": (200, H, page("mytool sync", "<main><article><h1>mytool sync</h1><p>Run the sync command once after "
+                                   "you install the tool. It reads your configuration file, fetches the remote index "
+                                   "and writes a local copy, so later commands work offline. The output looks like "
+                                   "this:</p><pre><code>$ mytool sync\nLoading configuration...\nFetched 1 204 entries\n"
+                                   "Done.</code></pre><p>If the index cannot be reached, the command keeps the copy "
+                                   "you already have and says so.</p></article></main>")),
+})
 
 # a paywall written in JavaScript: the article is in the HTML, the schema says it is not free
 ART = {"@context": "https://schema.org", "@type": "NewsArticle", "headline": "Story"}
@@ -478,6 +500,14 @@ try:
     r = run_read(s.public.url("/loading-comments"), env=NO_BROWSER)
     check("an article whose comments are loading is ok: the article is the page",
           status(r) == "ok" and "loading" not in (r.manifest.get("advice") or "").lower(), status(r))
+    for path in ("/loading-zh", "/loading-ja"):
+        r = run_read(s.public.url(path), env=NO_BROWSER)
+        check("%s: an article with a loading line after it is ok, its words counted by character (290)" % path,
+              status(r) == "ok" and not (r.manifest.get("signals") or {}).get("loading"),
+              "%s | %s" % (status(r), reason(r)[:90]))
+    r = run_read(s.public.url("/loading-code"), env=NO_BROWSER)
+    check("a short page whose code shows `Loading configuration...` is ok: code is its text (297)",
+          status(r) == "ok" and not (r.manifest.get("signals") or {}).get("loading"), "%s | %s" % (status(r), reason(r)[:90]))
 
     # ------------------------------------------------ a deep address that lands on the site's home page (KNOWN-ISSUES 260)
     home = ("<!doctype html><html><head><meta charset='utf-8'><title>Home</title></head><body><main><h1>Welcome</h1>"

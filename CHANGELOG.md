@@ -65,6 +65,63 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   and a sheet that said `A1` gave its first cell alone. A sheet's size is set aside, a row read up to 1 024 columns
   (a note says when a sheet says it runs past them), an empty row passed over at C's speed, and the converter's 10 s
   looked at every 256 rows; where they run out the note names the sheet and the row. The two-row file reads in 2.5 s.
+- **Planned for 0.5.1: a quote with `$` or a backtick after a cut** (KNOWN-ISSUES 303): SKILL.md's `--from "<words of
+  the last line before the gap>"` hands a shell what it expands inside double quotes when a model quotes the whole
+  line; a new wording is measured with Haiku first, as rows 279-280 were.
+- **Digits alone after `--from` are a line number, said so** (KNOWN-ISSUES 302): `--from "2023"` and MCP's
+  `from="2023"` go to line 2023, as a model's `from="127"` should; references/answer.md and mcp.md say to add a word to
+  look for a number (`--from "2023 report"`).
+- **The docs of the answer say what the code does** (KNOWN-ISSUES 301): references/mcp.md's header named `cover` on
+  every first line and a range that is gone, its images a marker on a line of its own; "no network" for a
+  continuation, which fetches its block's pictures (SKILL.md: "the saved copy, not fetched again"); the list of what
+  gets the words, whole.
+- **`READ_PAGE_TEST_CUT=file:N` keeps the cut answer in the page's folder** (KNOWN-ISSUES 300): the test hook left a
+  `read-page-cut-*.txt` in the temp folder at every cut; the file now goes where the page's files are, which the
+  cache's prune takes.
+- **A hidden panel too long for the text: one marker of it, and no false fragment** (KNOWN-ISSUES 299): the block rule
+  brought page.md's copy of the panel's marker back beside the text before it, with nothing under it, and the panel's
+  words counted as the page's alone, so a whole text was `maybe a fragment` and the answer showed page.md. A marker
+  whose own block stays in page.md stays with it, and the long panels' words count as the text's.
+- **A bare file's name with no such file here is a wrong call, never a host** (KNOWN-ISSUES 298): `notes.md` from
+  the wrong folder was read as `https://notes.md`, a request to a stranger's site (`.md`, `.py`, `.zip` are TLDs) or a
+  DNS request that names the file. A name with no `/` and a file's extension is `no such file: notes.md (a file
+  here: give its path; a site: https://notes.md)`, exit 2, with no request.
+- **A short page whose code shows a loading line is `ok`** (KNOWN-ISSUES 297): row 259's rule took `Loading
+  configuration...` in a page's code - a tool's output in its documentation - for the page's own loading message, and
+  answered `empty` with the sign-in advice. The message is looked for outside fenced code alone.
+- **MCP `read` brings the pictures of the block it prints** (KNOWN-ISSUES 296): the call under `read_url`'s `next:`
+  rendered the saved file as it was, so past the first block every marker said `not downloaded: not printed yet` and
+  no file came. `read` of `content.md` or `page.md` now has the CLI read on from the folder first, as a CLI
+  continuation does (its window's pictures downloaded, their markers rewritten), in a thread of its own - only where
+  a picture can come (none for a 404 or a refused one).
+- **`--chars` is 7 000 at the least, and no line of a text is cut by paging** (KNOWN-ISSUES 295): below about 2 500
+  a line longer than the room beside the header and the command was shown in part and `next:` went past its rest (at
+  1 000 every ordinary paragraph of an article). Measured: the longest line content.md has (1 998 characters, 6 000
+  bytes of Chinese) stands whole from 6 900 with the longest header rows under deep paths, so `CHARS_MIN` is 7 000; and
+  in a first block whose first line does not fit beside the outline, the outline gives up its room.
+- **An address with percent-escapes gets the command under `next:`, as its IRI with the page's folder**
+  (KNOWN-ISSUES 294): `%` is read by cmd inside double quotes, so every Wikipedia page outside English as a browser
+  copies it, and any query with a space, got the words. Such an address is named as the IRI that asks for the same
+  thing (`…/wiki/Москва` for `…/wiki/%D0%9C…`) with `--dir` of the page's folder, which a continuation reads the saved
+  copy from; escapes an IRI cannot say (`%2F`, `%25`) still get the words, and so does a file's path with escapes in
+  its name (`x%20y.html` is no `x y.html`).
+- **The command under `next:` reaches the interpreter that ran the read** (KNOWN-ISSUES 293): it named the
+  interpreter's file (`python`), and after a read started by `py -3.13` - python.org's installer leaves `python` to the
+  Store's alias - every shell answered "Python was not found". The name stands only where the PATH leads it to this
+  interpreter; else its absolute path in forward slashes when it needs no quotes, else `py -X.Y` on Windows, else the
+  words.
+- **A path with “ ” or „ gets the words under `next:`, not a command PowerShell splits** (KNOWN-ISSUES 292):
+  PowerShell takes the three for `"`, and a Windows file name holds them where it cannot hold `"`; the command split
+  such a path in PowerShell 5.1 and 7 and read its second half as a host. They join `"`, `$`, the backtick, `%` and the
+  backslash in what gets the words.
+- **MCP: an address that is a flag reaches no child** (KNOWN-ISSUES 291): `read_url` gave its `url` to the reader's
+  child as the first argument, so `url="--setup"` (or the typo `--stup`) ran the installer without the user's yes,
+  and `--version` or `--caps` answered as flags. An address that starts with `-` is refused before any child, and the
+  child gets the address last, after `--`, which `readpage.main` and `ownenv.use` read as an address, never a flag.
+- **A Chinese or Japanese article with a loading line after it is `ok`** (KNOWN-ISSUES 290): row 259's rule counted
+  the rest of the text by spaces, so a whole Chinese article of 1 690 characters was 36 words and a list's `加载中...`
+  after it made it `empty`, with the sign-in advice. The rest is counted by `words_of`, Chinese and Japanese by
+  character, as every other rule counts it.
 - **`tests/mcp_parallel.py`: four calls at once are told by their pages, not by the clock** (KNOWN-ISSUES 289):
   the check held the four calls' time under 9.5 s, and a macOS Intel runner, where three of them start cold
   processes, took 10.7 s once (8.4 s as a rule). The test server now notes when each page is asked for and
@@ -164,7 +221,8 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   go on in words (`── next: line 127 of 389 → the same command with --from 127 --file content.md ──`), and agents
   copy what an answer names. Now, above the text, every block alike: `── content.md: lines 53-190 of 474 ──`; below
   it, while text remains, `── next: line 191 of 474 ──` and on a line of its own the command, literal - the
-  interpreter by the name the agent started the skill with (handed from the first process to the environment's),
+  interpreter by its file's name (handed from the first process to the environment's; since KNOWN-ISSUES 293 the name
+  only where the PATH leads it to that interpreter, else its path or `py -X.Y`),
   `-X utf8`, the script by its absolute path in forward slashes, the address and `--dir` in double quotes, the flags
   that matter if the page is read again (`--allow-external`, `--force-external`, `--alternate`, `--deny-images`,
   `--download`, `--dir`; never `--refresh`, `--clear-cookies`, `--screenshots`, `--ocr`, `--json`), `--from N --chars

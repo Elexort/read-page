@@ -2430,6 +2430,22 @@ LOCAL_TYPES = {".html": "text/html", ".htm": "text/html", ".xhtml": "text/html",
                ".markdown": "text/markdown", ".txt": "text/plain", ".json": "application/json",
                ".xml": "text/xml", ".csv": "text/plain", ".pdf": "application/pdf", ".rtf": "application/rtf",
                ".odt": "application/vnd.oasis.opendocument.text"}
+# a file's extension a bare name is told by (file_like): the local types, the documents' and archives', pictures,
+# sound and video, a notebook's and code's - not those that name many sites (.ai .io .so .sh .pl .me .tv .ly ...)
+FILE_EXTS = frozenset(LOCAL_TYPES) | frozenset(
+    ".doc .docx .docm .dotx .xls .xlsx .xlsm .ppt .pptx .ppsx .potx .epub .ods .odp .zip .png .jpg .jpeg .gif .webp "
+    ".svg .mp3 .mp4 .wav .log .yaml .yml .toml .ini .ipynb .py .js .ts".split())
+
+
+def file_like(name):
+    """A bare name that names a file, not a site: no `/`, no `www.`, no scheme or port, and a file's extension
+    (FILE_EXTS) - `README.md`, `report.zip`. A missing one was read as a host, `https://README.md`: from the wrong folder
+    a request to whatever site holds that name - `.md`, `.py`, `.zip` are delegated TLDs - answered as the file, or a
+    DNS request naming it (KNOWN-ISSUES 298). A site so named is asked with its https://."""
+    s = (name or "").strip()
+    if not s or "/" in s or "\\" in s or ":" in s or s.lower().startswith("www."):
+        return False
+    return os.path.splitext(s)[1].lower() in FILE_EXTS
 
 
 def read_local_file(path, workdir):
@@ -3675,14 +3691,25 @@ LOADING_WORDS = 150
 
 
 def loading_stub(text):
-    """The loading message the text holds where its content goes, when little else is there; else ""."""
+    """The loading message the text holds where its content goes, when little else is there; else "". The rest is
+    counted as words_of counts it, Chinese and Japanese by character: by spaces a Chinese article of 1 690 characters
+    was 36 words, and a list's `加载中...` after it made it `empty` (KNOWN-ISSUES 290). Code is the page's text, not
+    its state: a line inside a fence (a tool's output, `Loading configuration...`) is no loading message (297)."""
     if not text or len(text) > 20000:
         return ""
-    lines = [ln.strip() for ln in text.split("\n")]
-    hits = [ln for ln in lines if LOADING_LINE.match(ln)]
+    lines, outside, fence = [], [], False
+    for ln in text.split("\n"):
+        ln = ln.strip()
+        is_fence = ln.startswith(("```", "~~~"))
+        if is_fence:
+            fence = not fence
+        lines.append(ln)
+        outside.append(not fence and not is_fence)
+    said = [out and bool(LOADING_LINE.match(ln)) for ln, out in zip(lines, outside)]
+    hits = [ln for ln, s in zip(lines, said) if s]
     if not hits:
         return ""
-    rest = sum(len(ln.split()) for ln in lines if not LOADING_LINE.match(ln))
+    rest = words_of("\n".join(ln for ln, s in zip(lines, said) if not s))
     return hits[0].strip("#*_ ")[:120] if rest <= LOADING_WORDS else ""
 
 
@@ -10229,7 +10256,7 @@ def main(argv=None):
                          "--from \"[img #3]\"")
     ap.add_argument("--chars", dest="chars", default="", metavar="C",
                     help="how much one answer holds, in characters (UTF-16 units), whole lines: 7900 by default, which "
-                         "fits every harness; 1000 to 150000 (the bytes and lines in the same ratio)")
+                         "fits every harness; 7000 to 150000 (the bytes and lines in the same ratio)")
     ap.add_argument("--json", action="store_true", help="print the manifest instead of the text")
     ap.add_argument("--ocr", default="", metavar="N",
                     help="print the text drawn in picture N (the number on its marker) instead of the "
@@ -10244,8 +10271,11 @@ def main(argv=None):
                          "many characters, UTF-16 units and bytes stand before it and its filler is ASCII, Cyrillic, CJK "
                          "and a character past U+FFFF, so the last line a tool shows says which of the three it counts")
     known = [s for a in ap._actions for s in a.option_strings if s.startswith("--")]
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # what stands after `--` is the address, as it is: the MCP server puts it there (KNOWN-ISSUES 291)
+    cut = raw.index("--") if "--" in raw else len(raw)
     argv = [(typo_fixed(t.partition("=")[0], known) + t.partition("=")[1] + t.partition("=")[2])
-            if t.startswith("--") else t for t in (sys.argv[1:] if argv is None else argv)]
+            if t.startswith("--") else t for t in raw[:cut]] + raw[cut:]
     args, extra = ap.parse_known_args(argv)
     for flag, make in (("probe", answer.probe), ("probe_units", answer.probe_units)):
         if str(getattr(args, flag)).strip():
@@ -10281,7 +10311,7 @@ def main(argv=None):
         args.ignored.append("--from %d (a line number, 1 or more)" % args.from_line)
         args.from_line = 0
     # the answer's size in characters, the bytes and the lines in the default's ratio (answer.limits); a value
-    # outside 1 000 .. 150 000, or no number, is named with what was used
+    # outside 7 000 .. 150 000 (answer.CHARS_MIN, CHARS_MAX), or no number, is named with what was used
     asked = str(args.chars).strip()
     args.chars, why = answer.chars_asked(asked)
     if why:
@@ -10404,6 +10434,9 @@ def read(args):
     else:
         url = ownenv.arg_text(url)              # an address typed in the locale's code set (KNOWN-ISSUES 274)
         scheme = (urllib.parse.urlparse(url).scheme or "").lower()
+    if not local and not scheme and file_like(url):
+        # a file's name with no file of it here, never a host: `README.md` from another folder was asked of the web
+        return usage_error("no such file: %s (a file here: give its path; a site: https://%s)" % (url[:200], url[:200]))
     if not local and not scheme and re.match(r"^[\w-]+(\.[\w-]+)+([/:?#]|$)", url):
         url = "https://" + url                  # "example.com/a" is a host, not a scheme
         scheme = "https"
@@ -11324,8 +11357,11 @@ def read(args):
     # ---------------------------------------------------------------- artefacts
     manifest["page"] = page_meta(html, url)
     # words, not characters: a page with 10 000 short comments used to look like a fragment; a marker of a tab
-    # or a section (tabs.py) is no word of the page's
-    text_words = len(tabs.unmarked(text or "").split())
+    # or a section (tabs.py) is no word of the page's. A hidden panel too long for the text stays in page.md, its
+    # marker in the text naming its line there: its words count as the text's, else a whole text read as a fragment
+    # (a 6.4 KB panel beside 2 KB of text: 32 %, and the answer showed page.md; KNOWN-ISSUES 299)
+    text_words = len(tabs.unmarked(text or "").split()) + sum(
+        len(str(x.get("text") or "").split()) for x in (tabs_info or {}).get("long") or [])
     cover = round(min(1.0, text_words / visible_words), 3) if visible_words else None
     # "fragment" means more content exists that we did not take. A low cover alone is not enough:
     # nav-heavy pages (github trending, k8s docs) keep 10-30 % of the visible text legitimately.
@@ -11736,7 +11772,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
     # reads on carries it
     chars = (getattr(args, "chars", 0) or answer.BUDGET_CHARS) if args is not None else answer.BUDGET_CHARS
     size = answer.limits(chars)
-    hint = cli_next_for(args if args is not None else argparse.Namespace(url="", dir=""), chars)
+    hint = cli_next_for(args if args is not None else argparse.Namespace(url="", dir=""), chars, workdir)
     if ocr_n:
         # --ocr N answers with picture N's text: the window's other pictures are not wanted
         manifest, ocr = ocr_answer(workdir, manifest, ocr_n)
@@ -11799,7 +11835,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         path = os.path.join(workdir, view)
         if ocr is not None:
             out, _ = answer.render(public, ocr.get("text") or "", "img #%d text" % ocr_n, 1, ocr_next, **size)
-            sys.stdout.write(answer.harness_cut(out))   # READ_PAGE_TEST_CUT, a test hook: as it is without it
+            sys.stdout.write(answer.harness_cut(out, folder=workdir))   # READ_PAGE_TEST_CUT, a test hook
             sys.stdout.flush()
             return 0
         if os.path.isfile(path):
@@ -11810,7 +11846,7 @@ def finish(workdir, manifest, t0, args=None, content_path=None):
         else:
             out, _ = answer.render(public, text, view, start, hint, **size)
         # READ_PAGE_TEST_CUT, a hook for testing the skill: the answer cut the way a harness cuts it; as it is without
-        sys.stdout.write(answer.harness_cut(out))
+        sys.stdout.write(answer.harness_cut(out, folder=workdir))
     sys.stdout.flush()
     return 0                           # an answer was printed, whatever its status
 
@@ -11859,20 +11895,31 @@ def remember_view(workdir, view, start=None):
         pass
 
 
-# What a shell reads inside double quotes - $ and a backtick (bash, PowerShell), % (cmd) -, the quote that ends them,
+# What a shell reads inside double quotes - $ and a backtick (bash, PowerShell), % (cmd) -, the quote that ends them
+# and the three PowerShell takes for it (“ ” „: a file name holds them, as Windows forbids `"`; KNOWN-ISSUES 292),
 # a backslash bash may take for an escape, and what no command line holds: an address, a folder or a script path
 # with one gets the command in words (cli_command)
-UNQUOTABLE = re.compile(r'["$`%\\\x00-\x1f\x7f�\ud800-\udfff]')
+UNQUOTABLE = re.compile(r'["“”„$`%\\\x00-\x1f\x7f�\ud800-\udfff]')
 # the flags that matter if the saved copy is gone and the page is read again; never --refresh (each step would fetch
 # again and the lines could move), --clear-cookies, --screenshots, --ocr or --json
 CARRIED = (("allow_external", "--allow-external"), ("force_external", "--force-external"), ("alternate", "--alternate"),
            ("deny_images", "--deny-images"), ("download", "--download"))
 
 
+_AGENT_PYTHON = {}
+
+
 def agent_python():
-    """The interpreter's name the agent started the skill with: the first process's sys.executable, which the
-    environment's child is handed (READ_PAGE_PYTHON_NAME, ownenv.use), else this one's; "python" when none."""
-    return ownenv.python_name(os.environ.get("READ_PAGE_PYTHON_NAME") or sys.executable)
+    """The interpreter as the command under next: names it, so that a shell reaches the one that ran the first
+    process (ownenv.python_command): its name where PATH leads that name to it, else its plain path, else `py -X.Y`;
+    the environment's child is handed it (READ_PAGE_PYTHON_NAME, ownenv.use: "-" for none), else this process's own.
+    "" when no shell could name it: the answer gives the words (KNOWN-ISSUES 293)."""
+    handed = os.environ.get("READ_PAGE_PYTHON_NAME")
+    key = (handed, sys.executable, os.environ.get("PATH", ""))
+    if key not in _AGENT_PYTHON:                          # a PATH scan each time: an answer's every hint asked it
+        got = handed if handed is not None and ownenv.HANDED.match(handed) else ownenv.python_command(sys.executable)
+        _AGENT_PYTHON[key] = "" if got == "-" else got
+    return _AGENT_PYTHON[key]
 
 
 def slashed(path):
@@ -11897,11 +11944,54 @@ def in_letters(path):
     return text
 
 
-def cli_command(args, frm, chars, view):
+_ESCAPES = re.compile(r"(?:%[0-9A-Fa-f]{2})+")
+
+
+def iri_form(address):
+    """An address whose percent-escapes are all that stands between it and a shell (cmd reads `%` inside double quotes)
+    as the IRI that asks for the very same thing: its escapes decoded - every one, else those of UTF-8 text and of a
+    space alone - when intl.iri_to_uri makes the address of it again, the escapes' case aside; "" when none does
+    (`%2F`, `%25`, `%22` stand for what an IRI cannot say). KNOWN-ISSUES 294: every Wikipedia page outside English as
+    a browser copies it, and a query with a space, got the words under next:."""
+    def same(a, b):
+        up = lambda s: _ESCAPES.sub(lambda m: m.group(0).upper(), s)       # noqa: E731
+        return up(intl.iri_to_uri(a)) == up(intl.iri_to_uri(b))
+
+    def text_and_spaces(m):
+        raw = urllib.parse.unquote_to_bytes(m.group(0))
+        out = []
+        for part in re.split(rb"([\x00-\x7f]+)", raw):
+            if not part:
+                continue
+            if part[0] < 0x80:
+                out.append("".join(" " if b == 0x20 else "%%%02X" % b for b in part))
+            else:
+                try:
+                    out.append(part.decode("utf-8"))
+                except UnicodeDecodeError:
+                    out.append("".join("%%%02X" % b for b in part))
+        return "".join(out)
+
+    if "%" not in (address or ""):
+        return ""
+    whole = None
+    try:
+        whole = urllib.parse.unquote(address, errors="strict")
+    except UnicodeDecodeError:
+        pass
+    for form in (whole, _ESCAPES.sub(text_and_spaces, address)):
+        if form and form != address and not UNQUOTABLE.search(form) and same(form, address):
+            return form
+    return ""
+
+
+def cli_command(args, frm, chars, view, workdir=""):
     """The command that reads on, to run as it is printed in bash, PowerShell 5.1 and 7 and cmd: the interpreter by
     its name, -X utf8, the script by its absolute path and the address in double quotes, the flags that matter if
-    the page is read again (CARRIED, --dir), then --from N --chars C --file F. An address, a folder or a script path
-    that a shell would read inside double quotes gets the words: the same command with --from N --chars C --file F."""
+    the page is read again (CARRIED, --dir), then --from N --chars C --file F. An address whose escapes alone stand in
+    the way is named as its IRI, with `--dir` of the page's folder (`workdir`): the continuation reads the saved copy
+    by its folder, under any name of the page (KNOWN-ISSUES 294). An address, a folder or a script path that a shell
+    would read inside double quotes gets the words: the same command with --from N --chars C --file F."""
     tail = "--from %d --chars %d --file %s" % (frm, chars, view)
     target = getattr(args, "target", None)                # read() sets it; "" when no shell could name it
     if target is None:
@@ -11910,21 +12000,29 @@ def cli_command(args, frm, chars, view):
     # bytes are lone surrogates in UTF-8 mode, which no answer prints - it stopped with an internal error (278)
     folder = in_letters(slashed(args.dir)) if getattr(args, "dir", "") else ""
     script = in_letters(slashed(__file__))
-    if not target or not script or (getattr(args, "dir", "") and not folder) \
+    python = agent_python()                               # "" when no shell could reach the interpreter by a name
+    if target and UNQUOTABLE.search(target) and (folder or workdir) and re.match(r"(?i)https?://", target):
+        # a web address alone: a file's name is its bytes, `x%20y.html` no `x y.html`
+        iri = iri_form(target)
+        here = folder or in_letters(slashed(workdir))
+        if iri and here and not UNQUOTABLE.search(here):
+            target, folder = iri, here
+    if not target or not script or not python or (getattr(args, "dir", "") and not folder) \
             or any(UNQUOTABLE.search(x) for x in (script, target, folder)):
         return "the same command with " + tail
     flags = [flag for key, flag in CARRIED if getattr(args, key, False)]
     if folder:
         flags.append('--dir "%s"' % folder)
-    return '%s -X utf8 "%s" "%s" %s' % (agent_python(), script, target, " ".join(flags + [tail]))
+    return '%s -X utf8 "%s" "%s" %s' % (python, script, target, " ".join(flags + [tail]))
 
 
-def cli_next_for(args, chars):
+def cli_next_for(args, chars, workdir=""):
     """How a CLI answer ends while text remains (answer.render's next_hint): where it goes on, and on a line of its
     own the command that reads on, so that a model copies it whole (KNOWN-ISSUES 276). The file is named even when
-    it is the default: a continuation never depends on a guess."""
+    it is the default: a continuation never depends on a guess. `workdir`: the page's folder, which the command
+    names for an address it gives as its IRI (cli_command)."""
     def hint(n, total, view):
-        return "── next: line %d of %d ──\n%s" % (n, total, cli_command(args, n, chars, view))
+        return "── next: line %d of %d ──\n%s" % (n, total, cli_command(args, n, chars, view, workdir))
     return hint
 
 
