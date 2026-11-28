@@ -4190,6 +4190,39 @@ attempt("a setup.json that cannot be written does not end the work before its la
         lambda: (not err361 and st361.get("done") is True and st361.get("ok") is False
                  and [p for p in w361.problems if p.get("part") == "setup.json"], err361 or str(st361.get("ok"))))
 
+# ---------------------------------------------------------------- a proxy a script gives (row 362)
+# Windows' "Use setup script" (AutoConfigURL, a PAC file) is a proxy urllib does not read (it takes ProxyServer alone) and
+# the installers neither: every step went direct, and the network step said only that pypi.org did not answer.
+d362, w362 = work_in("rp-env-pac-")
+for k_ in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "UV_DEFAULT_INDEX", "UV_INDEX_URL"):
+    w362.env.pop(k_, None)
+real_pac362, real_fj362 = getattr(envsetup, "windows_auto_proxy", None), envsetup.fetch_json
+envsetup.windows_auto_proxy = lambda: "http://wpad.corp.example/proxy.pac"
+envsetup.fetch_json = lambda url, timeout=30: (_ for _ in ()).throw(urllib.error.URLError(TimeoutError("timed out")))
+saved362 = dict((k_, os.environ.get(k_)) for k_ in ("UV_DEFAULT_INDEX", "UV_INDEX_URL", "PIP_INDEX_URL", "PIP_CONFIG_FILE"))
+os.environ["PIP_CONFIG_FILE"] = os.devnull
+for k_ in ("UV_DEFAULT_INDEX", "UV_INDEX_URL", "PIP_INDEX_URL"):
+    os.environ.pop(k_, None)
+try:
+    ok362, note362 = w362.network()
+    w362.env["HTTPS_PROXY"] = "http://proxy.corp.example:8080"
+    ok362b, note362b = w362.network()
+finally:
+    envsetup.fetch_json = real_fj362
+    if real_pac362 is None:
+        del envsetup.windows_auto_proxy
+    else:
+        envsetup.windows_auto_proxy = real_pac362
+    for k_, v_ in saved362.items():
+        if v_ is None:
+            os.environ.pop(k_, None)
+        else:
+            os.environ[k_] = v_
+attempt("a proxy a script gives (Windows' setup script, a PAC file) is said where pypi.org does not answer, with what "
+        "to set (HTTPS_PROXY) - and not where a proxy is set",
+        lambda: (not ok362 and "comes from a script" in note362 and "HTTPS_PROXY" in note362
+                 and "wpad.corp.example" in note362 and "comes from a script" not in note362b, note362[-200:]))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)

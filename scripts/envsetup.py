@@ -816,6 +816,19 @@ def sha256(path):
     return h.hexdigest()
 
 
+def windows_auto_proxy():
+    """Windows: the address of the script that gives this user's proxy (Internet Options' "Use setup script":
+    AutoConfigURL), '' where there is none - and anywhere else."""
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") as k:
+            return str(winreg.QueryValueEx(k, "AutoConfigURL")[0] or "").strip()
+    except (ImportError, OSError, ValueError):
+        return ""
+
+
 def net_env(user_home=None, folder=None):
     """The environment for the installers: the machine's proxy (Windows keeps it in the registry,
     which uv, npm and Playwright do not read) named the way they all do; no source in plain http (refuse_plain_http),
@@ -1706,7 +1719,20 @@ class Work:
                 return False, "pypi.org answers, but its certificate cannot be verified: " + self.cert_why
             if index:
                 return True, "pypi.org does not answer (%s); using the index set here" % str(e)[:80]
-            return False, "no answer from pypi.org: %s%s" % (str(e)[:120], self._http_hint() or self._config_hint())
+            return False, "no answer from pypi.org: %s%s" % (str(e)[:120], self._http_hint() or self._config_hint()
+                                                             or self._proxy_hint())
+
+    def _proxy_hint(self):
+        """A machine whose proxy a script gives (Windows' "Use setup script": a PAC file): urllib reads the registry's
+        ProxyServer alone and the installers nothing of it, so every step went direct, and the network step said only
+        that pypi.org did not answer (KNOWN-ISSUES 362) - say so, where no proxy is set."""
+        if any(self.env.get(k) for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")):
+            return ""
+        pac = windows_auto_proxy()
+        if not pac:
+            return ""
+        return ("; this machine's proxy comes from a script (%s), which --setup cannot read: set HTTPS_PROXY to the "
+                "proxy's address (http://host:port) and run it again" % redact(pac))
 
     def _http_hint(self):
         """A machine that reaches PyPI only through a mirror in plain http, which is not used: say how it would be."""

@@ -57,6 +57,9 @@
   missing".
 - **A `setup.json` that cannot be written no longer stops the work before its end** (KNOWN-ISSUES 361): the command
   said "the work stopped after 10 of 10 steps" with everything installed; the work ends, not ok, and names the problem.
+- **A proxy that a setup script gives is said** (KNOWN-ISSUES 362): nothing of `--setup` reads a Windows PAC file, and
+  behind one the network step said only that pypi.org did not answer; it now says the proxy comes from a script, and to
+  set `HTTPS_PROXY`.
 
 ## 0.5.0 - 2026-11-28
 
