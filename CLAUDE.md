@@ -121,5 +121,8 @@ git-ignored, so a contributor may keep a file of their own under that name.
   with the skill, each then answering a questionnaire on how the skill served it (what was missing, where it erred,
   whether a text looked whole or cut, which advice it followed, what else would help). The round's questions and
   procedure live outside the repository; its findings become KNOWN-ISSUES rows or changes, measured first.
+- The exception is 0.5.0, at the maintainer's word of 2026-11-28: the maintainer tests the harnesses after it is
+  published, not before - it is the version the maintainer's realistic tests and the research of small models run
+  on. Every later version keeps the rule above: the harnesses are tested on the candidate, before it is pinned.
 - A tag, a GitHub Release or an announcement only on the maintainer's word; the first release that is announced is
   meant for 1.0.0.
