@@ -47,6 +47,11 @@ def home():
     v = (os.environ.get("READ_PAGE_HOME") or "").strip()
     if v:
         return os.path.abspath(os.path.expanduser(v))
+    return default_home()
+
+
+def default_home():
+    """The folder home() names where READ_PAGE_HOME is not set."""
     if os.name == "nt":
         return os.path.join(os.path.expanduser("~"), ".read-page")
     if sys.platform == "darwin":
@@ -621,10 +626,12 @@ def _handshake_file():
     """A file for the child to remove first thing (READ_PAGE_HANDSHAKE names it); '' where one cannot be
     made - then nobody asks, and the read goes on as it always did."""
     base = os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp"
-    path = os.path.join(base, "read-page-start-%d" % os.getpid())
+    # a name of its own, made new: by the pid alone, in a shared /tmp, another user's file of that name made in advance
+    # was opened, the child could not remove it (the sticky bit), and a read that worked was taken for a start that
+    # failed - and run again in the machine's Python (KNOWN-ISSUES 354)
+    path = os.path.join(base, "read-page-start-%d-%s" % (os.getpid(), os.urandom(6).hex()))
     try:
-        with open(path, "w"):
-            pass
+        os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600))
     except OSError:
         return ""
     os.environ["READ_PAGE_HANDSHAKE"] = path

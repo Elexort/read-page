@@ -24,10 +24,16 @@ honest note.
 
 yt-dlp is the one engine `--setup` does not pin: the sites change under it
 from week to week. `--setup` installs `yt-dlp[default]` - with yt-dlp-ejs, the scripts for
-YouTube's JavaScript challenges - in the newest release that has been out three days (wheels only,
-under the constraints of the lock the environment was built from, a copy of which `--setup` keeps in
-the environment's own folder; the three days hold only what floats: yt-dlp, yt-dlp-ejs, brotli,
-mutagen, pycryptodomex, websockets), and a video read in the environment starts a look for a newer
+YouTube's JavaScript challenges - in the newest release that has been out three days by pypi.org's own
+upload dates (wheels only, under the constraints of the lock the environment was built from, a copy of which
+`--setup` keeps in the environment's own folder). The three days hold yt-dlp and every package it brings in
+beyond the lock (yt-dlp-ejs, brotli, mutagen, pycryptodomex, websockets today), each chosen in pypi.org's JSON and
+installed by its exact version from whatever index is set, every file held to the SHA256 pypi.org publishes - so
+an index that gives no upload dates (an HTML mirror: Aliyun's, Tencent Cloud's, Huawei Cloud's, a company's
+Nexus) serves it all the same, and a package no plan names is refused. Where pypi.org does not answer, the index's
+dates decide - one `--exclude-newer` for the whole tree, each package of the lock let through by its own date - and an
+index that gives none is named, never a silent success
+(KNOWN-ISSUES 341, 342). A video read in the environment starts a look for a newer
 one every three days, in a process of its own that the read does not wait for (`READ_PAGE_SKIP=update`
 turns it off, and `--setup` updates it too). It never goes backwards: it asks for `yt-dlp[default]>=`
 the version installed, and a result older than that is put back. `ytdlp.stamp` in the environment's

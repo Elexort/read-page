@@ -611,7 +611,12 @@ wherever it installs them, else the machine's own command:
 **`--setup`** (`scripts/envsetup.py`) installs all of them but the keys into the skill's own
 environment, a folder of the user's that every agent on the machine sees (`ownenv.home()`:
 `.read-page` in the home folder on Windows, `~/Library/Application Support/read-page` on macOS,
-`$XDG_DATA_HOME` or `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it). On Windows that folder's path
+`$XDG_DATA_HOME` or `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it). It takes a folder as its own only
+when the folder is not there yet, is empty, or holds one of its marks (`setup.json`, `setup.state`, `setup.lock`, `setup-detail.log`:
+`envsetup.SETUP_MARKS`), and never a drive's root or the home folder itself; any other is refused, named, with an
+empty folder or the default proposed, before anything in it is touched (`foreign_home`) - the end of a `--setup` deletes
+in its folder what it no longer uses (the environments, Pythons and Nodes of before), and a home folder's `envs/`,
+`node/` and `python/` were taken for its own (KNOWN-ISSUES 343). On Windows that folder's path
 is at most 120 characters (`WIN_HOME_MAX`): Windows refuses a DLL that carries a manifest - every `.pyd`, curl_cffi's
 and tesserocr's libraries - by a path over 250 (WinError 206, measured), the environment's deepest, curl_cffi's
 libcurl-impersonate, lies 116 inside the folder, and 14 are left for pins that move it; `--setup` refuses a longer
@@ -621,19 +626,22 @@ processes write there, so an environment an agent built inside such an app did n
 terminal or for the next agent ("not set up" in that agent's shell, every read in the machine's
 Python), and its files were slow to reach (a stat 372 us against 49 in the home folder). What it
 installs: uv 0.13.9 from
-PyPI (its wheel's SHA256 pinned in `envsetup.py` for every platform: `UV_WHEEL_SHA256`), CPython 3.13.18 from python-build-standalone through it (`--no-bin
+PyPI (its wheel's SHA256 pinned in `envsetup.py` for every platform: `UV_WHEEL_SHA256`; where it does not download, the
+uv on PATH is used and named as a problem with its version - KNOWN-ISSUES 351), CPython 3.13.18 from python-build-standalone through it (`--no-bin
 --no-registry`: nothing outside the folder), a venv `envs/py<version>-<lock hash>` with the 54
 packages of `scripts/setup-lock.txt` (each file pinned by SHA256: `tools/setup_lock.py` writes the lock
 with `--generate-hashes` - 1 092 files, about 94 KB - and the set is the lock's: `--require-hashes` on the
 whole install refuses a package it does not name - measured with uv 0.13.9, an index that served the lock's own
 wheel with a PEP 658 metadata file naming one more package got that one installed, unhashed, without it - and the
 one-package-at-a-time fallback installs each top package as `name==<its pin>` with `-c` the lock under the same
-flag; the yt-dlp step has `--verify-hashes`, so the lock's packages in its tree keep their hashes and yt-dlp, which
-floats, is not refused for having none; on the command line, so no `verify-hashes = false` in a settings file turns
-any of it off; wheels only; a package with no wheel for the machine is left
-out and named) and, not pinned, yt-dlp in the newest release that has been out three days
-([video.md](video.md)), Node: the one Playwright's wheel carries in its driver (24.21.0 for the pinned Playwright, at
-least 22.9 as npm 11 asks: nothing of nodejs.org is downloaded, 33-53 MB and 90-180 MB on disk saved) with npm 11.19.1 from
+flag; the yt-dlp step installs yt-dlp and what it brings in beyond the lock by exact versions with `--require-hashes`
+too, pypi.org's digests for those and the lock's for the rest (where pypi.org does not answer: `--verify-hashes`, so
+the lock's packages in its tree keep their hashes and yt-dlp, which floats, is not refused for having none); on the
+command line, so no `verify-hashes = false` in a settings file turns any of it off; wheels only; a package with no
+wheel for the machine is left out and named) and, not pinned, yt-dlp in the newest release that has been out three
+days by pypi.org's dates ([video.md](video.md)), Node: the one Playwright's wheel carries in its driver (24.21.0 for the pinned Playwright, at
+least 22.9 as npm 11 asks: nothing of nodejs.org is downloaded, 33-53 MB and 90-180 MB on disk saved; it lags nodejs.org's
+own - 24.22.3 then -, so a Node security release comes with a move of the Playwright pin, KNOWN-ISSUES 171) with npm 11.19.1 from
 the registry's tarball, held to the SHA512 pinned in `envsetup.py` (`NPM_INTEGRITY`, the value the registry publishes; an
 https `npm_config_registry` serves it, the hash decides); where there is no such Node - musl has no Playwright wheel, a
 wheel may lack its driver - Node 24.22.3 from nodejs.org checked against its archive's SHA256 pinned in
@@ -688,9 +696,14 @@ the same holds where a POSIX locale is not UTF-8 and the folder's name is its co
 path as UTF-8 ("surrogates not allowed"), so the folder goes by its own name from its parent.
 
 The work runs detached (its parent, a launcher, is gone at once), so a harness that kills a
-long command does not kill it; the command shows its progress for 100 s (in a terminal, to the
+long command does not kill it; its own output goes to the end of `setup-detail.log` (on Windows by a handle that can
+only append: one inherited from `open(log, "ab")` wrote where the log ended when the work started, over that run's
+first lines - KNOWN-ISSUES 345); the command shows its progress for 100 s (in a terminal, to the
 end), then says it goes on in the background, and a second `--setup` follows the one at work - a run
-that is not done, whose process is alive and whose `setup.lock` is held; nothing else counts as one.
+that is not done, whose process is alive and whose `setup.lock` is held; nothing else counts as one. The work's
+state keeps what it was asked (`asked`: the packs `--ocr-langs` named, its copy's pins), and a follower asked
+otherwise says what that run will not do and what to run once it ends, and exits 1 - it ended 0 with that run's
+"Nothing is missing", its own `--ocr-langs` never applied (KNOWN-ISSUES 346).
 The command follows the work's `setup.state`, which the work replaces whole (a temp file, then a rename). A read that
 finds nothing is no news - on Windows one made while the file is replaced cannot open it - so what was seen last
 stands: only a run never seen within 20 s is one that did not start, and where the work's lock is let go, or a run
@@ -733,7 +746,8 @@ full reads of 8 local corpus pages were p50 1.38 -> 1.49 s there).
 `READ_PAGE_SKIP=env` keeps a run in the Python it was started with; a broken environment (its
 Python gone) is skipped with the reason in `--caps`. A Python that is there, starts and fails (an
 antivirus quarantined a DLL it needs, a damaged standard library) is found out by a start-up
-handshake: the parent makes a file, the child removes it as its first act, and a child that ends with
+handshake: the parent makes a file (a name of its own, made new - one by the pid alone, in a shared `/tmp`, could be
+another user's made in advance: KNOWN-ISSUES 354), the child removes it as its first act, and a child that ends with
 the file still there never reached the read - the read then runs in the machine's Python, the answer
 has an `environment:` line (`signals.env_failed`) and `--caps` says why. On POSIX, where `exec` leaves
 nothing to fall back from, the first run of each build is a child (`setup.started` in the folder
@@ -745,8 +759,9 @@ lock (`--require-hashes`), uv's wheel, Node's archive and PyPI's Node wheel (the
 every OCR pack by its SHA256 in `tessdata-lock.txt` (`READ_PAGE_TESSDATA_URL` may serve them: an https folder or
 template; the pins decide), our Python by the SHA256 the pinned uv carries for each build, Playwright's
 browser by TLS and its Content-Length only (Playwright's design: no hash anywhere in its download), and
-yt-dlp with the five packages that float with it (`yt-dlp-ejs`, `brotli`, `mutagen`, `pycryptodomex`,
-`websockets`) - not pinned - by TLS, from an https source. urllib trusts the machine's certificate store; uv and Node are told to
+yt-dlp with the packages it brings in beyond the lock (`yt-dlp-ejs`, `brotli`, `mutagen`, `pycryptodomex`,
+`websockets` today) - not pinned - by the SHA256 pypi.org publishes for each file, from an https source (where
+pypi.org does not answer: by TLS alone, the index's dates deciding). urllib trusts the machine's certificate store; uv and Node are told to
 (`UV_SYSTEM_CERTS=1`, `NODE_USE_SYSTEM_CA=1`, checked in uv 0.13.9's and Node 24's own help: 153 system
 roots beside Node's 118 bundled ones on the measured machine) unless the user set them, so a proxy that inspects TLS with
 its root in the OS store works for every download; a step that fails on a certificate says so once.
@@ -760,7 +775,9 @@ uv 0.13.9: the wheels of a deleted environment stay reachable, "No unused entrie
 runs `uv cache clean` for the packages whose pin moved - before it installs the new ones, which a clean
 afterwards would take out too - and a yt-dlp update does it for yt-dlp and yt-dlp-ejs; where an older
 environment's lock was not kept, `uv cache prune --ci` removes every wheel (527 MB to 15 MB measured; the
-environment keeps its files by their links, and the next update fetches what it needs again). Outside the
+environment keeps its files by their links, and the next update fetches what it needs again). What a plain prune
+does remove is uv's temporary folders: a run cut off while uv unpacked left `.tmp*` folders of half-unpacked wheels
+(124 MB measured), and the next `--setup` prunes where it finds one older than its own start (KNOWN-ISSUES 347). Outside the
 folder: the read cache (`read-page` in the temp folder) and, for a read that does not run in the
 environment, the skill's bytecode there.
 
@@ -769,7 +786,11 @@ Where the installers fetch from can be redirected - by variables, a `uv.toml`, a
 `setup.json` for the report. An address shows as its scheme, host and port alone (`envsetup.redact`): nothing of a
 user, a password - an `@` or a `/` in it too -, a token in the path (Gemfury, Cloudsmith) or the query (`?apikey=`);
 in every line of the log, a step's note and an installer's last words included, and in the report, which redacts
-an older `setup.json`'s lines as well. No source is used in plain `http://` (`refuse_plain_http`): an index (uv's
+an older `setup.json`'s lines as well. `setup-detail.log`, where the installers' whole output goes, keeps none of
+it either (`envsetup.redact_log`): every address as above, a setting's or a header's secret (npm's `_authToken=`, an
+`Authorization:`), a proxy's `user:password@` written with no scheme - Playwright prints its download host whole
+before every download, uv a token in an index's path when a fetch fails, and the setup's own lines send the agent to
+that log (KNOWN-ISSUES 344). No source is used in plain `http://` (`refuse_plain_http`): an index (uv's
 variables, `PIP_INDEX_URL`, pip's `index-url` - pip's own `trusted-host` is no licence here), an entry of a list
 (`UV_EXTRA_INDEX_URL`, `UV_INDEX`, `UV_FIND_LINKS`), our Python's mirror or list (`UV_PYTHON_INSTALL_MIRROR`,
 `UV_PYTHON_DOWNLOADS_JSON_URL`, which holds the hashes uv checks the Python against), the browser's host (Playwright's
@@ -804,8 +825,11 @@ into uv's cache, which the setup cleans - measured, the cleaning after a check t
 On Windows a home outside the profile (`C:\read-page`) takes the ACL of its parent, and `C:\` lets every signed-in user
 modify what is made in it: `--setup` makes such a home its user's, SYSTEM's and the administrators' alone (`icacls`,
 inheritance off) where the folder is the skill's own - new, or holding nothing but what `--setup` keeps -, else says so
-with that command. On a POSIX mount with no Unix modes (WSL's `/mnt/c`, exFAT) every folder looks writable by all, so
-the environment's bytecode folder fails its check: the temp folder's is used then (reads had run with no bytecode,
+with that command. On POSIX a home that belongs to another user is refused before anything is touched, and one that
+group or others may write in is made 0700, and said (`others_home`, `secure_home_posix`: nothing looked at either, while
+the environment's bytecode folder in it was refused for that very reason - KNOWN-ISSUES 350). On a POSIX mount with no
+Unix modes (WSL's `/mnt/c`, exFAT) every folder looks writable by all, so the home's mode is said there, not mended,
+and the environment's bytecode folder fails its check: the temp folder's is used then (reads had run with no bytecode,
 0.25 s more each).
 
 `caps()` - what this machine has - costs ~0.3 s on Windows (every tool name against every PATH

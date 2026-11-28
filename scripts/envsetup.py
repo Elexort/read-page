@@ -70,10 +70,11 @@ TOP = ["curl_cffi", "trafilatura", "readability-lxml", "lxml", "lxml_html_clean"
 # YTDLP_EVERY_DAYS (ownenv.refresh_ytdlp). Packages it shares with the lock stay at the lock's.
 YTDLP = "yt-dlp[default]"
 YTDLP_AGE_DAYS = 3
-# What floats with it: its tree beyond the lock's 54 packages. Only these are held to the three days;
-# the rest of its tree is the lock's (certifi, requests, urllib3, idna, charset-normalizer), and a pin of
-# the lock younger than three days must not make uv go looking for a yt-dlp old enough not to need it.
-YTDLP_FLOATS = ("yt-dlp", "yt-dlp-ejs", "brotli", "mutagen", "pycryptodomex", "websockets")
+# What floats with it is its tree beyond the lock's 54 packages (yt-dlp-ejs, brotli, mutagen, pycryptodomex, websockets
+# today); the rest of its tree is the lock's (certifi, requests, urllib3, idna, charset-normalizer), and a pin of the lock
+# younger than three days must not make uv go looking for a yt-dlp old enough not to need it. pypi.org's way pins each
+# floating package by its own dates (ytdlp_plans); the index's way holds the whole tree with one date and lets the
+# lock's packages through (ytdlp_command) - a list typed in held the packages it named alone (KNOWN-ISSUES 342).
 # tessdata_fast 4.1.0 (Apache-2.0): as good as tessdata_best on 60 readings of English, Russian
 # and mixed text (clean CER 0.19 against 0.48 %, poor scans 39.6 % both), three times faster
 # (0.21 against 0.61 s a picture) and a quarter of the size (8 against 31 MB)
@@ -201,6 +202,10 @@ def setup(script, skill_version):
     if too_long:
         print("read-page --setup: " + too_long)
         return 1
+    foreign = foreign_home(d) or others_home(d)
+    if foreign:
+        print("read-page --setup: " + foreign)
+        return 1
     try:
         new = not os.path.isdir(d)
         os.makedirs(d, exist_ok=True)
@@ -211,7 +216,7 @@ def setup(script, skill_version):
     except OSError as e:
         print("read-page --setup: cannot write to %s: %s" % (d, e))
         return 1
-    said = secure_home(d, new)
+    said = secure_home(d, new) or secure_home_posix(d)
     if said:
         print("read-page --setup: " + said)
     t0 = time.time()
@@ -231,11 +236,15 @@ def setup(script, skill_version):
     if not st0 and _locked(lock):
         st0 = _read_again(state, {})           # made while the run at work replaced it (Windows): read it again
     attached = False
+    unmet = ""
     if _locked(lock) and st0.get("done") is False and _pid_alive(st0.get("pid")):
         # only a run still at work is followed: the lock alone, or a state of a run that ended, is
         # not one (it replayed the last run's log and exited 0 with nothing done)
         target = st0.get("run") or ""
         print("a --setup started earlier is still working; following it")
+        unmet = follower_unmet(st0)
+        if unmet:
+            print(unmet)
     else:
         target = run
         err, attached = _launch(d, run, skill_version)
@@ -279,7 +288,9 @@ def setup(script, skill_version):
             print("--setup goes on in the background (%s of %s steps done, now: %s). Run `readpage.py --setup` "
                   "again to follow it; reads work meanwhile with what is ready."
                   % (_done(st), st.get("steps") or "?", st.get("name") or "starting"))
-            return 0
+            if unmet:
+                print(unmet)
+            return 1 if unmet else 0
         time.sleep(0.3)
     _show_log(d, seen)
     info = load(d)
@@ -293,7 +304,39 @@ def setup(script, skill_version):
             sys.stdout.write(p.stdout.decode("utf-8", "replace"))
         except (OSError, subprocess.SubprocessError) as e:
             print("the setup report did not come: %s" % e)
+    if unmet:
+        print(unmet)                           # (after the report: its "Nothing is missing" is that run's, not this one's)
+        return 1
     return 0 if st.get("ok") else 1
+
+
+def asked_of_work(env=None):
+    """What a --setup is asked to do beyond its defaults, as its work's state keeps it (Work.asked) and a --setup that
+    follows that work compares (follower_unmet): the OCR packs named for it, and the pins of the skill's copy it came
+    from (its environment's folder for them)."""
+    env = os.environ if env is None else env
+    try:
+        pins = env_id(PYTHON_VERSION)
+    except OSError:
+        pins = ""
+    return {"ocr_langs": str(env.get("READ_PAGE_OCR_LANGS") or "").strip(), "pins": pins}
+
+
+def follower_unmet(st):
+    """What this --setup was asked that the run it follows - another --setup's - was not, as a line to print, or ''.
+    It used to follow that run and end with its result, exit 0 and "Nothing is missing", its own --ocr-langs (or a
+    newer copy's pins) never applied (KNOWN-ISSUES 346). A state of before Work.asked counts as asked nothing."""
+    theirs = st.get("asked") if isinstance(st.get("asked"), dict) else {}
+    mine, out = asked_of_work(), []
+    if mine["ocr_langs"] and mine["ocr_langs"] != str(theirs.get("ocr_langs") or ""):
+        out.append("--ocr-langs %s" % mine["ocr_langs"])
+    if mine["pins"] and theirs.get("pins") and theirs["pins"] != mine["pins"]:
+        out.append("this copy of the skill's pins")
+    if not out:
+        return ""
+    return ("not done: the run at work was started by another --setup, without %s - it is followed to its end, and "
+            "`readpage.py --setup%s` then is to be run once more" % (
+                " and without ".join(out), (" --ocr-langs %s" % mine["ocr_langs"]) if mine["ocr_langs"] else ""))
 
 
 def home_too_long(d, windows=None):
@@ -309,8 +352,79 @@ def home_too_long(d, windows=None):
              if (os.environ.get("READ_PAGE_HOME") or "").strip() and units(default) <= WIN_HOME_MAX else "")
     return ("%s is %d characters long: on Windows the environment's DLLs do not load from a folder over %d characters "
             "(Windows refuses a DLL by a path over %d, and the deepest lies %d inside the folder). Nothing was "
-            "downloaded: set READ_PAGE_HOME to a shorter folder%s and run --setup again."
+            "downloaded: set READ_PAGE_HOME to a new folder with a shorter path%s and run --setup again."
             % (d, units(d), WIN_HOME_MAX, WIN_DLL_PATH_MAX, ENV_DLL_DEPTH, other))
+
+
+# What --setup leaves first in a folder it takes (setup.lock: the command's own look at the work's lock; the work's state
+# and detail log), and what a file manager leaves in a folder it only showed
+SETUP_MARKS = ("setup.json", "setup.state", "setup.lock", "setup-detail.log")
+_NO_MATTER = (".DS_Store", "Thumbs.db", "desktop.ini")
+
+
+def foreign_home(d):
+    """What --setup says, and stops at, where its folder is not one it may take as its own ('' where it may). A folder is
+    its own when it is not there yet, when it is empty, or when it holds one of --setup's marks (SETUP_MARKS: a --setup
+    made it) - and never when it is a drive's root, the file system's or the home folder itself. Any other is the
+    user's, whatever it holds: the end of a --setup took the envs/, node/ and python/ of a home folder or of a drive's
+    root for its own and deleted what it did not use, said to delete the whole folder to remove it, and on Windows
+    handed the agent an icacls that took the other accounts' access away from it (KNOWN-ISSUES 343). Nothing is touched
+    here: the folder is listed, no more."""
+    full = os.path.normcase(os.path.realpath(os.path.abspath(d)))
+    fix = ("Nothing was touched: set READ_PAGE_HOME to an empty folder (a new one: %s, say) or unset it for the default "
+           "(%s), and run --setup again." % (os.path.join(d, "read-page"), ownenv.default_home()))
+    why = ("--setup keeps its environment in a folder of its own, deletes there what it no longer uses, and tells the "
+           "user to delete that folder to remove it")
+    if os.path.dirname(full) == full:
+        return "%s is the root of a drive: %s. %s" % (d, why, fix)
+    if full == os.path.normcase(os.path.realpath(os.path.expanduser("~"))):
+        return "%s is your home folder: %s. %s" % (d, why, fix)
+    try:
+        names = [n for n in os.listdir(d) if not n.startswith(".write-check.") and n not in _NO_MATTER]
+    except OSError:
+        return ""                    # not there yet (it is made), or not a folder one can list: the write check says so
+    if not names or set(names) & set(SETUP_MARKS):
+        return ""
+    shown = ", ".join(sorted(names)[:5]) + (", ..." if len(names) > 5 else "")
+    return "%s holds other things (%s), and %s, so it takes only an empty folder or one it made. %s" % (d, shown, why, fix)
+
+
+def others_home(d):
+    """POSIX: what --setup says, and stops at, where its folder belongs to another user - the programs it puts there, which
+    every read runs, would be theirs to change; '' where it does not (or is not there yet), and on Windows (secure_home)."""
+    if os.name != "posix":
+        return ""
+    try:
+        st = os.stat(d)
+    except OSError:
+        return ""
+    if st.st_uid == os.getuid():
+        return ""
+    return ("%s belongs to another user (uid %d): the Python, the engines and the browser --setup puts there - which every "
+            "read runs - would be theirs to change (KNOWN-ISSUES 350). Nothing was touched: set READ_PAGE_HOME to a new "
+            "folder of your own, or unset it for the default (%s)." % (d, st.st_uid, ownenv.default_home()))
+
+
+def secure_home_posix(d):
+    """POSIX: the folder --setup puts programs in must be this user's alone, as on Windows (secure_home): one that group
+    or others may write in - a shared folder, one made with a loose umask - is made 0700 (the folder is the skill's own:
+    foreign_home), and where that does not hold - a mount with no Unix modes, WSL's /mnt/c or exFAT - it is said. The
+    environment's bytecode folder was already refused there for that reason, while its site-packages ran (KNOWN-ISSUES
+    350). What to say ('' for nothing)."""
+    if os.name != "posix":
+        return ""
+    import stat
+    try:
+        mode = os.stat(d).st_mode
+        if not mode & 0o022:
+            return ""
+        os.chmod(d, stat.S_IMODE(mode) & ~0o077)
+        if not os.stat(d).st_mode & 0o022:
+            return "group or others could write in %s: it is yours alone now (0700)" % d
+    except OSError:
+        pass
+    return ("warning: group or others can write in %s (a mount with no Unix modes?), and so change the programs --setup "
+            "puts there; a folder on a file system of this machine's own keeps them yours" % d)
 
 
 def _done(st):
@@ -389,12 +503,42 @@ def _launch(d, run, skill_version):
     return p.stdout.decode("utf-8", "replace").strip()[-300:], False
 
 
+def _append_handle(path):
+    """The log, opened for a detached child's own output so that every write of it lands at the end. On Windows a
+    handle a child inherits from open(path, "ab") does not append - the append is its parent's C runtime's, and the
+    child's writes went where the file ended when the handle was made, over what the work had written there since: the
+    traceback at a worker's end took the place of that run's first lines (KNOWN-ISSUES 345). A handle with
+    FILE_APPEND_DATA and no FILE_WRITE_DATA appends whatever writes through it. POSIX: O_APPEND, which the child keeps."""
+    if os.name != "nt":
+        return open(path, "ab")
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD,
+                                    wintypes.DWORD, wintypes.HANDLE]
+        # FILE_APPEND_DATA | FILE_READ_ATTRIBUTES (a Python child's start looks at its stdout) | SYNCHRONIZE; share all;
+        # OPEN_ALWAYS; FILE_ATTRIBUTE_NORMAL
+        h = k32.CreateFileW(path, 0x4 | 0x80 | 0x100000, 0x7, None, 4, 0x80, None)
+        if not h or h == ctypes.c_void_p(-1).value:                            # INVALID_HANDLE_VALUE
+            raise OSError(ctypes.get_last_error(), "CreateFileW")
+        try:
+            return os.fdopen(msvcrt.open_osfhandle(h, os.O_APPEND), "ab")
+        except (OSError, ValueError):
+            k32.CloseHandle(wintypes.HANDLE(h))
+            raise
+    except (AttributeError, ImportError, OSError, ValueError):
+        return open(path, "ab")
+
+
 def _detached(cmd, cwd, log, attached_ok=True):
     """Start cmd apart from this process. Says which way it went: "free" (out of this process's group
     and job: it goes on when the command that started it ends), "attached" (started, but a job around
     us - a harness that runs each command in one that kills on close and lets nothing leave - ends it
     with the command), or "" (not started: attached_ok is False and it would have been attached)."""
-    with open(log, "ab") as out:
+    with _append_handle(log) as out:
         kw = dict(stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT, cwd=cwd, close_fds=True)
         if os.name == "nt":
             # a console of its own that nobody sees (its installers open no windows), its own group
@@ -647,6 +791,8 @@ def _try_lock(path):
 
 
 def _unlock(fh):
+    if fh is None or getattr(fh, "closed", False):
+        return                       # let go of already: once more raised ValueError, at the end of every worker
     try:
         if os.name == "nt":
             import msvcrt
@@ -666,6 +812,19 @@ def sha256(path):
         for block in iter(lambda: fh.read(1 << 20), b""):
             h.update(block)
     return h.hexdigest()
+
+
+def windows_auto_proxy():
+    """Windows: the address of the script that gives this user's proxy (Internet Options' "Use setup script":
+    AutoConfigURL), '' where there is none - and anywhere else."""
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Internet Settings") as k:
+            return str(winreg.QueryValueEx(k, "AutoConfigURL")[0] or "").strip()
+    except (ImportError, OSError, ValueError):
+        return ""
 
 
 def net_env(user_home=None, folder=None):
@@ -750,7 +909,7 @@ def _host_part(rest):
     if "@" in after:
         query = min([i for i in (after.find(c) for c in "?#") if i >= 0] or [len(after)])
         at = after.rfind("@")
-        host = re.split(r"[/?#]", after[at + 1:], 1)[0] if at < query else ""
+        host = re.split(r"[/?#]", after[at + 1:], maxsplit=1)[0] if at < query else ""   # (by name: KNOWN-ISSUES 349)
     return host if _HOST.fullmatch(host) else ""
 
 
@@ -761,6 +920,25 @@ def redact(text):
     text stays."""
     return _URL.sub(lambda m: m.group(0) if m.group(1).lower() == "file://" else
                     m.group(1) + (_host_part(m.group(2)) or "(not shown)"), str(text))
+
+
+# what an installer may print beside an address: a setting's secret (npm's `_authToken=`, `password=`, an `apikey: `), an
+# HTTP header's credentials, a proxy's `user:password@host` written with no scheme
+_SECRET_PAIR = re.compile(r"(?i)\b(_?auth(?:token)?|_password|password|passwd|token|secret|api[_-]?key|access[_-]?key|"
+                          r"private[_-]?token)(\s*[=:]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;&\"']+)")
+_SECRET_HEADER = re.compile(r"(?i)\b(authorization|proxy-authorization)(\s*:\s*)(?:(bearer|basic|token|digest)\s+)?(\S+)")
+_BARE_USERINFO = re.compile(r"(?<![\w/@.%+\\-])[\w.%+-]+:[^\s@/:\\]+@(?=[A-Za-z0-9\[])")     # (no \: a path)
+
+
+def redact_log(text):
+    """An installer's own words as setup-detail.log keeps them: every address as redact() has it, a setting's or a
+    header's secret and a proxy's user and password left out (KNOWN-ISSUES 344) - Playwright prints its download host
+    whole before every download, uv a token in an index's path when a fetch fails; the setup's own lines send the agent
+    to this log."""
+    out = _SECRET_HEADER.sub(lambda m: m.group(1) + m.group(2) + (m.group(3) + " " if m.group(3) else "") + "(not shown)",
+                             redact(text))
+    out = _SECRET_PAIR.sub(lambda m: m.group(1) + m.group(2) + "(not shown)", out)
+    return _BARE_USERINFO.sub("(not shown)@", out)
 
 
 def _truthy(v):
@@ -1428,6 +1606,7 @@ class Work:
                         # npm (Node 22.1+) keeps its compiled modules in the temp folder otherwise
                         # (`node-compile-cache`, 2.7 MB): inside the one folder, so deleting it removes them
                         NODE_COMPILE_CACHE=os.path.join(d, "cache", "node-compile"))
+        self.asked = asked_of_work()             # in every state: a --setup that follows this work compares its own
         self.state(done=False)
 
     # progress
@@ -1442,14 +1621,15 @@ class Work:
 
     def log(self, line):
         with self.lock:
-            self.detail.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), line))
+            self.detail.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), redact_log(line)))
             self.detail.flush()
 
     def state(self, **kw):
         with self.lock:
             st = {"run": self.run, "pid": os.getpid(), "started": self.t0, "updated": time.time(),
                   "steps": len(self.STEPS), "finished": len(self.parts),
-                  "step": len(self.parts) + 1, "name": ", ".join(self.running) or "starting"}
+                  "step": len(self.parts) + 1, "name": ", ".join(self.running) or "starting",
+                  "asked": getattr(self, "asked", {})}
             st.update(kw)
             path = os.path.join(self.d, "setup.state")
             try:
@@ -1508,7 +1688,7 @@ class Work:
             out, rc = (e.output or b"").decode("utf-8", "replace") + "\n(timed out)", -1
         except OSError as e:
             out, rc = str(e), -1
-        self.detail.write(out[-20000:] + "\n")
+        self.detail.write(redact_log(out[-20000:]) + "\n")      # an installer's own words, secrets left out
         self.detail.flush()
         if rc != 0 and not getattr(self, "cert_noted", False) and CERT_FAILURE.search(out):
             self.cert_noted = True              # once: every step behind such a proxy fails the same way
@@ -1537,7 +1717,20 @@ class Work:
                 return False, "pypi.org answers, but its certificate cannot be verified: " + self.cert_why
             if index:
                 return True, "pypi.org does not answer (%s); using the index set here" % str(e)[:80]
-            return False, "no answer from pypi.org: %s%s" % (str(e)[:120], self._http_hint() or self._config_hint())
+            return False, "no answer from pypi.org: %s%s" % (str(e)[:120], self._http_hint() or self._config_hint()
+                                                             or self._proxy_hint())
+
+    def _proxy_hint(self):
+        """A machine whose proxy a script gives (Windows' "Use setup script": a PAC file): urllib reads the registry's
+        ProxyServer alone and the installers nothing of it, so every step went direct, and the network step said only
+        that pypi.org did not answer (KNOWN-ISSUES 353) - say so, where no proxy is set."""
+        if any(self.env.get(k) for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")):
+            return ""
+        pac = windows_auto_proxy()
+        if not pac:
+            return ""
+        return ("; this machine's proxy comes from a script (%s), which --setup cannot read: set HTTPS_PROXY to the "
+                "proxy's address (http://host:port) and run it again" % redact(pac))
 
     def _http_hint(self):
         """A machine that reaches PyPI only through a mirror in plain http, which is not used: say how it would be."""
@@ -1612,7 +1805,14 @@ class Work:
         other = shutil.which("uv")
         if other:
             self.uv_exe = other
-            return True, "uv from this machine (%s): ours did not download - %s" % (other, why)
+            rc, out = self.sh([other, "--version"], timeout=60)
+            seen = out.split(" | ")[-1].strip()[:60] if rc == 0 else "a version it did not say"
+            # a problem, not a step's line alone: the report said "Nothing is missing" with any uv in the pin's place,
+            # and how the lock's hashes and the yt-dlp step's flags are read is that uv's (KNOWN-ISSUES 351)
+            self.lack("uv", "uv %s did not download (%s): this machine's %s is used instead (%s)" % (
+                UV_VERSION, why or "?", seen, other), "readpage.py --setup again once pypi.org - or the index "
+                                                       "UV_DEFAULT_INDEX names - gives uv %s" % UV_VERSION)
+            return True, "uv from this machine (%s, %s): ours did not download - %s" % (other, seen, why)
         self.lack("uv", why)
         return False, "no uv: " + why
 
@@ -1727,7 +1927,11 @@ class Work:
     def ytdlp(self):
         ok, note = ytdlp_update(self.d, self.uv_exe, self.env_py, self.env, self.sh,
                                 lock=os.path.join(at(self.d, self.env_rel), ENV_LOCK))
-        if not ok:
+        if NO_DATES_WHY in note:
+            # neither --setup again nor a later update helps while the index gives no dates and pypi.org is not reached
+            self.lack("yt-dlp", note, "UV_DEFAULT_INDEX=<an index that gives upload dates>, or pypi.org reachable, "
+                                      "then readpage.py --setup")
+        elif not ok:
             self.lack("yt-dlp", note, "readpage.py --setup")
         return ok, note
 
@@ -2081,6 +2285,13 @@ class Work:
         hundreds). Its size goes in the report either way."""
         uv = getattr(self, "uv_exe", "")
         path = os.path.join(self.d, "cache", "uv")
+        temps = stale_uv_temps(path, self.t0)
+        if uv and temps:
+            # an interrupted run's uv leaves its half-unpacked wheels in .tmp folders that no environment holds and that
+            # the line below did not reach (eight of them, 124 MB, after a kill in the engines step: KNOWN-ISSUES 347);
+            # a plain prune removes them, and what nothing points to, and nothing else (measured: 123.1 MiB)
+            rc, out = self.sh([uv, "cache", "prune"], timeout=300)
+            self.log("uv cache prune (%d of uv's temporary folders of an earlier run): %s" % (len(temps), out[-120:]))
         total, alone = cache_bytes(path)
         stale = alone is not None and alone > STALE_CACHE_BYTES
         if uv and (getattr(self, "cache_unknown", False) or stale):
@@ -2137,11 +2348,12 @@ class Work:
             self.step("ocr data", self.ocr_data)
         self.step("check", self.check)
         ready = bool(self.parts.get("engines", {}).get("ok")) and getattr(self, "env_py", "")
+        saved = True
         if ready:
             self.info.update(schema=STATE_SCHEMA, skill=self.skill, problems=self.problems,
                              parts=self.parts, built=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                              seconds=round(time.time() - self.t0))
-            _write_json(os.path.join(self.d, "setup.json"), self.info)
+            saved = self.save_info()
             try:
                 self.tidy()
             except Exception as e:                             # noqa: BLE001
@@ -2161,12 +2373,28 @@ class Work:
                      % (took // 60, took % 60, human(size + (alone or 0)), self.d, self.cache_note(total, alone)))
             self.info["disk"] = {"folder": size + (alone or 0), "cache": total, "cache_alone": alone}
             if ready:
-                _write_json(os.path.join(self.d, "setup.json"), self.info)
+                saved = self.save_info() and saved
             for p in self.problems:
                 self.say("not done: %s - %s%s" % (p["part"], p["why"], (" - " + p["fix"]) if p.get("fix") else ""))
         if getattr(self, "ytlock", None):
             _unlock(self.ytlock)
-        self.state(done=True, ok=bool(ready) and not any(not v["ok"] for v in self.parts.values()))
+            self.ytlock = None                   # (the worker's own end lets go of it too, where go() did not get here)
+        self.state(done=True, ok=bool(ready) and saved and not any(not v["ok"] for v in self.parts.values()))
+
+    def save_info(self):
+        """setup.json, which reads go by: True when it was written. Past _write_json's tries (on Windows a reader that
+        holds the file - an antivirus scanning it) the error left go() before its last state, and the command said the
+        work had stopped after 10 of 10 steps, everything installed (KNOWN-ISSUES 352); the work goes on to its end now,
+        and says it as a problem."""
+        try:
+            _write_json(os.path.join(self.d, "setup.json"), self.info)
+            return True
+        except OSError as e:
+            self.log("setup.json was not written: %s" % e)
+            if not any(p.get("part") == "setup.json" for p in self.problems):
+                self.lack("setup.json", "it was not written (%s): reads go on with what it said before" % e,
+                          "readpage.py --setup again")
+            return False
 
 
 def node_wheel_requirement():
@@ -2283,24 +2511,208 @@ def linked_env(env, limit=4000):
 
 
 def ytdlp_command(uv, py, now=None, floor="", lock=None):
-    """uv's command for the newest yt-dlp that has been out YTDLP_AGE_DAYS - and never an older one than
-    `floor`, the version installed now (with no floor, a pin of the lock younger than the cutoff made
-    uv backtrack to yt-dlp 2022.3.8.2, which has no `default` extra and needs none of the packages: exit 0,
-    "success", and every video read passing --js-runtimes to a yt-dlp that rejects it). The packages of
-    the environment's own lock stay at its pins, held to its hashes (--verify-hashes: no settings file switches that
-    off); the date holds only what floats (YTDLP_FLOATS), which no hash can name - its files are checked by TLS alone,
-    from an https index (refuse_plain_http)."""
-    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((now or time.time()) - YTDLP_AGE_DAYS * 86400))
+    """uv's command for the newest yt-dlp that has been out YTDLP_AGE_DAYS by the index's own dates - the way where
+    pypi.org does not answer (ytdlp_plans is the other) - and never an older one than `floor`, the version installed now
+    (with no floor, a pin of the lock younger than the cutoff made uv backtrack to yt-dlp 2022.3.8.2, which has no
+    `default` extra and needs none of the packages: exit 0, "success", and every video read passing --js-runtimes to a
+    yt-dlp that rejects it). The packages of the environment's own lock stay at its pins, held to its hashes
+    (--verify-hashes: no settings file switches that off). The date holds the whole tree beyond the lock - one
+    --exclude-newer, so that a package a newer yt-dlp brings in is held too (a list of six held those alone: KNOWN-ISSUES
+    342) - and lets each package of the lock through by a date past now (--exclude-newer-package), so that a pin of the
+    lock younger than the cutoff sends uv nowhere; what floats is checked by TLS alone, from an https index
+    (refuse_plain_http). An index that gives no upload dates (PEP 700) leaves every file out under it: ytdlp_update says so."""
+    t = now or time.time()
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t - YTDLP_AGE_DAYS * 86400))
+    until = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t + 86400))
+    try:
+        with open(lock or LOCK_FILE, encoding="utf-8") as fh:
+            lock_text = fh.read()
+    except OSError:
+        lock_text = ""
+    # the highest release, and no pre-release, whatever the user's uv settings say: UV_RESOLUTION=lowest held yt-dlp at
+    # its floor while every update "worked", UV_PRERELEASE=allow would take a nightly (KNOWN-ISSUES 348)
     cmd = [uv, "pip", "install", "--python", py, "--upgrade", YTDLP + (">=" + floor if floor else ""),
-           "-c", lock or LOCK_FILE, "--only-binary", ":all:", "--verify-hashes"]
-    for pkg in YTDLP_FLOATS:
-        cmd += ["--exclude-newer-package", "%s=%s" % (pkg, cutoff)]
+           "-c", lock or LOCK_FILE, "--only-binary", ":all:", "--verify-hashes", "--resolution", "highest",
+           "--prerelease", "disallow", "--exclude-newer", cutoff]
+    for name in sorted(lock_pins(lock_text)):
+        cmd += ["--exclude-newer-package", "%s=%s" % (name, until)]
     return cmd
 
 
 def _vkey(v):
     """A yt-dlp version ("2026.10.26", "2026.11.20.232656") as numbers to compare."""
     return tuple(int(x) for x in re.findall(r"\d+", v or ""))
+
+
+# yt-dlp's release, and the packages that come with it beyond the lock, by pypi.org's own dates and digests (KNOWN-ISSUES
+# 341, 342). The three days were uv's --exclude-newer-package against the index, and uv leaves out a file whose upload
+# time the index does not give (PEP 700 is the simple API's JSON form): behind Aliyun's, Tencent Cloud's, Huawei Cloud's
+# or Douban's mirror (HTML, no dates - measured 2026-11-28; TUNA, USTC, SJTU and BFSU give them) a first install found no
+# yt-dlp at all, and an environment that had one kept it for good while every update "succeeded". And the date held a
+# list typed in (six packages): a package a newer yt-dlp brings in came in its newest upload, an hour old. pypi.org's JSON
+# gives every release's upload time and every file's SHA256: the releases are chosen there, then installed by their exact
+# versions from whatever index the user has, each file held to the digest pypi.org publishes (--require-hashes) - a
+# mirror serves the bytes, pypi.org their checksum, and a package no plan names is refused.
+PYPI_JSON = "https://pypi.org/pypi/%s/json"
+PYPI_VERSION_JSON = "https://pypi.org/pypi/%s/%s/json"
+YTDLP_CANDIDATES = 3            # releases tried, newest first, where one does not install (an index that lacks it)
+NO_DATES = "missing an upload date"           # uv's warning for a file whose upload time the index does not give
+NO_DATES_WHY = "the index gives no upload dates, which the three-day rule needs"
+
+
+def _norm(name):
+    """A package's name as pip compares them: lower case, a run of - _ . is one -."""
+    return re.sub(r"[-_.]+", "-", str(name or "")).lower()
+
+
+def _utc(stamp):
+    """An upload time of pypi.org's JSON ("2026-11-23T23:50:00.052942Z") as seconds since the epoch; None unread."""
+    import calendar
+    try:
+        return calendar.timegm(time.strptime(str(stamp)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return None
+
+
+def stable_version(v):
+    """A final release ("2026.11.23", "1.2.1", "1.0.post1"), not a pre-release or a nightly ("2026.11.24.232653.dev0")."""
+    return bool(re.fullmatch(r"\d+(?:\.\d+)*(?:\.post\d+)?", str(v or "")))
+
+
+def spec_allows(version, spec):
+    """Whether a final release meets a requirement's specifier ("<3,>=2.32.2", "==0.8.0", "~=1.2", "!=0.6.*"); a clause
+    this does not read is left to uv, which judges the install."""
+    def pad(a, b):
+        n = max(len(a), len(b))
+        return a + (0,) * (n - len(a)), b + (0,) * (n - len(b))
+
+    v = _vkey(version)
+    for clause in (c.strip() for c in str(spec or "").split(",")):
+        m = re.fullmatch(r"(===|==|!=|~=|>=|<=|>|<)\s*([0-9][0-9A-Za-z.!+-]*?)(\.\*)?", clause)
+        if not m:
+            continue
+        op, want, star = m.groups()
+        w = _vkey(want)
+        if star:
+            same = v[:len(w)] == w
+            if (op == "==" and not same) or (op == "!=" and same):
+                return False
+            continue
+        a, b = pad(v, w)
+        head = max(1, len(w) - 1)
+        if ((op in ("==", "===") and a != b) or (op == "!=" and a == b) or (op == ">=" and a < b)
+                or (op == "<=" and a > b) or (op == ">" and a <= b) or (op == "<" and a >= b)
+                or (op == "~=" and (a < b or v[:head] != w[:head]))):
+            return False
+    return True
+
+
+def requirements_of(requires_dist, extra=""):
+    """[(name, specifier)] of a release's Requires-Dist that come with `extra`, and those that come with none; an
+    extra's own (yt-dlp's `curl-cffi`, `pin`, `secretstorage`) is left out. Platform markers are uv's: the pins go in as
+    constraints, which install nothing that nothing asks for."""
+    out = []
+    for r in requires_dist or []:
+        req, _, marker = str(r).partition(";")
+        extras = re.findall(r"""\bextra\s*==\s*["']([^"']+)["']""", marker)
+        if extras and extra not in extras:
+            continue
+        m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*\(?\s*([^()]*?)\s*\)?\s*$", req)
+        if m:
+            out.append((_norm(m.group(1)), m.group(2).replace(" ", "")))
+    return out
+
+
+def held_release(meta, cutoff, spec="", floor=""):
+    """(version, [the SHA256 of its wheels]) of the newest final release in a package's pypi.org JSON that `spec`
+    allows, no older than `floor`, with wheels uploaded before `cutoff` - those wheels alone: one added to an old release
+    since is no file of it here (uv refuses it by its hash); None where there is none."""
+    releases = (meta.get("releases") if isinstance(meta, dict) else None) or {}
+    for v in sorted(releases, key=_vkey, reverse=True):
+        if not stable_version(v) or (floor and _vkey(v) < _vkey(floor)) or (spec and not spec_allows(v, spec)):
+            continue
+        shas = sorted(set(f["digests"]["sha256"] for f in releases[v] or []
+                          if isinstance(f, dict) and f.get("packagetype") == "bdist_wheel" and not f.get("yanked")
+                          and (f.get("digests") or {}).get("sha256")
+                          and (_utc(f.get("upload_time_iso_8601")) or cutoff) < cutoff))
+        if shas:
+            return v, shas
+    return None
+
+
+def ytdlp_plans(lock_text, now=None, floor="", fetch=None):
+    """The installs the yt-dlp step may make, newest first: {name: (version, [sha256])} - yt-dlp's newest final release,
+    no older than `floor`, that has been out YTDLP_AGE_DAYS by pypi.org's dates, and each package its `default` extra and
+    their own requirements bring in beyond the lock, in the newest release of that package out as long that the
+    requirement allows. Nothing where no such release of yt-dlp is there. Raises where pypi.org does not answer: the
+    dates are then the index's (ytdlp_command)."""
+    fetch = fetch or fetch_json
+    cutoff = (now or time.time()) - YTDLP_AGE_DAYS * 86400
+    locked = set(lock_pins(lock_text))
+    metas = {}
+
+    def meta(name):
+        if name not in metas:
+            metas[name] = fetch(PYPI_JSON % name)
+        return metas[name]
+
+    def requires(name, version, extra=""):
+        info = meta(name).get("info") or {}
+        if info.get("version") != version:           # the JSON's info is its newest release's
+            info = fetch(PYPI_VERSION_JSON % (name, version)).get("info") or {}
+        return requirements_of(info.get("requires_dist"), extra)
+
+    top = meta("yt-dlp").get("releases") or {}
+    for v in sorted(top, key=_vkey, reverse=True):
+        if floor and _vkey(v) < _vkey(floor):
+            break
+        got = held_release({"releases": {v: top[v]}}, cutoff, floor=floor)
+        if not got:
+            continue
+        plan, todo = {"yt-dlp": got}, requires("yt-dlp", v, "default")
+        while todo:
+            name, spec = todo.pop(0)
+            if name in locked or name in plan:
+                continue
+            pick = held_release(meta(name), cutoff, spec)
+            if not pick:
+                plan = None                          # it needs a release of this one that has not been out so long
+                break
+            plan[name] = pick
+            todo += requires(name, pick[0])
+        if plan:
+            yield plan
+
+
+def ytdlp_plan_files(plan, folder):
+    """A plan as uv's two files: yt-dlp[default] at its version with its digests - what is installed - and every other
+    package at its version with its own, as constraints: each comes only where something asks for it."""
+    os.makedirs(folder, exist_ok=True)
+
+    def entry(name, version, shas):
+        return "%s==%s \\\n%s\n" % (name, version, " \\\n".join("    --hash=sha256:%s" % s for s in shas))
+
+    req, cons = os.path.join(folder, "ytdlp-requirements.txt"), os.path.join(folder, "ytdlp-constraints.txt")
+    with open(req, "w", encoding="utf-8") as fh:
+        fh.write(entry(YTDLP, *plan["yt-dlp"]))
+    with open(cons, "w", encoding="utf-8") as fh:
+        fh.write("".join(entry(n, *plan[n]) for n in sorted(plan) if n != "yt-dlp") or "\n")
+    return req, cons
+
+
+def ytdlp_pinned_command(uv, py, req, cons, lock=None):
+    """uv's command for a plan: its files, the environment's lock as constraints too, every file held to a hash - the
+    lock's for its packages, pypi.org's for the rest - and nothing installed that neither names."""
+    return [uv, "pip", "install", "--python", py, "-r", req, "-c", lock or LOCK_FILE, "-c", cons, "--only-binary", ":all:",
+            "--require-hashes"]
+
+
+def _sh3(sh, cmd, timeout, env):
+    """(exit code, its last lines, the whole output) of a command run by `sh`: Work.sh keeps the whole of it in .full,
+    the background update's gives three values, a test's two."""
+    got = sh(cmd, timeout=timeout, env=env)
+    full = got[2] if len(got) > 2 else getattr(getattr(sh, "__self__", None), "full", got[1])
+    return got[0], got[1], full or ""
 
 
 def _ytdlp_version(py):
@@ -2329,14 +2741,51 @@ def env_lock(d, info):
     return None
 
 
-def ytdlp_update(d, uv, py, env, sh, now=None, lock=None):
-    """Install or update yt-dlp in the environment: (ok, note). It never goes backwards: the version
-    installed now is the floor, and a result older than it is put back. The stamp - when it was looked
-    for - is touched after an update that worked, never before (an updater killed with its command
-    had already said "looked", and nothing looked again for three days); a look that failed leaves
+def ytdlp_update(d, uv, py, env, sh, now=None, lock=None, fetch=None):
+    """Install or update yt-dlp in the environment: (ok, note). The release is the one ytdlp_plans picks by pypi.org's
+    dates and digests; where pypi.org does not answer, the index's dates decide (ytdlp_command), and an index that gives
+    none is named (NO_DATES_WHY) - it left every file out, and an environment that had yt-dlp kept it with every update
+    "a success". It never goes backwards: the version installed now is the floor, and a result older than it is put back.
+    The stamp - when it was looked for - is touched after an update that worked, never before (an updater killed with
+    its command had already said "looked", and nothing looked again for three days); a look that failed leaves
     `ytdlp.failed`, so a read does not start another at once."""
     before = _ytdlp_version(py)
-    rc, out = sh(ytdlp_command(uv, py, now, floor=before, lock=lock), timeout=600, env=env)
+    try:
+        with open(lock or LOCK_FILE, encoding="utf-8") as fh:
+            lock_text = fh.read()
+    except OSError:
+        lock_text = ""
+    rc, out, plans, plan, why = 1, "", None, None, ""
+    try:
+        plans = ytdlp_plans(lock_text, now=now, floor=before, fetch=fetch)
+        plan = next(plans, None)                         # pypi.org's JSON is read here
+    except Exception as e:                                     # noqa: BLE001
+        plans, why = None, "pypi.org did not answer (%s)" % " ".join(str(e).split())[:80]
+    if plans is not None:
+        folder = os.path.join(d, "cache", "dl")
+        if plan is None:
+            rc, out = (0, "") if before else (1, "no release of yt-dlp on pypi.org has been out %d days" % YTDLP_AGE_DAYS)
+        for _ in range(YTDLP_CANDIDATES):
+            if plan is None:
+                break
+            req, cons = ytdlp_plan_files(plan, folder)
+            rc, out, _full = _sh3(sh, ytdlp_pinned_command(uv, py, req, cons, lock), 600, env)
+            for p in (req, cons):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+            if rc == 0:
+                break
+            try:                                          # the next release down (an index that lacks this one)
+                plan = next(plans, None)
+            except Exception:                                  # noqa: BLE001
+                plan = None
+    else:
+        rc, out, full = _sh3(sh, ytdlp_command(uv, py, now, floor=before, lock=lock), 600, env)
+        if NO_DATES in full:
+            rc, out = 1, "%s, and %s: an index that gives them (pypi.org's own; the TUNA, USTC, SJTU or BFSU mirror) " \
+                         "lets the update work" % (NO_DATES_WHY, why)
     version = _ytdlp_version(py)
     if before and _vkey(version) < _vkey(before):
         sh([uv, "pip", "install", "--python", py, "%s==%s" % (YTDLP, before), "-c", lock or LOCK_FILE,
@@ -2357,12 +2806,14 @@ def ytdlp_update(d, uv, py, env, sh, now=None, lock=None):
     else:
         try:
             with open(os.path.join(d, "ytdlp.failed"), "w", encoding="utf-8") as fh:
-                fh.write("%s\n" % out[-200:])
+                fh.write("%s\n" % redact_log(out[-200:]))
         except OSError:
             pass
+    said = out if NO_DATES_WHY in out else ""          # the cause and what helps, whole
     if rc != 0 and not version:
-        return False, "not installed: " + out[-140:]
-    return True, "%s%s" % (version or "?", "" if rc == 0 else " (kept: no newer one could be fetched - %s)" % out[-80:])
+        return False, "not installed: " + (said or out[-140:])
+    return True, "%s%s" % (version or "?", "" if rc == 0 else " (kept: %s)" % (
+        said or "no newer one could be fetched - %s" % out[-80:]))
 
 
 def ytdlp_background(d):
@@ -2393,27 +2844,34 @@ def _ytdlp_worker(d):
         log = open(os.path.join(d, "setup-detail.log"), "a", encoding="utf-8", errors="replace")
 
         def sh(cmd, timeout=600, env=env):
-            log.write("%s (yt-dlp, background) $ %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), " ".join(cmd)))
-            try:
-                p = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                   timeout=timeout, env=env, cwd=d)
-                out, rc = p.stdout.decode("utf-8", "replace"), p.returncode
-            except (OSError, subprocess.SubprocessError) as e:
-                out, rc = str(e), -1
-            log.write(out[-4000:] + "\n")
-            log.flush()
-            return rc, " | ".join(ln.strip() for ln in out.strip().splitlines()[-3:])[-300:]
+            return _bg_run(log, cmd, timeout, env, d)
         for attempt in range(3):
             ok, note = ytdlp_update(d, uv, py, env, sh, lock=lock)
             if ok and "kept" not in note:
                 break
             if attempt < 2:                            # no pause after the last try: it serves nothing
                 time.sleep(20)
-        log.write("%s yt-dlp: %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), note))
+        log.write("%s yt-dlp: %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), redact_log(note)))
         log.close()
     finally:
         _unlock(fh)
     return 0
+
+
+def _bg_run(log, cmd, timeout, env, cwd):
+    """One command of the background yt-dlp update, its line and its output written to the detail log as redact_log has
+    them: (exit code, its last lines, the whole output - for _sh3)."""
+    log.write("%s (yt-dlp, background) $ %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"),
+                                                   redact_log(" ".join(str(c) for c in cmd))))
+    try:
+        p = subprocess.run([str(c) for c in cmd], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, timeout=timeout, env=env, cwd=cwd)
+        out, rc = p.stdout.decode("utf-8", "replace"), p.returncode
+    except (OSError, subprocess.SubprocessError) as e:
+        out, rc = str(e), -1
+    log.write(redact_log(out[-4000:]) + "\n")
+    log.flush()
+    return rc, " | ".join(ln.strip() for ln in out.strip().splitlines()[-3:])[-300:], out
 
 
 def _running(exe):
@@ -2513,6 +2971,24 @@ def moved_pins(old_lock, new_lock):
     """The packages of the old lock that the new one gives another version or drops: what an update leaves in uv's cache."""
     old, new = lock_pins(old_lock), lock_pins(new_lock)
     return sorted(k for k, v in old.items() if new.get(k) != v)
+
+
+def stale_uv_temps(path, before):
+    """The temporary folders of uv's cache (`.tmp*`) last changed before `before` - an earlier uv's, cut off with its
+    run (this run's own are newer): [names]."""
+    try:
+        names = os.listdir(path)
+    except OSError:
+        return []
+    out = []
+    for n in sorted(names):
+        p = os.path.join(path, n)
+        try:
+            if n.startswith(".tmp") and os.path.isdir(p) and os.path.getmtime(p) < before:
+                out.append(n)
+        except OSError:
+            continue
+    return out
 
 
 def cache_bytes(path, seconds=20.0):
