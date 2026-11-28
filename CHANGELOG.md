@@ -8,6 +8,12 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A broadcaster's TTML is read: EBU-TT-D's `<tt:p>`, single quotes, times on spans or a `<div>`, a `.xml` track**
+  (KNOWN-ISSUES 331): the TTML reader matched `<p begin="...">` alone, so EBU-TT-D - every element prefixed - and a
+  single-quoted file gave "subtitles were empty", a paragraph timed by its spans was left out, and a track yt-dlp
+  named by its address's `.xml` was no track. Elements are known by their local names, attributes in either quote, a
+  paragraph's time is its own or its spans', relative to a timed `<div>`; `xml` is read as the TTML or YouTube XML
+  it holds.
 - **An XLSX is read without the size its sheets state, a row up to 1 024 columns, within the converter's time**
   (KNOWN-ISSUES 330): openpyxl pads every row of a read-only sheet to its `<dimension ref>` and stops at it, so a 4 KB
   file whose sheet said `A1:XFD1048576` held the read for minutes in its own process (16 384 cells a row, no clock),

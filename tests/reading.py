@@ -341,6 +341,27 @@ try:
                              {"de": {"ttml": formats8["ttml"]}}, lang="en")
     check("a site that has TTML only: its track is read all the same", "Hello," in got[0] and got[2] == "subtitles de",
           "%s | %s" % (got[0][:40], got[2]))
+    # EBU-TT-D, the broadcasters' TTML, writes every element <tt:...>, and XML allows either quote; a paragraph may
+    # have its time on its spans, or under a <div> that has one; yt-dlp names a track by its address: `.xml`
+    # (KNOWN-ISSUES 331)
+    ebu8 = ('<?xml version="1.0" encoding="UTF-8"?><tt:tt xmlns:tt="http://www.w3.org/ns/ttml" xml:lang="de"><tt:body>'
+            "<tt:div><tt:p xml:id='s1' begin='00:00:01.000' end='00:00:03.500'><tt:span>Hello,</tt:span><tt:br/>"
+            "<tt:span>it&apos;s world</tt:span></tt:p><tt:p begin=\"41s\" dur=\"2.5s\">Second block</tt:p></tt:div>"
+            "</tt:body></tt:tt>")
+    if sub8 is not None:
+        got8 = [mod8.vtt_to_text(sub8.to_vtt(ebu8, ext)) for ext in ("ttml", "xml")]
+        check("331: EBU-TT-D's TTML (<tt:p>, single quotes, <tt:br/>) reads as the two blocks, named .ttml or .xml (no "
+              "cue: 'subtitles were empty')", got8 == [want8, want8], str(got8)[:160])
+        timed8 = ('<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p><span begin="00:00:01.000" end="00:00:02.000">'
+                  "Hello,</span> <span begin='2s' end='3.5s'>it's world</span></p></div><div begin=\"40s\">"
+                  '<p begin="1s" end="3.5s">Second block</p></div></body></tt>')
+        got8 = mod8.vtt_to_text(sub8.to_vtt(timed8, "ttml"))
+        check("331: a TTML paragraph timed by its spans, and one under a <div> with a begin, take those times (the first "
+              "was left out, the second read 40 s early)", got8 == want8, got8[:120])
+    got, calls, _ = yt_video({"title": "T", "language": "de", "subtitles": {"de": [{"ext": "xml", "name": "Deutsch"}]}},
+                             {"de": {"xml": ebu8}}, lang="en")
+    check("331: a broadcaster's track yt-dlp named by its address (video.de.xml) is read (it was no track: 'no "
+          "subtitles')", "Hello," in got[0] and got[2] == "subtitles de", "%s | %s" % (got[0][:40], got[2]))
 
     # a dubbed video: yt-dlp's `language` names the default audio track, and the automatic track is that audio's speech
     ASR = "https://www.youtube.com/api/timedtext?v=x&caps=asr&hl=en&kind=asr&lang=en&fmt=vtt"

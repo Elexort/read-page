@@ -48,7 +48,10 @@ infos could be read (163 YouTube, 31 RuTube, 5 Bilibili), as an English, a Russi
   A site without VTT gives what it has: RuTube's automatic subtitles come as SRT - 13 of its 31 readable videos
   had them, and the answer said "no subtitles" while yt-dlp wrote `video.ru.srt`. `scripts/subtitles.py` turns SRT,
   SBV, TTML, DFXP, YouTube's srv1-3 and json3, ASS and LRC into the same WEBVTT cues, so the blocks and
-  `transcript.vtt` are the same whatever the site sent. A track a site names automatic (RuTube: `Русский • Авто`) is
+  `transcript.vtt` are the same whatever the site sent. TTML is read by its elements' local names - EBU-TT-D, the
+  broadcasters' own, writes `<tt:p>` - and its attributes in either quote; a paragraph's time is its own, else its
+  spans', relative to a `<div>` that has one; a track yt-dlp named by its address's `.xml` is read as the TTML or the
+  YouTube XML it holds (KNOWN-ISSUES 331). A track a site names automatic (RuTube: `Русский • Авто`) is
   named so in the answer, though yt-dlp lists it among the human ones. The 13 RuTube videos read 2 100 to 17 400
   words each; the 18 with no track at all read as before.
 - **A dub.** A dubbed video offers its audio in several languages (60 of the 163 YouTube videos did: YouTube's
