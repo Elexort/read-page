@@ -3,7 +3,8 @@
 free_memory() -> {"phys": bytes of physical memory free (Windows' available physical, Linux MemAvailable, macOS's
 free and inactive pages), "commit": bytes of commit left or None (Windows: the commit limit - RAM and the pagefile as
 it is now - less the commit charge; Linux under vm.overcommit_memory = 2: CommitLimit less Committed_AS), "room":
-bytes left under a limit of the read's own or None (a Windows job's memory limit less its use, a Linux cgroup's)}.
+bytes left under a limit of the read's own or None (a Windows job's memory limit less its use, a Linux cgroup's),
+"per": a Windows job's limit on each process's commit or None, and "why" where a figure did not answer}.
 READ_PAGE_TEST_MEMORY (a JSON object of those keys, in bytes) stands in for them, with "fake": true - figures that
 do not fall as processes take memory, so the caller subtracts its processes itself: the suites and the measurements
 never squeeze a machine's memory to see the rule work. alive(pid, since) tells whether a process still runs - the
@@ -24,7 +25,7 @@ def _test_figures():
         return None
     try:
         got = json.loads(raw)
-        out = {k: (int(got[k]) if got.get(k) is not None else None) for k in ("phys", "commit", "room")}
+        out = {k: (int(got[k]) if got.get(k) is not None else None) for k in ("phys", "commit", "room", "per")}
         out["fake"] = True           # figures that do not fall as processes take memory: the caller counts them
         return out
     except (ValueError, TypeError, AttributeError):
@@ -68,11 +69,16 @@ def _windows():
         return {"phys": None, "commit": None, "room": None}
     # ullAvailPageFile: the commit limit less the commit charge - what every program on the machine may still
     # reserve before allocations fail; the pagefile counts as it is now, never as it might grow
-    return {"phys": int(st.ullAvailPhys), "commit": int(st.ullAvailPageFile), "room": _windows_job(k32)}
+    out = {"phys": int(st.ullAvailPhys), "commit": int(st.ullAvailPageFile), "room": None, "per": None}
+    out.update(_windows_job(k32))
+    return out
 
 
 def _windows_job(k32):
-    """The room left under the memory limit of a job the read runs in, None without one."""
+    """What a job the read runs in holds it to: {"room": what is left under the job's memory limit, "per": its limit
+    on each process's commit (JOB_OBJECT_LIMIT_PROCESS_MEMORY: a model process under it dies at its load), "why": a
+    query that did not answer}; {} outside a job. Windows answers for the read's own job, the innermost: a limit of a
+    job around it (a sandbox's, a CI runner's) is not seen (KNOWN-ISSUES 343)."""
     import ctypes
     from ctypes import wintypes
 
@@ -80,7 +86,7 @@ def _windows_job(k32):
     k32.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
     inside = wintypes.BOOL(False)
     if not k32.IsProcessInJob(k32.GetCurrentProcess(), None, ctypes.byref(inside)) or not inside.value:
-        return None
+        return {}
 
     class IO(ctypes.Structure):
         _fields_ = [(n, ctypes.c_ulonglong) for n in ("r", "w", "o", "rb", "wb", "ob")]
@@ -103,13 +109,18 @@ def _windows_job(k32):
                                               ctypes.POINTER(wintypes.DWORD))
     lim = EXTENDED()
     if not k32.QueryInformationJobObject(None, 9, ctypes.byref(lim), ctypes.sizeof(lim), None):
-        return None
+        return {"why": "the job's limits did not answer (error %d)" % ctypes.get_last_error()}
+    out = {}
+    if lim.Basic.LimitFlags & 0x100 and lim.ProcessMemoryLimit:          # JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        out["per"] = int(lim.ProcessMemoryLimit)
     if not lim.Basic.LimitFlags & 0x200 or not lim.JobMemoryLimit:       # JOB_OBJECT_LIMIT_JOB_MEMORY
-        return None
+        return out
     use = USAGE()
     if not k32.QueryInformationJobObject(None, 28, ctypes.byref(use), ctypes.sizeof(use), None):   # memory usage
-        return None
-    return max(0, int(lim.JobMemoryLimit) - int(use.JobMemory))
+        out["why"] = "the job's memory use did not answer (error %d): its limit is not counted" % ctypes.get_last_error()
+        return out
+    out["room"] = max(0, int(lim.JobMemoryLimit) - int(use.JobMemory))
+    return out
 
 
 def _meminfo():

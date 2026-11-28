@@ -8,6 +8,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A Windows job's limit on each process is read** (KNOWN-ISSUES 343): the memory rule read a job's limit on all its
+  processes alone, so under a limit on each process smaller than a model process takes every process died at its
+  load; such a job starts none, the pages named with why, and a job's figure that does not answer is traced.
 - **The note of the model processes knows a process by its pid and its start** (KNOWN-ISSUES 342): Windows soon gives
   a dead process's pid to another, and a hold of 512 MB lived on for as long as that one ran; a refused replace lost
   the note's update and left its `.tmp`. An entry keeps when its process started, the replace is tried for 2 s, and

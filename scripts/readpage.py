@@ -6455,6 +6455,14 @@ def tables_fit(ram, commit, hold=False):
     process the read starts takes it over (TablesWorker)."""
     m = hostmem.free_memory()
     got = {"n": None}
+    if m.get("why") and not _TABLES.get("why"):
+        _TABLES["why"] = m["why"]
+        trace("pdf.tables", memory=m["why"])           # a job's figure that did not answer: said once
+    per = m.get("per")
+    if per is not None and per < max(ram, commit):
+        # a job holds each process to less than one model process takes: one would die at its load (KNOWN-ISSUES 343)
+        _TABLES["per"] = per
+        return 0
 
     def count(entries):
         still_ram = still_commit = 0
@@ -6529,6 +6537,8 @@ def tables_reset():
         _PDF.clear()
         _TABLES["spent"] = 0.0
         _TABLES["slow"] = 1.0
+        _TABLES.pop("per", None)
+        _TABLES.pop("why", None)
 
 
 class TablesWorker:
@@ -6813,6 +6823,13 @@ def pdf_tables(path, doc, pages):
         state = {"stop": "", "by_text": 0, "deaths": 0, "load_deaths": 0, "nomem": False, "most": len(pool),
                  "cap": min(top, 2 if fits is None or fits >= 2 else 1), "ram": 0, "commit": 0,
                  "load": 0.0, "page_s": [], "fit_at": 0.0, "last": {}}
+        per = _TABLES.pop("per", None)
+        if per is not None and not pool:
+            # a job's limit on each process is under what one model process takes: none starts, the first included
+            # (it died at its load, and the step's time went to starts), and the pages are named (KNOWN-ISSUES 343)
+            info["error"] = "a job holds each process here to %d MB, under the %d MB a model process takes" % (
+                per >> 20, max(TABLES_PROC_RAM, TABLES_PROC_COMMIT) >> 20)
+            state["stop"] = "error"
         todo, named, retried = [], [], set()
 
         def grow():

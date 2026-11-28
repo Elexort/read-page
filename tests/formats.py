@@ -994,6 +994,39 @@ try:
             check("342: a note's replace refused three times (a scanner that holds the file) is tried again, and no .tmp "
                   "stays (the update was lost, its .tmp left)", len(kept) == 1 and not tmps, "%s %s" % (kept, tmps))
             mod3.tables_note(lambda entries: entries.__setitem__(slice(None), []))
+            # KNOWN-ISSUES 343: a Windows job's limit on each process was not read: under one smaller than a model
+            # process takes, every process died at its load
+            os.environ["READ_PAGE_TEST_MEMORY"] = json.dumps({"phys": 64 << 30, "commit": 64 << 30, "per": 100 << 20})
+            r_starts, real_start = [0], mod3.tables_start
+
+            def counting_start2(*a, **kw):
+                r_starts[0] += 1
+                return real_start(*a, **kw)
+            mod3.tables_start = counting_start2
+            try:
+                mod3.tables_reset()
+                info = mod3.pdf_tables(many, d3, [p.get_text() for p in d3])
+            finally:
+                mod3.tables_start = real_start
+                mod3.tables_close(kill=True)
+                os.environ.pop("READ_PAGE_TEST_MEMORY", None)
+            check("343: a job that holds each process to 100 MB starts no model process, and the pages are named with "
+                  "why (each process died at its load)", r_starts[0] == 0 and not info.get("asked")
+                  and info.get("left") == [1, 2, 3] and "a job holds each process" in (info.get("error") or ""),
+                  "%d starts %s" % (r_starts[0], info))
+            if os.name == "nt":
+                code = ("import json, sys; sys.path.insert(0, %r); import docreaders, hostmem; "
+                        "held = docreaders._job_limit(300 << 20); print(json.dumps([held, hostmem.free_memory()]))"
+                        % os.path.dirname(SCRIPT))
+                child = subprocess.run([sys.executable, "-I", "-B", "-c", code], capture_output=True, timeout=60)
+                try:
+                    held, seen = json.loads(child.stdout.decode("utf-8", "replace").strip().splitlines()[-1])
+                except (ValueError, IndexError):
+                    held, seen = None, {"out": child.stderr.decode("utf-8", "replace")[-160:]}
+                check("343: a process in a job with a limit on each process reads that limit (it was not read)",
+                      held is True and seen.get("per") == 300 << 20, str(seen)[:200])
+            else:
+                check.skip("343: a Windows job's limit on each process", "Windows only")
             for k in ("RP_STUB_SLEEP", "READ_PAGE_TEST_MEMORY", "READ_PAGE_TEST_CPUS"):
                 os.environ.pop(k, None)
             os.environ["RP_STUB_NOLOAD"] = "1"
