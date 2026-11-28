@@ -39,6 +39,9 @@
 - **An interrupted run's uv temporary folders are pruned** (KNOWN-ISSUES 356): a worker killed while uv unpacked left
   `cache/uv/.tmp*` folders (124 MB measured), under the 150 MB line that prunes the cache whole. The next `--setup` runs
   a plain `uv cache prune` where it finds one older than its own start.
+- **The index's way of the yt-dlp update takes the highest release whatever uv is told** (KNOWN-ISSUES 357): with the
+  user's `UV_RESOLUTION=lowest` it kept the installed yt-dlp for good while every update "worked"; it says
+  `--resolution highest --prerelease disallow` now (measured: the newer release comes under `UV_RESOLUTION=lowest`).
 
 ## 0.5.0 - 2026-11-28
 

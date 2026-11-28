@@ -3984,6 +3984,16 @@ attempt("... and none is run where there are none, or only folders newer than th
         lambda: (["UV", "cache", "prune"] not in cmds356_new and ["UV", "cache", "prune"] not in cmds356_none,
                  "%s %s" % (cmds356_new, cmds356_none)))
 
+# ---------------------------------------------------------------- the index's way of yt-dlp, whatever uv is told (row 357)
+# UV_RESOLUTION=lowest (passed on, named in the log) made `--upgrade yt-dlp[default]>=<installed>` take the installed one:
+# yt-dlp stayed at its floor while every update "worked" (measured with uv 0.13.9: 2098.1.1 kept, 2099.1.1 old enough).
+cmd357 = envsetup.ytdlp_command("UV", "PY", now=YT_NOW, floor="2026.10.26", lock="L")
+attempt("the index's way of yt-dlp takes the highest release whatever uv is told (--resolution highest: UV_RESOLUTION="
+        "lowest held it at its floor) and no pre-release (--prerelease disallow: UV_PRERELEASE=allow took a nightly)",
+        lambda: ("--resolution" in cmd357 and cmd357[cmd357.index("--resolution") + 1] == "highest"
+                 and "--prerelease" in cmd357 and cmd357[cmd357.index("--prerelease") + 1] == "disallow",
+                 " ".join(cmd357[5:12])))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)

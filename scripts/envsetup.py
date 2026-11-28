@@ -2434,8 +2434,11 @@ def ytdlp_command(uv, py, now=None, floor="", lock=None):
     can name - its files are checked by TLS alone, from an https index (refuse_plain_http). An index that gives no
     upload dates (PEP 700) leaves every file out under it: ytdlp_update says so."""
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((now or time.time()) - YTDLP_AGE_DAYS * 86400))
+    # the highest release, and no pre-release, whatever the user's uv settings say: UV_RESOLUTION=lowest held yt-dlp at
+    # its floor while every update "worked", UV_PRERELEASE=allow would take a nightly (KNOWN-ISSUES 357)
     cmd = [uv, "pip", "install", "--python", py, "--upgrade", YTDLP + (">=" + floor if floor else ""),
-           "-c", lock or LOCK_FILE, "--only-binary", ":all:", "--verify-hashes"]
+           "-c", lock or LOCK_FILE, "--only-binary", ":all:", "--verify-hashes", "--resolution", "highest",
+           "--prerelease", "disallow"]
     for pkg in YTDLP_FLOATS:
         cmd += ["--exclude-newer-package", "%s=%s" % (pkg, cutoff)]
     return cmd
