@@ -10013,8 +10013,11 @@ def main(argv=None):
                          "many characters, UTF-16 units and bytes stand before it and its filler is ASCII, Cyrillic, CJK "
                          "and a character past U+FFFF, so the last line a tool shows says which of the three it counts")
     known = [s for a in ap._actions for s in a.option_strings if s.startswith("--")]
+    raw = list(sys.argv[1:] if argv is None else argv)
+    # what stands after `--` is the address, as it is: the MCP server puts it there (KNOWN-ISSUES 291)
+    cut = raw.index("--") if "--" in raw else len(raw)
     argv = [(typo_fixed(t.partition("=")[0], known) + t.partition("=")[1] + t.partition("=")[2])
-            if t.startswith("--") else t for t in (sys.argv[1:] if argv is None else argv)]
+            if t.startswith("--") else t for t in raw[:cut]] + raw[cut:]
     args, extra = ap.parse_known_args(argv)
     for flag, make in (("probe", answer.probe), ("probe_units", answer.probe_units)):
         if str(getattr(args, flag)).strip():

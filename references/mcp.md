@@ -214,6 +214,9 @@ so images go as blocks, everything else as text with a path.
   read-page's own folders (a page folder of its cache, or a folder with its manifest), checked after
   links are resolved; anything else is refused with a pointer to the CLI, which reads any path. So a
   prompt-injected model cannot read a home folder through the server.
+- An address that starts with `-` is refused ("an address or a path, not a flag"), and the child gets every address
+  after `--`: a model's argument is never read as a flag. `url="--setup"` once ran the installer, with no yes of the
+  user's (KNOWN-ISSUES 291).
 - A warm process for the next call: the server keeps one `readpage.py --serve-once`
   with Python started and the imports done (about 0.5 s of a call on a fast machine, 2 s on a weak laptop). A
   call takes it and a new one starts; each serves one call and exits, so nothing of one read

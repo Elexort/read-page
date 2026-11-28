@@ -510,7 +510,8 @@ def use(script, argv):
     if not _python_ok(py):
         _STATUS["why"] = "its Python is missing: run --setup again"
         return
-    if any(meant_setup(a) for a in argv):
+    if any(meant_setup(a) for a in (argv[:argv.index("--")] if "--" in argv else argv)):
+        # (after `--` stands the address, never a flag: the MCP server puts it there, KNOWN-ISSUES 291)
         _STATUS["why"] = "--setup works from outside it"
         return
     if os.environ.get("READ_PAGE_ENV_CHILD"):

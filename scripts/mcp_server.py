@@ -702,6 +702,10 @@ def tool_read_url(args):
     url = (args.get("url") or "").strip()
     if not url:
         return err("url is required")
+    if url.startswith("-"):
+        # the address is a model's argument, and a page's text can ask for one: `--setup` as the address ran the
+        # installer, without the user's yes (KNOWN-ISSUES 291). The child gets it after `--` as well
+        return err("url is an address or a path, not a flag: %s" % url[:80])
     # the CLI reads any file on the machine; over MCP only one inside read-page's
     # own folders (a cache entry, a folder with our manifest), checked after links are resolved -
     # so a prompt-injected model cannot read C:\Windows or a home folder through this tool
@@ -715,7 +719,7 @@ def tool_read_url(args):
         ignored.append("file %s (content.md or page.md)" % args.get("file"))
         view = ""
     start, quote, chars = line_args(args, ignored)
-    argv = [url, "--json"]
+    argv = ["--json"]                           # the flags first; the address last, after `--` (KNOWN-ISSUES 291)
     for flag in ("allow_external", "force_external", "alternate", "refresh", "clear_cookies", "download"):
         if args.get(flag):
             argv.append("--" + flag.replace("_", "-"))
@@ -751,6 +755,7 @@ def tool_read_url(args):
         else:
             ignored.append("ocr %s (a picture's number, from its marker)" % args.get("ocr"))
             ocr_n = 0
+    argv += ["--", url]                         # whatever it holds, the address is never read as a flag
     rc, out, e = run_cli(argv)
     if e:
         return err(e)

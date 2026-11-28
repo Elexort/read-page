@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **MCP: an address that is a flag reaches no child** (KNOWN-ISSUES 291): `read_url` gave its `url` to the reader's
+  child as the first argument, so `url="--setup"` (or the typo `--stup`) ran the installer without the user's yes,
+  and `--version` or `--caps` answered as flags. An address that starts with `-` is refused before any child, and the
+  child gets the address last, after `--`, which `readpage.main` and `ownenv.use` read as an address, never a flag.
 - **A Chinese or Japanese article with a loading line after it is `ok`** (KNOWN-ISSUES 290): row 259's rule counted
   the rest of the text by spaces, so a whole Chinese article of 1 690 characters was 36 words and a list's `加载中...`
   after it made it `empty`, with the sign-in advice. The rest is counted by `words_of`, Chinese and Japanese by
