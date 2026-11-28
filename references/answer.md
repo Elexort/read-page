@@ -127,6 +127,9 @@ so a file tool that stops at 2 000 still sees every word.
 | `too_large` | the file or page is over the cap, or a document or a media file was still arriving when its time ran out | the `reason:` line names the cap, or how much arrived; `--download` lifts policy limits and the time limit |
 | `error` | network, DNS, timeout; a transfer the server stopped (a stub, or a document or a media file stuck halfway); the server's own HTTP 4xx/5xx page (kept as the text); or an archive cut or damaged (a DOCX, an EPUB, a ZIP) whose whole members - and the one it was cut in, as far as it arrived, where a reader can take one in part - hold under 40 words of their own (`signals.broken_archive`), or a PDF cut short or damaged whose pages that opened hold under 40 (`signals.broken_pdf`) | retry later; for a public page `--allow-external` also tries a reader and the archive; for a cut or damaged archive or PDF what `advice` says - a whole copy of a file on this machine, `--refresh` for a server's |
 
+`(browser)` after the engine: the text is the browser's rendering of the page (`--alternate`, or a page its scripts
+build); `(server; browser's text no better)`: the browser ran and its text was no fuller, so the server's stands
+(`content.source`; an `--alternate` read named the extractor alone, KNOWN-ISSUES 322).
 `+ 3 blocks of page.md` after the engine: the extractor dropped those paragraphs, code blocks or
 tables and they were put back where they stood; `outside the text: 6.2 KB … - page.md` is what only
 `page.md` has (menus, link lists, fragments). `maybe a fragment: the text is 12% of the page's words`

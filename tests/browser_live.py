@@ -169,6 +169,15 @@ check("a shell that mounts in 250 ms reads as text",
 check("the browser tier is what got it",
       any(str(t).startswith("browser") for t in (m1.get("chain") or {}).get("tried") or []),
       str((m1.get("chain") or {}).get("tried"))[:70])
+# the answer says whose text it is when a browser's was weighed: an --alternate read named an extractor alone, and an
+# agent could not tell whether the browser had run (KNOWN-ISSUES 322)
+check("... and the manifest says the text is the browser's (content.source)",
+      (m1.get("content") or {}).get("source") == "browser", str((m1.get("content") or {}).get("source")))
+m_alt = read("/tall", "--alternate")
+check("an --alternate read of a page the server serves whole: the browser's text weighed, which one stands said",
+      (m_alt.get("content") or {}).get("source") in ("browser", "server")
+      and any(str(t).startswith("browser") for t in (m_alt.get("chain") or {}).get("tried") or []),
+      "%s; tried %s" % ((m_alt.get("content") or {}).get("source"), (m_alt.get("chain") or {}).get("tried")))
 
 # such a page starts the browser right after HTTP, and the HTTP pass's readability
 # and trafilatura run once the browser has its page open (a weak laptop's CPU goes to Chrome's start)

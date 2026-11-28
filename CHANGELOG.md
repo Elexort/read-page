@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The first line says when the text is the browser's** (KNOWN-ISSUES 322): an `--alternate` read named the
+  extractor alone, whether the browser's text was taken or not, and an agent could not tell whether the browser had
+  run. `content.source` is `browser` or `server` wherever the browser's text was weighed, and the first line says
+  `trafilatura (browser)` or `trafilatura (server; browser's text no better)`.
 - **SKILL.md says what `SKILL_DIR` is** (KNOWN-ISSUES 321): its command names `SKILL_DIR` and five of eight agents of
   the 0.5.0 stress round guessed it from the install path; the first line says it is this file's folder (5 words).
 - **A Windows job's limit on each process is read** (KNOWN-ISSUES 317): the memory rule read a job's limit on all its

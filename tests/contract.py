@@ -1191,6 +1191,15 @@ check("SKILL.md's `error` row fits both kinds of error: retry later, and a cut o
 # command under it, as an answer does; it names --chars and EOF, the way back from a cut, and no --to
 with open(os.path.join(ROOT, "SKILL.md"), encoding="utf-8") as fh_:
     skill = fh_.read()
+# an --alternate read whose browser ran named an extractor alone, and an agent could not tell whether the browser had
+# run (KNOWN-ISSUES 322): the first line says whose text it is when a browser's was weighed
+import answer as answer_m                                     # noqa: E402
+heads = [answer_m.header({"status": "ok", "content": {"engine": "trafilatura", "source": src, "restored": 2}},
+                         "content.md", 10, 100)[0] for src in ("browser", "server", None)]
+check("the first line names the browser's text, or the server's kept against it, and nothing when no browser was weighed",
+      " · trafilatura (browser) + 2 blocks of page.md · " in heads[0]
+      and " · trafilatura (server; browser's text no better) + 2 blocks of page.md · " in heads[1]
+      and " · trafilatura + 2 blocks of page.md · " in heads[2], str(heads)[:200])
 # SKILL_DIR, which the command names, is said once: five of eight agents of the 0.5.0 stress round guessed it from
 # the install path (KNOWN-ISSUES 321)
 check("SKILL.md says what SKILL_DIR is, by its command", re.search(r"`SKILL_DIR` is this file's folder", skill) is not None
