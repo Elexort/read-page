@@ -10873,6 +10873,7 @@ def read(args):
 
     raw_name, text, page_text, engine, visible, html = "raw.bin", "", "", "", None, ""
     tabs_info = None                       # the markers of the extraction whose text this is (tabs.py)
+    browser_weighed = False                # the browser's text was weighed against the server's (KNOWN-ISSUES 330)
     route_skipped = False                  # a #/ route's landing page, left for the browser
     browser_inside = ""                    # where the browser reached inside, when its text was dropped
     visible_words = None
@@ -11249,6 +11250,9 @@ def read(args):
                 manifest["chain"]["skipped"].append({"tier": "browser", "why": (
                     "its text is a wall the HTTP text was not" if b_wall and not wall_http else
                     "its text has fewer words than the HTTP text")})
+            # the browser's text was weighed against the server's (not a screenshot alone): the answer says which it
+            # shows, an --alternate read too, whose header named an extractor and no browser (KNOWN-ISSUES 330)
+            browser_weighed = bool(args.alternate or hash_route or text_reason)
         else:
             manifest["chain"]["skipped"].append({"tier": "browser", "why": err})
 
@@ -11463,6 +11467,10 @@ def read(args):
         manifest["content"].update(restored=restored["restored"], restored_bytes=restored["restored_bytes"])
     if restored.get("outside"):
         manifest["content"]["outside"] = restored["outside"]
+    if source == "browser":
+        manifest["content"]["source"] = "browser"           # the text is the browser's page's
+    elif browser_weighed and source == "http":
+        manifest["content"]["source"] = "server"            # the browser ran, and its text was no fuller
     manifest["signals"].update({"fragment": fragment, "js_shell": js_shell})
     marked = dict((k, v) for k, v in ((tabs_info or {}).get("counts") or {}).items() if v)
     if marked:

@@ -135,6 +135,11 @@
           "type": "integer",
           "description": "blocks of page.md the extractor dropped that were put back in place"
         },
+        "source": {
+          "type": "string",
+          "enum": ["browser", "server"],
+          "description": "set when this read rendered the page in a browser and weighed its text against the server's: browser, the text is the browser's page's; server, the browser's text was no fuller (or a wall) and the server's stands. The answer's first line says it after the engine"
+        },
         "restored_bytes": {
           "type": "integer"
         },
