@@ -31,7 +31,8 @@ beyond the lock (yt-dlp-ejs, brotli, mutagen, pycryptodomex, websockets today), 
 installed by its exact version from whatever index is set, every file held to the SHA256 pypi.org publishes - so
 an index that gives no upload dates (an HTML mirror: Aliyun's, Tencent Cloud's, Huawei Cloud's, a company's
 Nexus) serves it all the same, and a package no plan names is refused. Where pypi.org does not answer, the index's
-dates decide (uv's `--exclude-newer-package`), and an index that gives none is named, never a silent success
+dates decide - one `--exclude-newer` for the whole tree, each package of the lock let through by its own date - and an
+index that gives none is named, never a silent success
 (KNOWN-ISSUES 350, 351). A video read in the environment starts a look for a newer
 one every three days, in a process of its own that the read does not wait for (`READ_PAGE_SKIP=update`
 turns it off, and `--setup` updates it too). It never goes backwards: it asks for `yt-dlp[default]>=`

@@ -103,8 +103,8 @@ git-ignored, so a contributor may keep a file of their own under that name.
   moves, measure the figures again and move their versions (`tests/environment.py` fails until then). yt-dlp
   alone is not pinned: the newest release that has been out three days by pypi.org's dates, never older than the
   one installed, it and what it brings in beyond the lock installed by exact versions held to pypi.org's SHA256
-  (`ytdlp_plans`; `YTDLP_FLOATS` is what floats with it where pypi.org does not answer and the index's dates
-  decide). No source of `--setup` is used in plain http
+  (`ytdlp_plans`; where pypi.org does not answer the index's dates decide, one `--exclude-newer` for the whole
+  tree and the lock's packages let through). No source of `--setup` is used in plain http
   (`READ_PAGE_ALLOW_HTTP` names an intranet host that may be).
 - A packaged Windows app (MSIX; Claude's desktop app is one) gets a private copy of whatever its
   processes write under `AppData\Local` or `AppData\Roaming`

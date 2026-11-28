@@ -70,10 +70,11 @@ TOP = ["curl_cffi", "trafilatura", "readability-lxml", "lxml", "lxml_html_clean"
 # YTDLP_EVERY_DAYS (ownenv.refresh_ytdlp). Packages it shares with the lock stay at the lock's.
 YTDLP = "yt-dlp[default]"
 YTDLP_AGE_DAYS = 3
-# What floats with it: its tree beyond the lock's 54 packages. Only these are held to the three days;
-# the rest of its tree is the lock's (certifi, requests, urllib3, idna, charset-normalizer), and a pin of
-# the lock younger than three days must not make uv go looking for a yt-dlp old enough not to need it.
-YTDLP_FLOATS = ("yt-dlp", "yt-dlp-ejs", "brotli", "mutagen", "pycryptodomex", "websockets")
+# What floats with it is its tree beyond the lock's 54 packages (yt-dlp-ejs, brotli, mutagen, pycryptodomex, websockets
+# today); the rest of its tree is the lock's (certifi, requests, urllib3, idna, charset-normalizer), and a pin of the lock
+# younger than three days must not make uv go looking for a yt-dlp old enough not to need it. pypi.org's way pins each
+# floating package by its own dates (ytdlp_plans); the index's way holds the whole tree with one date and lets the
+# lock's packages through (ytdlp_command) - a list typed in held the packages it named alone (KNOWN-ISSUES 351).
 # tessdata_fast 4.1.0 (Apache-2.0): as good as tessdata_best on 60 readings of English, Russian
 # and mixed text (clean CER 0.19 against 0.48 %, poor scans 39.6 % both), three times faster
 # (0.21 against 0.61 s a picture) and a quarter of the size (8 against 31 MB)
@@ -2430,17 +2431,26 @@ def ytdlp_command(uv, py, now=None, floor="", lock=None):
     (with no floor, a pin of the lock younger than the cutoff made uv backtrack to yt-dlp 2022.3.8.2, which has no
     `default` extra and needs none of the packages: exit 0, "success", and every video read passing --js-runtimes to a
     yt-dlp that rejects it). The packages of the environment's own lock stay at its pins, held to its hashes
-    (--verify-hashes: no settings file switches that off); the date holds only what floats (YTDLP_FLOATS), which no hash
-    can name - its files are checked by TLS alone, from an https index (refuse_plain_http). An index that gives no
-    upload dates (PEP 700) leaves every file out under it: ytdlp_update says so."""
-    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((now or time.time()) - YTDLP_AGE_DAYS * 86400))
+    (--verify-hashes: no settings file switches that off). The date holds the whole tree beyond the lock - one
+    --exclude-newer, so that a package a newer yt-dlp brings in is held too (a list of six held those alone: KNOWN-ISSUES
+    351) - and lets each package of the lock through by a date past now (--exclude-newer-package), so that a pin of the
+    lock younger than the cutoff sends uv nowhere; what floats is checked by TLS alone, from an https index
+    (refuse_plain_http). An index that gives no upload dates (PEP 700) leaves every file out under it: ytdlp_update says so."""
+    t = now or time.time()
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t - YTDLP_AGE_DAYS * 86400))
+    until = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t + 86400))
+    try:
+        with open(lock or LOCK_FILE, encoding="utf-8") as fh:
+            lock_text = fh.read()
+    except OSError:
+        lock_text = ""
     # the highest release, and no pre-release, whatever the user's uv settings say: UV_RESOLUTION=lowest held yt-dlp at
     # its floor while every update "worked", UV_PRERELEASE=allow would take a nightly (KNOWN-ISSUES 357)
     cmd = [uv, "pip", "install", "--python", py, "--upgrade", YTDLP + (">=" + floor if floor else ""),
            "-c", lock or LOCK_FILE, "--only-binary", ":all:", "--verify-hashes", "--resolution", "highest",
-           "--prerelease", "disallow"]
-    for pkg in YTDLP_FLOATS:
-        cmd += ["--exclude-newer-package", "%s=%s" % (pkg, cutoff)]
+           "--prerelease", "disallow", "--exclude-newer", cutoff]
+    for name in sorted(lock_pins(lock_text)):
+        cmd += ["--exclude-newer-package", "%s=%s" % (name, until)]
     return cmd
 
 
@@ -2454,7 +2464,7 @@ def _vkey(v):
 # time the index does not give (PEP 700 is the simple API's JSON form): behind Aliyun's, Tencent Cloud's, Huawei Cloud's
 # or Douban's mirror (HTML, no dates - measured 2026-11-28; TUNA, USTC, SJTU and BFSU give them) a first install found no
 # yt-dlp at all, and an environment that had one kept it for good while every update "succeeded". And the date held a
-# list typed in (YTDLP_FLOATS): a package a newer yt-dlp brings in came in its newest upload, an hour old. pypi.org's JSON
+# list typed in (six packages): a package a newer yt-dlp brings in came in its newest upload, an hour old. pypi.org's JSON
 # gives every release's upload time and every file's SHA256: the releases are chosen there, then installed by their exact
 # versions from whatever index the user has, each file held to the digest pypi.org publishes (--require-hashes) - a
 # mirror serves the bytes, pypi.org their checksum, and a package no plan names is refused.

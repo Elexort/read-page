@@ -42,6 +42,11 @@
 - **The index's way of the yt-dlp update takes the highest release whatever uv is told** (KNOWN-ISSUES 357): with the
   user's `UV_RESOLUTION=lowest` it kept the installed yt-dlp for good while every update "worked"; it says
   `--resolution highest --prerelease disallow` now (measured: the newer release comes under `UV_RESOLUTION=lowest`).
+- **The index's way holds yt-dlp's whole tree to the three days** (KNOWN-ISSUES 351): where pypi.org does not answer,
+  one `--exclude-newer` covers every package beyond the lock - the list of six it named held those alone - and each
+  package of the lock is let through by its own date, so that a pin of the lock younger than three days sends uv
+  nowhere (measured: a package yt-dlp brings in comes in its release of then; a lock package uploaded an hour before
+  comes all the same). `YTDLP_FLOATS` is gone.
 
 ## 0.5.0 - 2026-11-28
 

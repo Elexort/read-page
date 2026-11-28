@@ -335,19 +335,23 @@ if published:
               str([k for k, v in npm_pkgs.items() if live_npm[k] != v["integrity"]][:3]))
 # ---------------------------------------------------------------- yt-dlp: the one engine not pinned
 cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1795000000 - 3 * 86400))
-cmd = envsetup.ytdlp_command("uv", "py", now=1795000000, floor="2026.10.26", lock="ENV-LOCK")
+until = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1795000000 + 86400))
+cmd = envsetup.ytdlp_command("uv", "py", now=1795000000, floor="2026.10.26", lock=envsetup.LOCK_FILE)
 pkgs = [cmd[i + 1] for i, x in enumerate(cmd) if x == "--exclude-newer-package"]
-check("yt-dlp is not in the lock: --setup takes the newest release that has been out three days",
+check("yt-dlp is not in the lock: the index's way takes the newest release that has been out three days",
       "yt-dlp==" not in lock and "--upgrade" in cmd and "yt-dlp[default]>=2026.10.26" in cmd
-      and sorted(pkgs) == sorted("%s=%s" % (n, cutoff) for n in envsetup.YTDLP_FLOATS), " ".join(cmd[5:]))
+      and cmd[cmd.index("--exclude-newer") + 1] == cutoff, " ".join(cmd[5:16]))
 check("it never goes backwards (a floor: the version installed), under the lock the environment was built from",
-      "yt-dlp[default]>=2026.10.26" in cmd and cmd[cmd.index("-c") + 1] == "ENV-LOCK"
+      "yt-dlp[default]>=2026.10.26" in cmd
+      and envsetup.ytdlp_command("uv", "py", floor="1", lock="ENV-LOCK")[
+          envsetup.ytdlp_command("uv", "py", floor="1", lock="ENV-LOCK").index("-c") + 1] == "ENV-LOCK"
       and "yt-dlp[default]" in envsetup.ytdlp_command("uv", "py")
       and not any(x.startswith("yt-dlp[default]>=") for x in envsetup.ytdlp_command("uv", "py")), "")
-check("the date holds what floats only: no global --exclude-newer, so a pin of the lock younger than "
-      "three days cannot send uv back to an old yt-dlp",
-      "--exclude-newer" not in cmd and not (set(envsetup.YTDLP_FLOATS) & {"certifi", "requests", "urllib3", "idna",
-                                                                         "charset-normalizer"}), "")
+check("the date holds the whole tree beyond the lock (one --exclude-newer: a package a newer yt-dlp brings in too, row "
+      "351) and lets every package of the lock through by a date past now, so a pin of the lock younger than three days "
+      "cannot send uv back to an old yt-dlp",
+      sorted(pkgs) == sorted("%s=%s" % (n, until) for n in envsetup.lock_pins(lock)) and "certifi=%s" % until in pkgs
+      and not [p for p in pkgs if p.startswith("yt-dlp=")], "%d let through" % len(pkgs))
 
 
 check("the advice names --setup only where it installs the engine",
@@ -3529,7 +3533,7 @@ attempt("ci_install's `suites` prints those words (not its own condition on the 
 # ---------------------------------------------------------------- yt-dlp by pypi.org's dates and digests (rows 350, 351)
 # The three days were the index's dates (uv's --exclude-newer-package): an index that gives none - an HTML one, Aliyun's,
 # Tencent Cloud's, Huawei Cloud's, Douban's mirror - left every file of yt-dlp out, and a package a newer yt-dlp brings
-# in beyond YTDLP_FLOATS had no date at all. The release is chosen by pypi.org's JSON now, then installed by its exact
+# in beyond the six packages it named had no date at all. The release is chosen by pypi.org's JSON now, then installed by its exact
 # version, each file held to the SHA256 pypi.org publishes.
 YT_NOW = 1795000000.0
 
@@ -3760,7 +3764,7 @@ if uvx:
             "out three days by pypi.org's dates (the index's way found no yt-dlp at all)",
             lambda: (ok1_ and have1.get("yt-dlp") == "2099.1.1" and have1.get("newdep") == "1.0" and stamp1,
                      "%s | %s | %s" % (ok1_, note1_[:120], have1)))
-    attempt("a package yt-dlp brings in beyond the lock and YTDLP_FLOATS is held to the three days too: newdep 1.0, not "
+    attempt("a package yt-dlp brings in beyond the lock and the six named is held to the three days too: newdep 1.0, not "
             "its upload of an hour ago (an index that gives dates held yt-dlp alone, and newdep came at 2.0)",
             lambda: (ok5_ and have5.get("yt-dlp") == "2099.1.1" and have5.get("newdep") == "1.0",
                      "%s | %s | %s" % (ok5_, note5_[:120], have5)))
@@ -3993,6 +3997,94 @@ attempt("the index's way of yt-dlp takes the highest release whatever uv is told
         lambda: ("--resolution" in cmd357 and cmd357[cmd357.index("--resolution") + 1] == "highest"
                  and "--prerelease" in cmd357 and cmd357[cmd357.index("--prerelease") + 1] == "disallow",
                  " ".join(cmd357[5:12])))
+
+# ---------------------------------------------------------------- the index's way holds the whole tree (row 351)
+# Where pypi.org does not answer, the index's dates decide - and they held six packages named in a list, so a package a
+# newer yt-dlp brings in came in its upload of an hour ago there as well. One date holds the whole tree now, and the lock's
+# packages are let through: one of them uploaded an hour ago still comes.
+if uvx:
+    tdir = scratch("rp-env-ytall-")
+    t_files = {}
+    for name_, version_, hours_, req_ in (("yt-dlp", "2099.1.1", 120, ['newdep; extra == "default"',
+                                                                        'lockdep; extra == "default"']),
+                                          ("newdep", "1.0", 120, []), ("newdep", "2.0", 1, []), ("lockdep", "1.0", 1, [])):
+        fn_, bytes_ = made_wheel(tdir, name_, version_, req_, ("default",) if req_ else (),
+                                 "print(%r)\n" % version_ if name_ == "yt-dlp" else "")
+        t_files[fn_] = (bytes_, hours_)
+
+    class AllIndex(http.server.BaseHTTPRequestHandler):
+        """PEP 691 JSON with upload times, as pypi.org and TUNA serve it."""
+
+        def do_GET(self, head=False):
+            path = self.path.split("?")[0].split("#")[0]
+            body, kind = None, "application/octet-stream"
+            m = re.match(r"/simple/([^/]+)/$", path)
+            if m:
+                mine = [(fn, b, hrs) for fn, (b, hrs) in sorted(t_files.items())
+                        if fn.startswith(m.group(1).replace("-", "_") + "-")]
+                if mine:
+                    body = json.dumps({"meta": {"api-version": "1.1"}, "name": m.group(1),
+                                       "versions": sorted(set(fn.split("-")[1] for fn, _b, _h in mine)),
+                                       "files": [{"filename": fn, "url": "/files/" + fn, "upload-time": yt_iso(hrs),
+                                                  "hashes": {"sha256": hashlib.sha256(b).hexdigest()}}
+                                                 for fn, b, hrs in mine]}).encode()
+                    kind = "application/vnd.pypi.simple.v1+json"
+            elif path.startswith("/files/"):
+                body = (t_files.get(path[len("/files/"):]) or (None, 0))[0]
+            self.send_response(200 if body is not None else 404)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body or b"")))
+            self.end_headers()
+            if not head:
+                self.wfile.write(body or b"")
+
+        def do_HEAD(self):
+            self.do_GET(head=True)
+
+        def log_message(self, *a):
+            pass
+
+    tsrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), AllIndex)
+    threading.Thread(target=tsrv.serve_forever, daemon=True).start()
+    t_env = dict((k, v) for k, v in envsetup.net_env().items()
+                 if not k.upper().startswith(("UV_INDEX", "UV_EXTRA_INDEX", "UV_FIND_LINKS", "UV_CONFIG_FILE")))
+    t_env.update(UV_DEFAULT_INDEX="http://127.0.0.1:%d/simple" % tsrv.server_address[1], UV_NO_CONFIG="1",
+                 UV_CACHE_DIR=os.path.join(tdir, "cache"), UV_PYTHON_DOWNLOADS="never")
+    t_lock = os.path.join(tdir, "lock.txt")
+    with open(t_lock, "w", encoding="utf-8") as fh_:
+        fh_.write("lockdep==1.0 \\\n    --hash=sha256:%s\n" % hashlib.sha256(t_files["lockdep-1.0-py3-none-any.whl"][0])
+                  .hexdigest())
+    t_venv = os.path.join(tdir, "venv")
+    subprocess.run([uvx, "venv", t_venv, "--python", sys.executable, "-q"], env=t_env, capture_output=True, timeout=120)
+    t_py = os.path.join(t_venv, "Scripts", "python.exe") if os.name == "nt" else os.path.join(t_venv, "bin", "python")
+
+    class TShell(object):
+        full = ""
+
+        def sh(self, cmd, timeout=600, env=None):
+            p = subprocess.run([str(c) for c in cmd], env=env, capture_output=True, timeout=timeout, cwd=tdir)
+            self.full = (p.stdout + p.stderr).decode("utf-8", "replace")
+            return p.returncode, " | ".join(x.strip() for x in self.full.strip().splitlines()[-3:])[-300:]
+
+    real_fj351 = envsetup.fetch_json
+    envsetup.fetch_json = no_pypi
+    try:
+        ok351, note351 = envsetup.ytdlp_update(t_venv, uvx, t_py, t_env, TShell().sh, now=YT_NOW, lock=t_lock)
+    finally:
+        envsetup.fetch_json = real_fj351
+        tsrv.shutdown()
+    p351 = subprocess.run([uvx, "pip", "list", "--python", t_py, "--format", "json"], env=t_env, capture_output=True,
+                          timeout=120)
+    try:
+        have351 = dict((x["name"], x["version"]) for x in json.loads(p351.stdout.decode("utf-8", "replace") or "[]"))
+    except ValueError:
+        have351 = {}
+    attempt("where pypi.org does not answer, the index's dates hold the whole tree: newdep 1.0, not its upload of an hour "
+            "ago (it came at 2.0), while the lock's lockdep, uploaded an hour ago, comes all the same",
+            lambda: (ok351 and have351.get("yt-dlp") == "2099.1.1" and have351.get("newdep") == "1.0"
+                     and have351.get("lockdep") == "1.0", "%s | %s | %s" % (ok351, note351[:100], have351)))
+else:
+    print("SKIP the index's way of yt-dlp against a local index (no uv here: --setup's, or one on PATH)")
 
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
