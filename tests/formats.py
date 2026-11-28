@@ -2114,26 +2114,41 @@ try:
             made.new_page().insert_textbox((72, 72, 520, 760), "PDF-PAGE-%d-FACT %s" % (n + 1, EN * 12), fontsize=10)
         plain_pdf, streams_pdf = made.tobytes(garbage=3, deflate=True), made.tobytes(garbage=3, deflate=True, use_objstms=1)
         made.close()
-        for label, data in (("that does not open (its first 200 bytes)", plain_pdf[:200]),
-                            ("whose objects are in streams, cut at half (it opens with no page)",
-                             streams_pdf[:len(streams_pdf) // 2])):
+        # what opens of a cut PDF is MuPDF's, and the read's MuPDF may be its environment's, not this suite's: 1.28
+        # repairs a PDF cut at half and opens its 8 pages, 1.26 (PyMuPDF 1.26.5, the newest for Python 3.9) opens none
+        # of it, and opens a cut file's page tree as its 8 pages, empty - which the read called a scan's. So what the
+        # read says it opened decides what it must say. Whether the first 200 bytes hold the page tree is the writer's:
+        # 1.26 writes it by byte 160, 1.28 later
+        tree = re.search(rb"/Type\s*/Pages\b.*?endobj", plain_pdf, re.S)
+        cuts = [("that does not open (its first 200 bytes)", plain_pdf[:200]),
+                ("whose objects are in streams, cut at half (it opens with no page)", streams_pdf[:len(streams_pdf) // 2])]
+        if tree:
+            cuts.append(("cut where its page tree ends (no page's own object arrived)", plain_pdf[:tree.end() + 1]))
+        for label, data in cuts:
             p = os.path.join(tmpc, "cut-%d.pdf" % len(data))
             with open(p, "wb") as fh:
                 fh.write(data)
             r = run_read(p, env=env)
             sig = (r.manifest.get("signals") or {}).get("broken_pdf") or {}
+            advice, n_open = r.manifest.get("advice") or "", sig.get("pages")
             check("309: a PDF %s is an error that says it is cut and asks for a whole copy (it was `empty`, \"no text in "
-                  "it\", or a scan)" % label, r.manifest.get("status") == "error" and sig.get("how") == "cut"
-                  and sig.get("pages") == 0 and "a whole copy of the file is needed" in (r.manifest.get("advice") or "")
+                  "it\", or a scan); the empty pages an older MuPDF opens of it are no scan's" % label,
+                  r.manifest.get("status") == "error" and sig.get("how") == "cut" and isinstance(n_open, int)
+                  and (not n_open or "hold no text of their own" in advice) and "a whole copy of the file is needed" in advice
                   and "text layer" not in json.dumps(r.manifest.get("missing") or []), said(r))
         p = os.path.join(tmpc, "cut-half.pdf")
         with open(p, "wb") as fh:
             fh.write(plain_pdf[:len(plain_pdf) // 2])
         r = run_read(p, env=env)
         sig = (r.manifest.get("signals") or {}).get("broken_pdf") or {}
-        check("309: a PDF cut at half whose pages open keeps what they hold, `ok`, and says it is cut (it said nothing)",
-              r.manifest.get("status") == "ok" and "PDF-PAGE-1-FACT" in r.file("content.md") and sig.get("how") == "cut"
-              and sig.get("pages") == 8 and "the file is needed for the rest" in (r.manifest.get("advice") or ""), said(r))
+        advice, n_half = r.manifest.get("advice") or "", sig.get("pages")
+        check("309: a PDF cut at half keeps what its pages that open hold, `ok`, and says it is cut (it said nothing); "
+              "one its MuPDF opens none of is an error that asks for a whole copy",
+              sig.get("how") == "cut"
+              and (r.manifest.get("status") == "ok" and n_half == 8 and "PDF-PAGE-1-FACT" in r.file("content.md")
+                   and "the file is needed for the rest" in advice if n_half else
+                   n_half == 0 and r.manifest.get("status") == "error" and "a whole copy of the file is needed" in advice),
+              said(r))
         p = os.path.join(tmpc, "whole.pdf")
         with open(p, "wb") as fh:
             fh.write(plain_pdf)

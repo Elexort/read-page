@@ -65,12 +65,13 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   parse, and in the MCP server an SVG with a broken picture wrote lines into the JSON-RPC stream. PyMuPDF is imported
   with MuPDF's errors and warnings not shown and its own messages sent nowhere, in the read, the server and the
   screenshots (on stderr they were lines harnesses show with the answer); what MuPDF said of a PDF goes to the
-  trace. A PyMuPDF that cannot turn the display off sends them to stderr.
+  trace, of one it could not open too. A PyMuPDF that cannot turn the display off sends them to stderr.
 - **A cut PDF says it is cut** (KNOWN-ISSUES 309): a PDF that ends without its `%%EOF` was read as if whole - one
   that did not open was `empty`, "no text in it", one that opened with no page a scan with no page to render, one
   MuPDF repaired `ok` with its last pages gone unsaid. `signals.broken_pdf` says cut or damaged and how many pages
   opened; a PDF whose pages hold under 40 words is `error`, and the advice asks for a whole copy (`--refresh` for a
-  server's).
+  server's). Pages that opened with nothing on them - an older MuPDF opens a cut file's page tree as its pages,
+  empty - are no scan's.
 - **An ASS line's vector drawing is no words** (KNOWN-ISSUES 308): between `{\p1}` and `{\p0}` an ASS line draws a
   shape ("m 0 0 l 100 0 100 100"), and its path stood in the transcript; it is left out.
 - **A subtitle file is read in its own encoding** (KNOWN-ISSUES 307): yt-dlp writes a site's file as it came, and it

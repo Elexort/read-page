@@ -7331,6 +7331,29 @@ def pdf_broke(path, pages, why=""):
             "reason": "not a whole PDF: %s%s" % (where, opened)}
 
 
+def mupdf_said():
+    """What MuPDF said of the document it just opened or failed to open - its errors and warnings, which pymupdf_quiet
+    keeps off the answer - into the trace as `pdf.mupdf`, its store emptied. A PDF that did not open says it too: an
+    older MuPDF (1.26) gives up on a PDF cut at half that 1.28 repairs, and its words say why (KNOWN-ISSUES 310)."""
+    try:
+        import pymupdf
+        said = pymupdf.TOOLS.mupdf_warnings()
+    except Exception:                                         # noqa: BLE001  (no PyMuPDF, or one without the store)
+        return
+    if said:
+        trace("pdf.mupdf", said=" | ".join(said.splitlines())[:300])
+
+
+def pdf_drawn(doc):
+    """Does a page of this opened PDF hold a picture or a drawing, what a scan's page or a plan's is made of? A cut
+    file's page that opened with nothing on it holds neither (KNOWN-ISSUES 309). Not known: yes."""
+    try:
+        return any(page.get_images() or _drawings(page) for page in doc)
+    except Exception as e:                                     # noqa: BLE001
+        debuglog.exc("pdf: drawn", e)
+        return True
+
+
 def pdf_advice(info, local, words):
     """The advice line for a PDF that is not whole (pdf_broke): what of it the answer holds, and what gets the rest -
     a whole copy of a file on this machine, another fetch of a server's."""
@@ -7492,12 +7515,10 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 doc = pymupdf.open(path)
                 pages = [p.get_text() for p in doc]
                 text = "\n\f\n".join(pages)
-                said = pymupdf.TOOLS.mupdf_warnings()           # what MuPDF said of the file: the trace's
-                if said:
-                    trace("pdf.mupdf", said=" | ".join(said.splitlines())[:300])
             except Exception as e:                            # noqa: BLE001
                 debuglog.exc("document: converter", e)
                 note = short_reason(e, 160)                   # (its end says what: "... as type pdf")
+            mupdf_said()                                      # what MuPDF said of the file, opened or not: the trace's
             # a PDF that does not open whole - one cut short ends without its %%EOF (KNOWN-ISSUES 309) - says so: it
             # was `empty`, "no text in it", or a scan with no page to render, or `ok` with its last pages unsaid
             broken = pdf_broke(path, len(pages), "" if text is not None else note)
@@ -7508,6 +7529,11 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 if text is not None:
                     return "", note                           # it opens with no page: no scan, nothing to render
             if text is not None and len(text.strip()) < 20 * max(1, len(pages)):
+                if broken and not pdf_drawn(doc):
+                    # a cut file's pages that opened with nothing on them, no picture, no drawing: no scan, nothing to
+                    # render - MuPDF 1.26 opens the page tree in a PDF's first 200 bytes as its 8 empty pages, where
+                    # 1.28 opens none (KNOWN-ISSUES 309)
+                    return "", broken["reason"]
                 # a scan, with --alternate too: no layout tool finds text that is not there (its
                 # three words once stood for the document, and the pages were never read)
                 return text, "no text layer: this PDF is a scan; render pages to images and look at them" + (
