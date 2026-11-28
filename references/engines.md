@@ -621,7 +621,8 @@ the lock's packages in its tree keep their hashes and yt-dlp, which floats, is n
 command line, so no `verify-hashes = false` in a settings file turns any of it off; wheels only; a package with no
 wheel for the machine is left out and named) and, not pinned, yt-dlp in the newest release that has been out three
 days by pypi.org's dates ([video.md](video.md)), Node: the one Playwright's wheel carries in its driver (24.21.0 for the pinned Playwright, at
-least 22.9 as npm 11 asks: nothing of nodejs.org is downloaded, 33-53 MB and 90-180 MB on disk saved) with npm 11.19.1 from
+least 22.9 as npm 11 asks: nothing of nodejs.org is downloaded, 33-53 MB and 90-180 MB on disk saved; it lags nodejs.org's
+own - 24.22.3 then -, so a Node security release comes with a move of the Playwright pin, KNOWN-ISSUES 171) with npm 11.19.1 from
 the registry's tarball, held to the SHA512 pinned in `envsetup.py` (`NPM_INTEGRITY`, the value the registry publishes; an
 https `npm_config_registry` serves it, the hash decides); where there is no such Node - musl has no Playwright wheel, a
 wheel may lack its driver - Node 24.22.3 from nodejs.org checked against its archive's SHA256 pinned in

@@ -60,6 +60,10 @@
 - **A proxy that a setup script gives is said** (KNOWN-ISSUES 362): nothing of `--setup` reads a Windows PAC file, and
   behind one the network step said only that pypi.org did not answer; it now says the proxy comes from a script, and to
   set `HTTPS_PROXY`.
+- **KNOWN-ISSUES 364, planned**: what `secure_home` sees of a Windows home outside the profile is narrow (four group SIDs,
+  a volume with no ACL read as open to all, an icacls checked on its top folder alone). Row 171 says that the Node of
+  Playwright's wheel lags nodejs.org's - a Node security release comes with a move of the Playwright pin - and row 144
+  that tidy acts only in a folder `--setup` took as its own (row 352).
 - **The hop's start-up file has a name of its own** (KNOWN-ISSUES 363): `read-page-start-<pid>` in a shared `/tmp` could
   be another user's file made in advance, which the child could not remove: a read that worked was taken for a failed
   start and read again. The name is the pid and random digits, made new (`O_EXCL`, 0600).
