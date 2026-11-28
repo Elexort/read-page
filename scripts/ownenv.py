@@ -628,7 +628,7 @@ def _handshake_file():
     base = os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or "/tmp"
     # a name of its own, made new: by the pid alone, in a shared /tmp, another user's file of that name made in advance
     # was opened, the child could not remove it (the sticky bit), and a read that worked was taken for a start that
-    # failed - and run again in the machine's Python (KNOWN-ISSUES 363)
+    # failed - and run again in the machine's Python (KNOWN-ISSUES 354)
     path = os.path.join(base, "read-page-start-%d-%s" % (os.getpid(), os.urandom(6).hex()))
     try:
         os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600))

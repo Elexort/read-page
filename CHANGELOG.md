@@ -41,7 +41,7 @@
   that nothing read, so the server's memory grew with each broken SVG for as long as it ran. The store is read after
   each render, whether it rendered or not (`pymupdf.TOOLS.mupdf_warnings()`, which empties it), and what MuPDF said goes
   to the trace as `svg.mupdf`.
-- **yt-dlp's three days are pypi.org's dates, and its files are held to pypi.org's digests** (KNOWN-ISSUES 350, 351):
+- **yt-dlp's three days are pypi.org's dates, and its files are held to pypi.org's digests** (KNOWN-ISSUES 341, 342):
   the release - and every package it brings in beyond the lock - is chosen in pypi.org's own JSON, the newest final
   release out three days that its requirement allows, then installed by its exact version from whatever index is set,
   each file held to the SHA256 pypi.org publishes (`--require-hashes`, the lock as constraints). The three days were
@@ -52,58 +52,58 @@
   old. Where pypi.org does not answer the index's dates decide as before, and an index that gives none is named, with
   no stamp. Tests: unit checks of the choice on a stand-in for pypi.org's JSON, and the real uv against a loopback
   index served as HTML without dates and as JSON with them (12 checks; the code before failed all 12).
-- **`--setup` takes only a folder of its own** (KNOWN-ISSUES 352): one that is not there yet, is empty, or holds its
+- **`--setup` takes only a folder of its own** (KNOWN-ISSUES 343): one that is not there yet, is empty, or holds its
   `setup.json`, `setup.state`, `setup.lock` or `setup-detail.log` - never a drive's root or the home folder itself. Any other
   `READ_PAGE_HOME` is refused before anything in it is touched, the folder and what it holds named, an empty folder or
   the default proposed. It was taken whatever it held: the setup's end deleted a home folder's `envs/*`, `node/*`,
   `python/cpython-*` and `cache/dl` as its own leftovers, said to delete the whole folder to remove it, and on Windows
   handed the agent an `icacls ... /inheritance:r` for it (for `D:\`, the whole drive). Tests: a home-like folder of the
   user's with `envs/`, `node/` and `python/` is refused untouched; an empty, a new and a marked folder are taken.
-- **`setup-detail.log` keeps no secret** (KNOWN-ISSUES 353): the installers' whole output went into it as it came -
+- **`setup-detail.log` keeps no secret** (KNOWN-ISSUES 344): the installers' whole output went into it as it came -
   Playwright prints its download host, user, password and token, before every download; uv a token in an index's path
   when a fetch fails - and the setup's own lines send the agent to that log. Every line written there (by `--setup` and
   by the background yt-dlp update) now shows an address as its scheme, host and port, and leaves out a setting's or a
   header's secret (`_authToken=`, `Authorization:`) and a proxy's `user:password@`. Tests: a stand-in installer printing
   a proxy address with its password and the other forms.
-- **A `--setup` worker ends cleanly, and on Windows its own output no longer overwrites the log** (KNOWN-ISSUES 354):
+- **A `--setup` worker ends cleanly, and on Windows its own output no longer overwrites the log** (KNOWN-ISSUES 345):
   it let go of `ytdlp.lock` twice, and every run's `setup-detail.log` ended with `ValueError: seek of closed file`; on
   Windows a detached child's inherited `open(log, "ab")` handle wrote where the log ended when the child started, so
   that traceback took the place of the run's first lines (its sources, the network and uv steps). The lock is let go of
   once; a detached child gets a handle that can only append. Tests: a worker's real start and end raise nothing and leave
   both locks free; a detached child's late line lands after what was written meanwhile.
-- **A `--setup` that follows another's run says what that run will not do** (KNOWN-ISSUES 355): `--setup --ocr-langs
+- **A `--setup` that follows another's run says what that run will not do** (KNOWN-ISSUES 346): `--setup --ocr-langs
   eng+hin` started while a run worked followed it and ended with exit 0 and "Nothing is missing", no hin fetched. The
   work's state keeps what it was asked (the packs named for it, its copy's pins); a follower asked otherwise names it,
   with the command to run once the run ends, and exits 1.
-- **An interrupted run's uv temporary folders are pruned** (KNOWN-ISSUES 356): a worker killed while uv unpacked left
+- **An interrupted run's uv temporary folders are pruned** (KNOWN-ISSUES 347): a worker killed while uv unpacked left
   `cache/uv/.tmp*` folders (124 MB measured), under the 150 MB line that prunes the cache whole. The next `--setup` runs
   a plain `uv cache prune` where it finds one older than its own start.
-- **The index's way of the yt-dlp update takes the highest release whatever uv is told** (KNOWN-ISSUES 357): with the
+- **The index's way of the yt-dlp update takes the highest release whatever uv is told** (KNOWN-ISSUES 348): with the
   user's `UV_RESOLUTION=lowest` it kept the installed yt-dlp for good while every update "worked"; it says
   `--resolution highest --prerelease disallow` now (measured: the newer release comes under `UV_RESOLUTION=lowest`).
-- **The index's way holds yt-dlp's whole tree to the three days** (KNOWN-ISSUES 351): where pypi.org does not answer,
+- **The index's way holds yt-dlp's whole tree to the three days** (KNOWN-ISSUES 342): where pypi.org does not answer,
   one `--exclude-newer` covers every package beyond the lock - the list of six it named held those alone - and each
   package of the lock is let through by its own date, so that a pin of the lock younger than three days sends uv
   nowhere (measured: a package yt-dlp brings in comes in its release of then; a lock package uploaded an hour before
   comes all the same). `YTDLP_FLOATS` is gone.
-- **`redact` passes `re.split` its `maxsplit` by name** (KNOWN-ISSUES 358): by position it warned under Python 3.13 and
+- **`redact` passes `re.split` its `maxsplit` by name** (KNOWN-ISSUES 349): by position it warned under Python 3.13 and
   3.15 (into the detail log, from the worker), and fails once the argument is keyword-only.
-- **On POSIX the home is the user's alone too** (KNOWN-ISSUES 359): a `READ_PAGE_HOME` of another user's is refused
+- **On POSIX the home is the user's alone too** (KNOWN-ISSUES 350): a `READ_PAGE_HOME` of another user's is refused
   before anything is touched, and one that group or others may write in is made 0700 (said, not mended, on a mount with
   no Unix modes); nothing looked at either, while the environment's bytecode folder in it was refused for that reason.
-- **A uv of the machine's in the pin's place is named** (KNOWN-ISSUES 360): where the pinned uv does not download, the
+- **A uv of the machine's in the pin's place is named** (KNOWN-ISSUES 351): where the pinned uv does not download, the
   one on PATH is used as before, now as a problem the report names with its version and the fix - it said "Nothing is
   missing".
-- **A `setup.json` that cannot be written no longer stops the work before its end** (KNOWN-ISSUES 361): the command
+- **A `setup.json` that cannot be written no longer stops the work before its end** (KNOWN-ISSUES 352): the command
   said "the work stopped after 10 of 10 steps" with everything installed; the work ends, not ok, and names the problem.
-- **A proxy that a setup script gives is said** (KNOWN-ISSUES 362): nothing of `--setup` reads a Windows PAC file, and
+- **A proxy that a setup script gives is said** (KNOWN-ISSUES 353): nothing of `--setup` reads a Windows PAC file, and
   behind one the network step said only that pypi.org did not answer; it now says the proxy comes from a script, and to
   set `HTTPS_PROXY`.
-- **KNOWN-ISSUES 364, planned**: what `secure_home` sees of a Windows home outside the profile is narrow (four group SIDs,
+- **KNOWN-ISSUES 355, planned**: what `secure_home` sees of a Windows home outside the profile is narrow (four group SIDs,
   a volume with no ACL read as open to all, an icacls checked on its top folder alone). Row 171 says that the Node of
   Playwright's wheel lags nodejs.org's - a Node security release comes with a move of the Playwright pin - and row 144
-  that tidy acts only in a folder `--setup` took as its own (row 352).
-- **The hop's start-up file has a name of its own** (KNOWN-ISSUES 363): `read-page-start-<pid>` in a shared `/tmp` could
+  that tidy acts only in a folder `--setup` took as its own (row 343).
+- **The hop's start-up file has a name of its own** (KNOWN-ISSUES 354): `read-page-start-<pid>` in a shared `/tmp` could
   be another user's file made in advance, which the child could not remove: a read that worked was taken for a failed
   start and read again. The name is the pid and random digits, made new (`O_EXCL`, 0600).
 

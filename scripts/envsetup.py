@@ -74,7 +74,7 @@ YTDLP_AGE_DAYS = 3
 # today); the rest of its tree is the lock's (certifi, requests, urllib3, idna, charset-normalizer), and a pin of the lock
 # younger than three days must not make uv go looking for a yt-dlp old enough not to need it. pypi.org's way pins each
 # floating package by its own dates (ytdlp_plans); the index's way holds the whole tree with one date and lets the
-# lock's packages through (ytdlp_command) - a list typed in held the packages it named alone (KNOWN-ISSUES 351).
+# lock's packages through (ytdlp_command) - a list typed in held the packages it named alone (KNOWN-ISSUES 342).
 # tessdata_fast 4.1.0 (Apache-2.0): as good as tessdata_best on 60 readings of English, Russian
 # and mixed text (clean CER 0.19 against 0.48 %, poor scans 39.6 % both), three times faster
 # (0.21 against 0.61 s a picture) and a quarter of the size (8 against 31 MB)
@@ -325,7 +325,7 @@ def asked_of_work(env=None):
 def follower_unmet(st):
     """What this --setup was asked that the run it follows - another --setup's - was not, as a line to print, or ''.
     It used to follow that run and end with its result, exit 0 and "Nothing is missing", its own --ocr-langs (or a
-    newer copy's pins) never applied (KNOWN-ISSUES 355). A state of before Work.asked counts as asked nothing."""
+    newer copy's pins) never applied (KNOWN-ISSUES 346). A state of before Work.asked counts as asked nothing."""
     theirs = st.get("asked") if isinstance(st.get("asked"), dict) else {}
     mine, out = asked_of_work(), []
     if mine["ocr_langs"] and mine["ocr_langs"] != str(theirs.get("ocr_langs") or ""):
@@ -368,7 +368,7 @@ def foreign_home(d):
     made it) - and never when it is a drive's root, the file system's or the home folder itself. Any other is the
     user's, whatever it holds: the end of a --setup took the envs/, node/ and python/ of a home folder or of a drive's
     root for its own and deleted what it did not use, said to delete the whole folder to remove it, and on Windows
-    handed the agent an icacls that took the other accounts' access away from it (KNOWN-ISSUES 352). Nothing is touched
+    handed the agent an icacls that took the other accounts' access away from it (KNOWN-ISSUES 343). Nothing is touched
     here: the folder is listed, no more."""
     full = os.path.normcase(os.path.realpath(os.path.abspath(d)))
     fix = ("Nothing was touched: set READ_PAGE_HOME to an empty folder (a new one: %s, say) or unset it for the default "
@@ -401,7 +401,7 @@ def others_home(d):
     if st.st_uid == os.getuid():
         return ""
     return ("%s belongs to another user (uid %d): the Python, the engines and the browser --setup puts there - which every "
-            "read runs - would be theirs to change (KNOWN-ISSUES 359). Nothing was touched: set READ_PAGE_HOME to a new "
+            "read runs - would be theirs to change (KNOWN-ISSUES 350). Nothing was touched: set READ_PAGE_HOME to a new "
             "folder of your own, or unset it for the default (%s)." % (d, st.st_uid, ownenv.default_home()))
 
 
@@ -410,7 +410,7 @@ def secure_home_posix(d):
     or others may write in - a shared folder, one made with a loose umask - is made 0700 (the folder is the skill's own:
     foreign_home), and where that does not hold - a mount with no Unix modes, WSL's /mnt/c or exFAT - it is said. The
     environment's bytecode folder was already refused there for that reason, while its site-packages ran (KNOWN-ISSUES
-    359). What to say ('' for nothing)."""
+    350). What to say ('' for nothing)."""
     if os.name != "posix":
         return ""
     import stat
@@ -507,7 +507,7 @@ def _append_handle(path):
     """The log, opened for a detached child's own output so that every write of it lands at the end. On Windows a
     handle a child inherits from open(path, "ab") does not append - the append is its parent's C runtime's, and the
     child's writes went where the file ended when the handle was made, over what the work had written there since: the
-    traceback at a worker's end took the place of that run's first lines (KNOWN-ISSUES 354). A handle with
+    traceback at a worker's end took the place of that run's first lines (KNOWN-ISSUES 345). A handle with
     FILE_APPEND_DATA and no FILE_WRITE_DATA appends whatever writes through it. POSIX: O_APPEND, which the child keeps."""
     if os.name != "nt":
         return open(path, "ab")
@@ -911,7 +911,7 @@ def _host_part(rest):
     if "@" in after:
         query = min([i for i in (after.find(c) for c in "?#") if i >= 0] or [len(after)])
         at = after.rfind("@")
-        host = re.split(r"[/?#]", after[at + 1:], maxsplit=1)[0] if at < query else ""   # (by name: KNOWN-ISSUES 358)
+        host = re.split(r"[/?#]", after[at + 1:], maxsplit=1)[0] if at < query else ""   # (by name: KNOWN-ISSUES 349)
     return host if _HOST.fullmatch(host) else ""
 
 
@@ -934,7 +934,7 @@ _BARE_USERINFO = re.compile(r"(?<![\w/@.%+\\-])[\w.%+-]+:[^\s@/:\\]+@(?=[A-Za-z0
 
 def redact_log(text):
     """An installer's own words as setup-detail.log keeps them: every address as redact() has it, a setting's or a
-    header's secret and a proxy's user and password left out (KNOWN-ISSUES 353) - Playwright prints its download host
+    header's secret and a proxy's user and password left out (KNOWN-ISSUES 344) - Playwright prints its download host
     whole before every download, uv a token in an index's path when a fetch fails; the setup's own lines send the agent
     to this log."""
     out = _SECRET_HEADER.sub(lambda m: m.group(1) + m.group(2) + (m.group(3) + " " if m.group(3) else "") + "(not shown)",
@@ -1725,7 +1725,7 @@ class Work:
     def _proxy_hint(self):
         """A machine whose proxy a script gives (Windows' "Use setup script": a PAC file): urllib reads the registry's
         ProxyServer alone and the installers nothing of it, so every step went direct, and the network step said only
-        that pypi.org did not answer (KNOWN-ISSUES 362) - say so, where no proxy is set."""
+        that pypi.org did not answer (KNOWN-ISSUES 353) - say so, where no proxy is set."""
         if any(self.env.get(k) for k in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy")):
             return ""
         pac = windows_auto_proxy()
@@ -1810,7 +1810,7 @@ class Work:
             rc, out = self.sh([other, "--version"], timeout=60)
             seen = out.split(" | ")[-1].strip()[:60] if rc == 0 else "a version it did not say"
             # a problem, not a step's line alone: the report said "Nothing is missing" with any uv in the pin's place,
-            # and how the lock's hashes and the yt-dlp step's flags are read is that uv's (KNOWN-ISSUES 360)
+            # and how the lock's hashes and the yt-dlp step's flags are read is that uv's (KNOWN-ISSUES 351)
             self.lack("uv", "uv %s did not download (%s): this machine's %s is used instead (%s)" % (
                 UV_VERSION, why or "?", seen, other), "readpage.py --setup again once pypi.org - or the index "
                                                        "UV_DEFAULT_INDEX names - gives uv %s" % UV_VERSION)
@@ -2290,7 +2290,7 @@ class Work:
         temps = stale_uv_temps(path, self.t0)
         if uv and temps:
             # an interrupted run's uv leaves its half-unpacked wheels in .tmp folders that no environment holds and that
-            # the line below did not reach (eight of them, 124 MB, after a kill in the engines step: KNOWN-ISSUES 356);
+            # the line below did not reach (eight of them, 124 MB, after a kill in the engines step: KNOWN-ISSUES 347);
             # a plain prune removes them, and what nothing points to, and nothing else (measured: 123.1 MiB)
             rc, out = self.sh([uv, "cache", "prune"], timeout=300)
             self.log("uv cache prune (%d of uv's temporary folders of an earlier run): %s" % (len(temps), out[-120:]))
@@ -2386,7 +2386,7 @@ class Work:
     def save_info(self):
         """setup.json, which reads go by: True when it was written. Past _write_json's tries (on Windows a reader that
         holds the file - an antivirus scanning it) the error left go() before its last state, and the command said the
-        work had stopped after 10 of 10 steps, everything installed (KNOWN-ISSUES 361); the work goes on to its end now,
+        work had stopped after 10 of 10 steps, everything installed (KNOWN-ISSUES 352); the work goes on to its end now,
         and says it as a problem."""
         try:
             _write_json(os.path.join(self.d, "setup.json"), self.info)
@@ -2520,7 +2520,7 @@ def ytdlp_command(uv, py, now=None, floor="", lock=None):
     yt-dlp that rejects it). The packages of the environment's own lock stay at its pins, held to its hashes
     (--verify-hashes: no settings file switches that off). The date holds the whole tree beyond the lock - one
     --exclude-newer, so that a package a newer yt-dlp brings in is held too (a list of six held those alone: KNOWN-ISSUES
-    351) - and lets each package of the lock through by a date past now (--exclude-newer-package), so that a pin of the
+    342) - and lets each package of the lock through by a date past now (--exclude-newer-package), so that a pin of the
     lock younger than the cutoff sends uv nowhere; what floats is checked by TLS alone, from an https index
     (refuse_plain_http). An index that gives no upload dates (PEP 700) leaves every file out under it: ytdlp_update says so."""
     t = now or time.time()
@@ -2532,7 +2532,7 @@ def ytdlp_command(uv, py, now=None, floor="", lock=None):
     except OSError:
         lock_text = ""
     # the highest release, and no pre-release, whatever the user's uv settings say: UV_RESOLUTION=lowest held yt-dlp at
-    # its floor while every update "worked", UV_PRERELEASE=allow would take a nightly (KNOWN-ISSUES 357)
+    # its floor while every update "worked", UV_PRERELEASE=allow would take a nightly (KNOWN-ISSUES 348)
     cmd = [uv, "pip", "install", "--python", py, "--upgrade", YTDLP + (">=" + floor if floor else ""),
            "-c", lock or LOCK_FILE, "--only-binary", ":all:", "--verify-hashes", "--resolution", "highest",
            "--prerelease", "disallow", "--exclude-newer", cutoff]
@@ -2547,7 +2547,7 @@ def _vkey(v):
 
 
 # yt-dlp's release, and the packages that come with it beyond the lock, by pypi.org's own dates and digests (KNOWN-ISSUES
-# 350, 351). The three days were uv's --exclude-newer-package against the index, and uv leaves out a file whose upload
+# 341, 342). The three days were uv's --exclude-newer-package against the index, and uv leaves out a file whose upload
 # time the index does not give (PEP 700 is the simple API's JSON form): behind Aliyun's, Tencent Cloud's, Huawei Cloud's
 # or Douban's mirror (HTML, no dates - measured 2026-11-28; TUNA, USTC, SJTU and BFSU give them) a first install found no
 # yt-dlp at all, and an environment that had one kept it for good while every update "succeeded". And the date held a

@@ -348,7 +348,7 @@ check("it never goes backwards (a floor: the version installed), under the lock 
       and "yt-dlp[default]" in envsetup.ytdlp_command("uv", "py")
       and not any(x.startswith("yt-dlp[default]>=") for x in envsetup.ytdlp_command("uv", "py")), "")
 check("the date holds the whole tree beyond the lock (one --exclude-newer: a package a newer yt-dlp brings in too, row "
-      "351) and lets every package of the lock through by a date past now, so a pin of the lock younger than three days "
+      "342) and lets every package of the lock through by a date past now, so a pin of the lock younger than three days "
       "cannot send uv back to an old yt-dlp",
       sorted(pkgs) == sorted("%s=%s" % (n, until) for n in envsetup.lock_pins(lock)) and "certifi=%s" % until in pkgs
       and not [p for p in pkgs if p.startswith("yt-dlp=")], "%d let through" % len(pkgs))
@@ -708,7 +708,7 @@ def fake_sh(rc):
 
 
 def offline_json(url, timeout=30):
-    """fetch_json where nothing answers: these checks are the index's way, which pypi.org's dates go before (row 350)."""
+    """fetch_json where nothing answers: these checks are the index's way, which pypi.org's dates go before (row 341)."""
     raise OSError("no network in this check")
 
 
@@ -3530,7 +3530,7 @@ attempt("ci_install's `suites` prints those words (not its own condition on the 
         lambda: ("suite_words(" in inspect.getsource(ci_install.cmd_suites)
                  and "no result line" not in inspect.getsource(ci_install.cmd_suites), "cmd_suites"))
 
-# ---------------------------------------------------------------- yt-dlp by pypi.org's dates and digests (rows 350, 351)
+# ---------------------------------------------------------------- yt-dlp by pypi.org's dates and digests (rows 341, 342)
 # The three days were the index's dates (uv's --exclude-newer-package): an index that gives none - an HTML one, Aliyun's,
 # Tencent Cloud's, Huawei Cloud's, Douban's mirror - left every file of yt-dlp out, and a package a newer yt-dlp brings
 # in beyond the six packages it named had no date at all. The release is chosen by pypi.org's JSON now, then installed by its exact
@@ -3784,7 +3784,7 @@ if uvx:
 else:
     print("SKIP yt-dlp by pypi.org's dates against a local index (no uv here: --setup's, or one on PATH)")
 
-# ---------------------------------------------------------------- the folder --setup takes as its own (row 352)
+# ---------------------------------------------------------------- the folder --setup takes as its own (row 343)
 # READ_PAGE_HOME was taken whatever it held: the end of a --setup deleted the envs/, node/ and python/ of a home folder or
 # a drive's root, said to delete the whole folder to remove it, and on Windows handed the agent an icacls for it. A folder
 # is --setup's only when it is new, empty, or holds one of its marks; any other is refused before anything is touched.
@@ -3846,7 +3846,7 @@ attempt("... and never a drive's root or the home folder itself, whatever they h
         lambda: ("root of a drive" in envsetup.foreign_home(fg_root)
                  and "home folder" in envsetup.foreign_home(os.path.expanduser("~")), envsetup.foreign_home(fg_root)[:140]))
 
-# ---------------------------------------------------------------- setup-detail.log keeps no secret (row 353)
+# ---------------------------------------------------------------- setup-detail.log keeps no secret (row 344)
 # The detail log kept an installer's own words whole - Playwright prints its download host, user and password and all,
 # before every download; uv a token in an index's path when a fetch fails - and the setup's own lines send the agent to it.
 d353, w353 = work_in("rp-env-detail-")
@@ -3878,7 +3878,7 @@ attempt("... and the background yt-dlp update's lines in it neither (its command
                              and "Pr0xyPa55" in r_[2], str([s for s in secrets353 if s in bg353.getvalue()])))(
             envsetup._bg_run(bg353, installer353, 60, None, d353)))
 
-# ---------------------------------------------------------------- a worker's end, and its own output (row 354)
+# ---------------------------------------------------------------- a worker's end, and its own output (row 345)
 # Every worker let go of ytdlp.lock twice - at go()'s end and in its own finally - and the second raised ValueError: a
 # traceback ended every --setup, past the worker's letting go of setup.lock. And on Windows the worker's own output (that
 # traceback, a warning, a crash) went where the log ended when it started, over the lines the run had written since.
@@ -3925,7 +3925,7 @@ attempt("a detached child's own output lands at the end of the log, after what t
         lambda: (lines354 == ["line 0, before the child"] + ["line %d of the run's own log" % n_ for n_ in range(1, 6)]
                  + ["CHILD LATE LINE"], "%s | %s" % (how354, lines354)))
 
-# ---------------------------------------------------------------- a --setup that follows another's run (row 355)
+# ---------------------------------------------------------------- a --setup that follows another's run (row 346)
 # A --setup started while another's run works follows that run and ended with its result - exit 0, "Nothing is missing" -
 # its own --ocr-langs never applied (measured: hin not fetched, and the step's line said to name it with --ocr-langs).
 st355 = {"run": "theirs", "pid": os.getpid(), "started": time.time() - 30, "updated": time.time(), "steps": 10,
@@ -3958,7 +3958,7 @@ asked355 = real_read_json(os.path.join(d355, "setup.state")).get("asked") or {}
 attempt("the work's state keeps what it was asked: the packs named for it, and its copy's pins",
         lambda: (asked355 == {"ocr_langs": "eng+hin", "pins": pins355}, str(asked355)))
 
-# ---------------------------------------------------------------- an interrupted run's uv temporary folders (row 356)
+# ---------------------------------------------------------------- an interrupted run's uv temporary folders (row 347)
 # A worker killed in its engines step left eight .tmp folders in uv's cache (half-unpacked pymupdf, numpy, onnxruntime,
 # playwright, tesserocr, Pillow: 124 MB), under the 150 MB line that prunes the cache: nothing removed them.
 def uv_tmp_run(age):
@@ -3988,7 +3988,7 @@ attempt("... and none is run where there are none, or only folders newer than th
         lambda: (["UV", "cache", "prune"] not in cmds356_new and ["UV", "cache", "prune"] not in cmds356_none,
                  "%s %s" % (cmds356_new, cmds356_none)))
 
-# ---------------------------------------------------------------- the index's way of yt-dlp, whatever uv is told (row 357)
+# ---------------------------------------------------------------- the index's way of yt-dlp, whatever uv is told (row 348)
 # UV_RESOLUTION=lowest (passed on, named in the log) made `--upgrade yt-dlp[default]>=<installed>` take the installed one:
 # yt-dlp stayed at its floor while every update "worked" (measured with uv 0.13.9: 2098.1.1 kept, 2099.1.1 old enough).
 cmd357 = envsetup.ytdlp_command("UV", "PY", now=YT_NOW, floor="2026.10.26", lock="L")
@@ -3998,7 +3998,7 @@ attempt("the index's way of yt-dlp takes the highest release whatever uv is told
                  and "--prerelease" in cmd357 and cmd357[cmd357.index("--prerelease") + 1] == "disallow",
                  " ".join(cmd357[5:12])))
 
-# ---------------------------------------------------------------- the index's way holds the whole tree (row 351)
+# ---------------------------------------------------------------- the index's way holds the whole tree (row 342)
 # Where pypi.org does not answer, the index's dates decide - and they held six packages named in a list, so a package a
 # newer yt-dlp brings in came in its upload of an hour ago there as well. One date holds the whole tree now, and the lock's
 # packages are let through: one of them uploaded an hour ago still comes.
@@ -4086,7 +4086,7 @@ if uvx:
 else:
     print("SKIP the index's way of yt-dlp against a local index (no uv here: --setup's, or one on PATH)")
 
-# ---------------------------------------------------------------- redact on a Python that deprecates more (row 358)
+# ---------------------------------------------------------------- redact on a Python that deprecates more (row 349)
 # redact passed re.split its maxsplit by position: a DeprecationWarning since Python 3.13 (this machine's `python` is
 # 3.15), which the worker - it is __main__ - printed into the detail log, and a TypeError once the argument is
 # keyword-only. An address with an @ past its first / is the one that reaches that line.
@@ -4100,7 +4100,7 @@ with warnings.catch_warnings():
 attempt("redact reads an address whose password holds a / with no warning under any Python (re.split's maxsplit by name)",
         lambda: (not e358 and "https://host.example:8443" in r358 and "pa/ss" not in r358, e358 or r358))
 
-# ---------------------------------------------------------------- a POSIX home of the user's alone (row 359)
+# ---------------------------------------------------------------- a POSIX home of the user's alone (row 350)
 # Windows makes a home others may write in its user's alone (secure_home); on POSIX nothing looked at the home's owner or
 # mode, while the environment's bytecode folder in it was refused for exactly that (a .pyc planted by someone else).
 if os.name == "posix":
@@ -4121,7 +4121,7 @@ else:
     attempt("off POSIX neither the owner's nor the mode's rule says anything (Windows has secure_home)",
             lambda: (envsetup.secure_home_posix(tempfile.gettempdir()) == "" and envsetup.others_home("C:\\") == "", ""))
 
-# ---------------------------------------------------------------- a uv of the machine's in the pin's place (row 360)
+# ---------------------------------------------------------------- a uv of the machine's in the pin's place (row 351)
 # Where the pinned uv did not download, the one on PATH was used - any version - with a step's line alone: the report said
 # "Nothing is missing", and how the lock's hashes and the yt-dlp step's flags are read was that uv's.
 d360, w360 = work_in("rp-env-pathuv-")
@@ -4146,7 +4146,7 @@ attempt("a uv of the machine's in the pin's place is a problem the report names,
         lambda: (ok360 and prob360 and "0.4.30" in prob360[0]["why"] and envsetup.UV_VERSION in prob360[0]["why"]
                  and envsetup.UV_VERSION in prob360[0]["fix"], "%s | %s" % (note360[:100], prob360)))
 
-# ---------------------------------------------------------------- setup.json that cannot be written (row 361)
+# ---------------------------------------------------------------- setup.json that cannot be written (row 352)
 # The end of the work wrote setup.json with no guard: past _write_json's tries (a reader holding the file on Windows) the
 # error left go() before its last state - "the work stopped after 10 of 10 steps", exit 1, everything installed.
 class ReadyWork(envsetup.Work):
@@ -4190,7 +4190,7 @@ attempt("a setup.json that cannot be written does not end the work before its la
         lambda: (not err361 and st361.get("done") is True and st361.get("ok") is False
                  and [p for p in w361.problems if p.get("part") == "setup.json"], err361 or str(st361.get("ok"))))
 
-# ---------------------------------------------------------------- a proxy a script gives (row 362)
+# ---------------------------------------------------------------- a proxy a script gives (row 353)
 # Windows' "Use setup script" (AutoConfigURL, a PAC file) is a proxy urllib does not read (it takes ProxyServer alone) and
 # the installers neither: every step went direct, and the network step said only that pypi.org did not answer.
 d362, w362 = work_in("rp-env-pac-")
@@ -4223,7 +4223,7 @@ attempt("a proxy a script gives (Windows' setup script, a PAC file) is said wher
         lambda: (not ok362 and "comes from a script" in note362 and "HTTPS_PROXY" in note362
                  and "wpad.corp.example" in note362 and "comes from a script" not in note362b, note362[-200:]))
 
-# ---------------------------------------------------------------- the hop's start-up file (row 363)
+# ---------------------------------------------------------------- the hop's start-up file (row 354)
 # The hop's start-up file had a name by the pid alone, in TMPDIR, TEMP or /tmp: in a shared /tmp another user's file of
 # that name made in advance was opened, the child could not remove it (the sticky bit), and the parent took a read that
 # worked for a start that failed - and read again in the machine's Python.

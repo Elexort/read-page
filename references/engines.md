@@ -616,7 +616,7 @@ when the folder is not there yet, is empty, or holds one of its marks (`setup.js
 `envsetup.SETUP_MARKS`), and never a drive's root or the home folder itself; any other is refused, named, with an
 empty folder or the default proposed, before anything in it is touched (`foreign_home`) - the end of a `--setup` deletes
 in its folder what it no longer uses (the environments, Pythons and Nodes of before), and a home folder's `envs/`,
-`node/` and `python/` were taken for its own (KNOWN-ISSUES 352). On Windows that folder's path
+`node/` and `python/` were taken for its own (KNOWN-ISSUES 343). On Windows that folder's path
 is at most 120 characters (`WIN_HOME_MAX`): Windows refuses a DLL that carries a manifest - every `.pyd`, curl_cffi's
 and tesserocr's libraries - by a path over 250 (WinError 206, measured), the environment's deepest, curl_cffi's
 libcurl-impersonate, lies 116 inside the folder, and 14 are left for pins that move it; `--setup` refuses a longer
@@ -627,7 +627,7 @@ terminal or for the next agent ("not set up" in that agent's shell, every read i
 Python), and its files were slow to reach (a stat 372 us against 49 in the home folder). What it
 installs: uv 0.13.9 from
 PyPI (its wheel's SHA256 pinned in `envsetup.py` for every platform: `UV_WHEEL_SHA256`; where it does not download, the
-uv on PATH is used and named as a problem with its version - KNOWN-ISSUES 360), CPython 3.13.18 from python-build-standalone through it (`--no-bin
+uv on PATH is used and named as a problem with its version - KNOWN-ISSUES 351), CPython 3.13.18 from python-build-standalone through it (`--no-bin
 --no-registry`: nothing outside the folder), a venv `envs/py<version>-<lock hash>` with the 54
 packages of `scripts/setup-lock.txt` (each file pinned by SHA256: `tools/setup_lock.py` writes the lock
 with `--generate-hashes` - 1 092 files, about 94 KB - and the set is the lock's: `--require-hashes` on the
@@ -698,12 +698,12 @@ path as UTF-8 ("surrogates not allowed"), so the folder goes by its own name fro
 The work runs detached (its parent, a launcher, is gone at once), so a harness that kills a
 long command does not kill it; its own output goes to the end of `setup-detail.log` (on Windows by a handle that can
 only append: one inherited from `open(log, "ab")` wrote where the log ended when the work started, over that run's
-first lines - KNOWN-ISSUES 354); the command shows its progress for 100 s (in a terminal, to the
+first lines - KNOWN-ISSUES 345); the command shows its progress for 100 s (in a terminal, to the
 end), then says it goes on in the background, and a second `--setup` follows the one at work - a run
 that is not done, whose process is alive and whose `setup.lock` is held; nothing else counts as one. The work's
 state keeps what it was asked (`asked`: the packs `--ocr-langs` named, its copy's pins), and a follower asked
 otherwise says what that run will not do and what to run once it ends, and exits 1 - it ended 0 with that run's
-"Nothing is missing", its own `--ocr-langs` never applied (KNOWN-ISSUES 355).
+"Nothing is missing", its own `--ocr-langs` never applied (KNOWN-ISSUES 346).
 The command follows the work's `setup.state`, which the work replaces whole (a temp file, then a rename). A read that
 finds nothing is no news - on Windows one made while the file is replaced cannot open it - so what was seen last
 stands: only a run never seen within 20 s is one that did not start, and where the work's lock is let go, or a run
@@ -747,7 +747,7 @@ full reads of 8 local corpus pages were p50 1.38 -> 1.49 s there).
 Python gone) is skipped with the reason in `--caps`. A Python that is there, starts and fails (an
 antivirus quarantined a DLL it needs, a damaged standard library) is found out by a start-up
 handshake: the parent makes a file (a name of its own, made new - one by the pid alone, in a shared `/tmp`, could be
-another user's made in advance: KNOWN-ISSUES 363), the child removes it as its first act, and a child that ends with
+another user's made in advance: KNOWN-ISSUES 354), the child removes it as its first act, and a child that ends with
 the file still there never reached the read - the read then runs in the machine's Python, the answer
 has an `environment:` line (`signals.env_failed`) and `--caps` says why. On POSIX, where `exec` leaves
 nothing to fall back from, the first run of each build is a child (`setup.started` in the folder
@@ -777,7 +777,7 @@ afterwards would take out too - and a yt-dlp update does it for yt-dlp and yt-dl
 environment's lock was not kept, `uv cache prune --ci` removes every wheel (527 MB to 15 MB measured; the
 environment keeps its files by their links, and the next update fetches what it needs again). What a plain prune
 does remove is uv's temporary folders: a run cut off while uv unpacked left `.tmp*` folders of half-unpacked wheels
-(124 MB measured), and the next `--setup` prunes where it finds one older than its own start (KNOWN-ISSUES 356). Outside the
+(124 MB measured), and the next `--setup` prunes where it finds one older than its own start (KNOWN-ISSUES 347). Outside the
 folder: the read cache (`read-page` in the temp folder) and, for a read that does not run in the
 environment, the skill's bytecode there.
 
@@ -790,7 +790,7 @@ an older `setup.json`'s lines as well. `setup-detail.log`, where the installers'
 it either (`envsetup.redact_log`): every address as above, a setting's or a header's secret (npm's `_authToken=`, an
 `Authorization:`), a proxy's `user:password@` written with no scheme - Playwright prints its download host whole
 before every download, uv a token in an index's path when a fetch fails, and the setup's own lines send the agent to
-that log (KNOWN-ISSUES 353). No source is used in plain `http://` (`refuse_plain_http`): an index (uv's
+that log (KNOWN-ISSUES 344). No source is used in plain `http://` (`refuse_plain_http`): an index (uv's
 variables, `PIP_INDEX_URL`, pip's `index-url` - pip's own `trusted-host` is no licence here), an entry of a list
 (`UV_EXTRA_INDEX_URL`, `UV_INDEX`, `UV_FIND_LINKS`), our Python's mirror or list (`UV_PYTHON_INSTALL_MIRROR`,
 `UV_PYTHON_DOWNLOADS_JSON_URL`, which holds the hashes uv checks the Python against), the browser's host (Playwright's
@@ -827,7 +827,7 @@ modify what is made in it: `--setup` makes such a home its user's, SYSTEM's and 
 inheritance off) where the folder is the skill's own - new, or holding nothing but what `--setup` keeps -, else says so
 with that command. On POSIX a home that belongs to another user is refused before anything is touched, and one that
 group or others may write in is made 0700, and said (`others_home`, `secure_home_posix`: nothing looked at either, while
-the environment's bytecode folder in it was refused for that very reason - KNOWN-ISSUES 359). On a POSIX mount with no
+the environment's bytecode folder in it was refused for that very reason - KNOWN-ISSUES 350). On a POSIX mount with no
 Unix modes (WSL's `/mnt/c`, exFAT) every folder looks writable by all, so the home's mode is said there, not mended,
 and the environment's bytecode folder fails its check: the temp folder's is used then (reads had run with no bytecode,
 0.25 s more each).
