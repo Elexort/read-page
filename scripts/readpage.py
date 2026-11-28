@@ -6396,7 +6396,7 @@ def tables_note(change=None):
     process it is starting (its pid the read's until the process takes it)."""
     root = cache_root()
     path = os.path.join(root, TABLES_NOTE + ".json")
-    entries = []
+    entries, tmp = [], path + ".%d.tmp" % os.getpid()
     try:
         os.makedirs(root, exist_ok=True)
         with file_lock(os.path.join(root, TABLES_NOTE + ".lock"), seconds=2.0):
@@ -6406,18 +6406,41 @@ def tables_note(change=None):
             except (OSError, ValueError):
                 entries = []
             was = len(entries)
-            # (a model process ends with its read: an entry whose read has gone is gone, its pid maybe another's)
-            entries = [e for e in entries if hostmem.alive(int(e.get("pid") or 0))
-                       and hostmem.alive(int(e.get("read") or 0))]
+            # (a model process ends with its read: an entry whose read has gone is gone; a pid is the same process
+            # only with the start it had - Windows soon gives a pid to another, which kept a hold of 512 MB alive
+            # for as long as that one ran, KNOWN-ISSUES 342)
+            entries = [e for e in entries if hostmem.alive(int(e.get("pid") or 0), e.get("pid_at"))
+                       and hostmem.alive(int(e.get("read") or 0), e.get("read_at"))]
             changed = change is not None and change(entries) is not False
             if changed or len(entries) != was:
-                tmp = path + ".%d.tmp" % os.getpid()
                 with open(tmp, "w", encoding="utf-8") as fh:
                     json.dump(entries, fh)
-                os.replace(tmp, path)
+                # a reader that has the file open - a virus scanner - refuses the replace on Windows for as long as it
+                # holds it: tried for 2 s, as setup.state is (the update was lost at once, and its .tmp stayed)
+                for k in range(41):
+                    try:
+                        os.replace(tmp, path)
+                        break
+                    except PermissionError:
+                        if k == 40:
+                            raise
+                        time.sleep(0.05)
     except (OSError, ValueError, TypeError) as e:
         debuglog.exc("pdf: tables note", e)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
     return entries
+
+
+_READ_STARTED = []                     # this read's process's start, once (hostmem.started): the note's entries hold it
+
+
+def read_started():
+    if not _READ_STARTED:
+        _READ_STARTED.append(hostmem.started(os.getpid()))
+    return _READ_STARTED[0]
 
 
 def tables_fit(ram, commit, hold=False):
@@ -6452,8 +6475,8 @@ def tables_fit(ram, commit, hold=False):
         got["n"] = min(counts) if counts else None
         if not hold or got["n"] == 0:
             return False
-        entries.append({"pid": os.getpid(), "read": os.getpid(), "ram": ram, "commit": commit, "said": False,
-                        "hold": True})
+        entries.append({"pid": os.getpid(), "read": os.getpid(), "pid_at": read_started(), "read_at": read_started(),
+                        "ram": ram, "commit": commit, "said": False, "hold": True})
         _TABLES["held"] = True
         return True
     tables_note(count)
@@ -6535,7 +6558,8 @@ class TablesWorker:
         _CHILDREN.add(self.p)
         self.q = _TABLES["q"]                    # one queue for the read's processes: an answer names its own
         threading.Thread(target=self._pump, daemon=True).start()
-        me = {"pid": self.p.pid, "read": os.getpid(), "ram": TABLES_PROC_RAM, "commit": TABLES_PROC_COMMIT, "said": False}
+        me = {"pid": self.p.pid, "read": os.getpid(), "pid_at": hostmem.started(self.p.pid), "read_at": read_started(),
+              "ram": TABLES_PROC_RAM, "commit": TABLES_PROC_COMMIT, "said": False}
 
         def take(entries):
             for k, e in enumerate(entries):

@@ -961,6 +961,39 @@ try:
             check("341: the read's end closes three model processes still loading in one wait, not 2 s one after "
                   "another", len(loading) == 3 and took < 3.5 and all(w.p.poll() is not None for w in loading)
                   and not mod3._TABLES["pool"], "%.1f s, %s" % (took, [w.p.poll() for w in loading]))
+            # KNOWN-ISSUES 342: the note knew a process by its pid alone - Windows soon gives a dead read's pid to
+            # another process, and a hold of 512 MB lived as long as that one -; a replace a scanner refused lost the
+            # update at once and left its .tmp
+            note_path = os.path.join(mod3.cache_root(), mod3.TABLES_NOTE + ".json")
+            mine = mod3.hostmem.started(os.getpid())
+            if mine is None:
+                check.skip("342: a pid another process got", "the OS gives no process start here")
+            else:
+                with open(note_path, "w", encoding="utf-8") as fh:
+                    json.dump([{"pid": os.getpid(), "read": os.getpid(), "pid_at": mine + 1, "read_at": mine + 1,
+                                "ram": 1 << 30, "commit": 1 << 30, "said": False, "hold": True}], fh)
+                left = mod3.tables_note()
+                check("342: a note's entry whose pid now belongs to a process that started later is dropped (it was "
+                      "kept, 1 GB counted against every read)", left == [], str(left)[:160])
+            refused, real_replace = [0], os.replace
+
+            def refusing(src, dst):
+                if refused[0] < 3:
+                    refused[0] += 1
+                    raise PermissionError(13, "the file is held by another process")
+                return real_replace(src, dst)
+            mod3.os.replace = refusing
+            try:
+                mod3.tables_note(lambda entries: entries.append({"pid": os.getpid(), "read": os.getpid(), "pid_at": mine,
+                                                                 "read_at": mine, "ram": 1, "commit": 1, "said": True}))
+            finally:
+                mod3.os.replace = real_replace
+            with open(note_path, encoding="utf-8") as fh:
+                kept = json.load(fh)
+            tmps = [n for n in os.listdir(os.path.dirname(note_path)) if n.startswith(mod3.TABLES_NOTE) and n.endswith(".tmp")]
+            check("342: a note's replace refused three times (a scanner that holds the file) is tried again, and no .tmp "
+                  "stays (the update was lost, its .tmp left)", len(kept) == 1 and not tmps, "%s %s" % (kept, tmps))
+            mod3.tables_note(lambda entries: entries.__setitem__(slice(None), []))
             for k in ("RP_STUB_SLEEP", "READ_PAGE_TEST_MEMORY", "READ_PAGE_TEST_CPUS"):
                 os.environ.pop(k, None)
             os.environ["RP_STUB_NOLOAD"] = "1"

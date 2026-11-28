@@ -6,7 +6,8 @@ it is now - less the commit charge; Linux under vm.overcommit_memory = 2: Commit
 bytes left under a limit of the read's own or None (a Windows job's memory limit less its use, a Linux cgroup's)}.
 READ_PAGE_TEST_MEMORY (a JSON object of those keys, in bytes) stands in for them, with "fake": true - figures that
 do not fall as processes take memory, so the caller subtracts its processes itself: the suites and the measurements
-never squeeze a machine's memory to see the rule work. alive(pid) tells whether a process still runs.
+never squeeze a machine's memory to see the rule work. alive(pid, since) tells whether a process still runs - the
+same one, when started(pid) was kept as `since`.
 
 cgroup_room() and cgroup_cpus(): a Linux cgroup's memory room and CPU quota, each the smallest from the read's cgroup
 up to the root (KNOWN-ISSUES 284, 285). READ_PAGE_TEST_CGROUP names a folder that stands for / (proc/self/cgroup and
@@ -251,10 +252,49 @@ def _macos():
     return {"phys": free * size, "commit": None, "room": None}
 
 
-def alive(pid):
-    """Does process `pid` still run?"""
+def started(pid):
+    """When process `pid` started, as the OS keeps it - Windows: its creation time (100 ns since 1601), Linux: its start
+    in clock ticks after boot (/proc/PID/stat) -, or None where the OS will not say (macOS here, a process gone): what
+    tells a process from a later one that got its pid (KNOWN-ISSUES 342)."""
+    if not pid or pid <= 0:
+        return None
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.OpenProcess.restype = wintypes.HANDLE
+            k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            k32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+            k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            h = k32.OpenProcess(0x1000, False, pid)              # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return None
+            try:
+                t = [wintypes.FILETIME() for _ in range(4)]
+                if not k32.GetProcessTimes(h, *(ctypes.byref(x) for x in t)):
+                    return None
+                return (t[0].dwHighDateTime << 32) | t[0].dwLowDateTime
+            finally:
+                k32.CloseHandle(h)
+        if sys.platform.startswith("linux"):
+            with open("/proc/%d/stat" % pid, encoding="ascii", errors="replace") as fh:
+                data = fh.read()
+            return int(data[data.rindex(")") + 2:].split()[19])   # field 22, its name (in parentheses) set aside
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+    return None
+
+
+def alive(pid, since=None):
+    """Does process `pid` still run - and, `since` given (started() of it when it was noted), is it the same process,
+    not a later one that got its pid?"""
     if not pid or pid <= 0:
         return False
+    if since is not None:
+        now_started = started(pid)
+        if now_started is not None and now_started != since:
+            return False
     if os.name == "nt":
         import ctypes
         from ctypes import wintypes

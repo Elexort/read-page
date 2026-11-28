@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The note of the model processes knows a process by its pid and its start** (KNOWN-ISSUES 342): Windows soon gives
+  a dead process's pid to another, and a hold of 512 MB lived on for as long as that one ran; a refused replace lost
+  the note's update and left its `.tmp`. An entry keeps when its process started, the replace is tried for 2 s, and
+  the `.tmp` goes.
 - **The read's end closes its model processes in one wait** (KNOWN-ISSUES 341): they were closed one after another,
   2 s each, and one still loading its model held the read's exit those 2 s; they are told together, waited for 2 s in
   all, then killed, and one that has not loaded by the step's end goes with those at a page.
