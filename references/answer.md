@@ -31,10 +31,13 @@ The lines around the text are dry (KNOWN-ISSUES 276): above it `── content.m
 alike (a text that fits too: `from line 1 of 12`) - where the text starts, never where it ends: a harness that keeps
 an answer's head and cuts its tail (Zed) cuts `next:` off and leaves this line, and a model took an end named there
 for the end of what it had seen (KNOWN-ISSUES 279); below it, while text remains, `── next: line 127 of 389 ──` and
-on a line of its own the command that reads on, literal, so that a model copies it whole - the interpreter by the
-name the agent started the skill with (the first process's, which the environment's child is handed), `-X utf8`,
-the script by its absolute path in forward slashes, the address and `--dir` in double quotes, the flags that matter
-if the saved copy is gone and the page is read again (`--allow-external`, `--force-external`, `--alternate`,
+on a line of its own the command that reads on, literal, so that a model copies it whole - the interpreter as a
+shell reaches the one that ran the first process (which hands it to the environment's child): its name, `python` or
+`python3`, where the PATH leads that name to it, else its absolute path in forward slashes when it needs no quotes,
+else on Windows `py -3.13`, else the words (a read started by `py -3.13`, where `python` is the Store's alias, said
+`python`: KNOWN-ISSUES 293), `-X utf8`, the script by its absolute path in forward slashes, the address and `--dir`
+in double quotes, the flags that matter if the saved copy is gone and the page is read again (`--allow-external`,
+`--force-external`, `--alternate`,
 `--deny-images`, `--download`, `--dir`; never `--refresh`, whose every step would fetch again and could move the
 lines, `--clear-cookies`, `--screenshots`, `--ocr` or `--json`), then `--from N --chars C --file F`, C the size this
 answer was asked with. It runs as printed in bash, PowerShell 5.1 and 7 and cmd; its paths are in the locale's letters,

@@ -369,9 +369,10 @@ try:
     n = next_line(first.text)
     line = last_rows(first.text, 1)[0]
     python_name = getattr(ownenv, "python_name", None) or (lambda exe: "python")   # none before KNOWN-ISSUES 276
-    me = python_name(sys.executable)
-    argv_want = [me, "-X", "utf8", slashed(SCRIPT), srv.url("/long"), "--dir", slashed(first.dir), "--from", str(n),
-                 "--chars", "7900", "--file", "content.md"]
+    # the interpreter as a shell reaches this one from this PATH: its name, its path or `py -X.Y` (KNOWN-ISSUES 293)
+    me = (getattr(ownenv, "python_command", None) or python_name)(sys.executable)
+    argv_want = me.split() + ["-X", "utf8", slashed(SCRIPT), srv.url("/long"), "--dir", slashed(first.dir), "--from",
+                              str(n), "--chars", "7900", "--file", "content.md"]
     check("next: two lines - where it goes on, then the command that reads on, alone and literal",
           last_rows(first.text, 2) == ["── next: line %d of %d ──" % (n, len(saved)),
                                        '%s -X utf8 "%s" "%s" --dir "%s" --from %d --chars 7900 --file content.md' % (
@@ -401,12 +402,56 @@ try:
           [a for a in k_argv if a.startswith("--") and a not in ("--dir", "--from", "--chars", "--file")]
           == ["--allow-external", "--deny-images", "--download"], str(k_argv[5:])[:140])
     named = run_read(srv.url("/long"), env={"READ_PAGE_PYTHON_NAME": "python3.99"})
-    check("... the interpreter by the name the agent started the skill with, which the first process hands on",
+    check("... the interpreter as the first process names it, which it hands on to the environment's child",
           last_rows(named.text, 1)[0].startswith("python3.99 -X utf8 "), last_rows(named.text, 1)[0][:60])
     check("ownenv.python_name: a Python as a command names it, \"python\" for anything else",
           [python_name(x) for x in ("C:\\Python313\\python.exe", "/usr/bin/python3.12", "", "C:\\x\\pythonw.exe",
                                            "/opt/app/host", "C:\\a b\\my python.exe", "pypy3")]
           == ["python", "python3.12", "python", "python", "python", "python", "pypy3"], "")
+    # ... and the name only where a shell's PATH leads it to this interpreter (KNOWN-ISSUES 293): after a read started
+    # by `py -3.13`, `python` was the Store's alias ("Python was not found") in every shell
+    command_of = getattr(ownenv, "python_command", None)
+    got_cmd = []
+    if command_of:
+        real_which = ownenv.shutil.which
+        nt = os.name == "nt"
+        here, spaced = ("C:\\Py313\\python.exe", "C:\\Program Files\\Py313\\python.exe") if nt else \
+            ("/opt/py313/bin/python3", "/opt/my py/bin/python3")
+        cases = ((here, {"python" if nt else "python3": here}), (here, {}),
+                 (here.replace("python", "pythonw") if nt else here, {"python" if nt else "python3": here}),
+                 (spaced, {"py": "C:\\Windows\\py.exe"} if nt else {}))
+        try:
+            for exe, on_path in cases:
+                ownenv.shutil.which = lambda name, on_path=on_path: on_path.get(name)
+                got_cmd.append(command_of(exe))
+        finally:
+            ownenv.shutil.which = real_which
+    want_cmd = ["python", "C:/Py313/python.exe", "python", "py -%d.%d" % sys.version_info[:2]] if os.name == "nt" else \
+        ["python3", "/opt/py313/bin/python3", "python3", ""]
+    check("ownenv.python_command: the name where PATH leads it here, else the path, else py -X.Y, else none",
+          got_cmd == want_cmd, str(got_cmd))
+    fake_dir = tempfile.mkdtemp(prefix="rp-fake-python-")
+    fake_name = python_name(sys.executable)
+    if os.name == "nt":
+        # an interpreter's name that leads elsewhere, as the Store's alias does: find.exe, "Parameter format not correct"
+        shutil.copy2(os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "find.exe"),
+                     os.path.join(fake_dir, fake_name + ".exe"))
+    else:
+        with open(os.path.join(fake_dir, fake_name), "w") as fh_:
+            fh_.write("#!/bin/sh\necho not this python >&2\nexit 3\n")
+        os.chmod(os.path.join(fake_dir, fake_name), 0o755)
+    e_fake = dict(e_sh, PATH=fake_dir + os.pathsep + os.environ.get("PATH", ""))
+    other = run_read(srv.url("/long"), env={"PATH": e_fake["PATH"]})
+    o_line = last_rows(other.text, 1)[0]
+    n_o = next_line(other.text)
+    check("... a read whose interpreter `%s` on PATH does not reach: the command does not name it so" % fake_name,
+          bool(n_o) and not o_line.startswith(fake_name + " "), o_line[:90])
+    for name, run in shells():
+        p = run(o_line, e_fake)
+        said = p.stdout.decode("utf-8", "replace")
+        check("... and runs as printed in %s with that PATH: the next block, from line %s" % (name, n_o),
+              p.returncode == 0 and "── content.md: from line %s of " % n_o in said,
+              "rc %s %s" % (p.returncode, (said.split("\n")[0] or p.stderr.decode("utf-8", "replace")[-120:])[:100]))
     dollar = run_read(srv.url("/dollar$sign"))
     n_d = next_line(dollar.text)
     check("an address a shell reads inside double quotes ($): the words instead of the command",

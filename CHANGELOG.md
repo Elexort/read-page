@@ -8,6 +8,11 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The command under `next:` reaches the interpreter that ran the read** (KNOWN-ISSUES 293): it named the
+  interpreter's file (`python`), and after a read started by `py -3.13` - python.org's installer leaves `python` to the
+  Store's alias - every shell answered "Python was not found". The name stands only where the PATH leads it to this
+  interpreter; else its absolute path in forward slashes when it needs no quotes, else `py -X.Y` on Windows, else the
+  words.
 - **A path with “ ” or „ gets the words under `next:`, not a command PowerShell splits** (KNOWN-ISSUES 292):
   PowerShell takes the three for `"`, and a Windows file name holds them where it cannot hold `"`; the command split
   such a path in PowerShell 5.1 and 7 and read its second half as a host. They join `"`, `$`, the backtick, `%` and the
@@ -119,7 +124,8 @@ of a skill's folder (483 files in a development copy, 64 in a clean clone of the
   go on in words (`── next: line 127 of 389 → the same command with --from 127 --file content.md ──`), and agents
   copy what an answer names. Now, above the text, every block alike: `── content.md: lines 53-190 of 474 ──`; below
   it, while text remains, `── next: line 191 of 474 ──` and on a line of its own the command, literal - the
-  interpreter by the name the agent started the skill with (handed from the first process to the environment's),
+  interpreter by its file's name (handed from the first process to the environment's; since KNOWN-ISSUES 293 the name
+  only where the PATH leads it to that interpreter, else its path or `py -X.Y`),
   `-X utf8`, the script by its absolute path in forward slashes, the address and `--dir` in double quotes, the flags
   that matter if the page is read again (`--allow-external`, `--force-external`, `--alternate`, `--deny-images`,
   `--download`, `--dir`; never `--refresh`, `--clear-cookies`, `--screenshots`, `--ocr`, `--json`), `--from N --chars

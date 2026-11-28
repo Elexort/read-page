@@ -11633,9 +11633,13 @@ CARRIED = (("allow_external", "--allow-external"), ("force_external", "--force-e
 
 
 def agent_python():
-    """The interpreter's name the agent started the skill with: the first process's sys.executable, which the
-    environment's child is handed (READ_PAGE_PYTHON_NAME, ownenv.use), else this one's; "python" when none."""
-    return ownenv.python_name(os.environ.get("READ_PAGE_PYTHON_NAME") or sys.executable)
+    """The interpreter as the command under next: names it, so that a shell reaches the one that ran the first
+    process (ownenv.python_command): its name where PATH leads that name to it, else its plain path, else `py -X.Y`;
+    the environment's child is handed it (READ_PAGE_PYTHON_NAME, ownenv.use: "-" for none), else this process's own.
+    "" when no shell could name it: the answer gives the words (KNOWN-ISSUES 293)."""
+    handed = os.environ.get("READ_PAGE_PYTHON_NAME")
+    got = handed if handed is not None and ownenv.HANDED.match(handed) else ownenv.python_command(sys.executable)
+    return "" if got == "-" else got
 
 
 def slashed(path):
@@ -11673,13 +11677,14 @@ def cli_command(args, frm, chars, view):
     # bytes are lone surrogates in UTF-8 mode, which no answer prints - it stopped with an internal error (278)
     folder = in_letters(slashed(args.dir)) if getattr(args, "dir", "") else ""
     script = in_letters(slashed(__file__))
-    if not target or not script or (getattr(args, "dir", "") and not folder) \
+    python = agent_python()                               # "" when no shell could reach the interpreter by a name
+    if not target or not script or not python or (getattr(args, "dir", "") and not folder) \
             or any(UNQUOTABLE.search(x) for x in (script, target, folder)):
         return "the same command with " + tail
     flags = [flag for key, flag in CARRIED if getattr(args, key, False)]
     if folder:
         flags.append('--dir "%s"' % folder)
-    return '%s -X utf8 "%s" "%s" %s' % (agent_python(), script, target, " ".join(flags + [tail]))
+    return '%s -X utf8 "%s" "%s" %s' % (python, script, target, " ".join(flags + [tail]))
 
 
 def cli_next_for(args, chars):
