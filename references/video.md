@@ -64,7 +64,9 @@ infos could be read (163 YouTube, 31 RuTube, 5 Bilibili), as an English, a Russi
   news video whose original is `zh-Hant`; a yt-dlp of today names the original). The speaker's language is the audio
   marked original (`format_note`), else `language`. A speech recognition made from audio in another language is the
   speech of a dub, not the speaker's words: the answer names it (`subtitles en, automatic, of a dub (original audio
-  zh-Hant)`), and a track in the speaker's own language - human, or speech recognition - is read before it. One
+  zh-Hant)`), and a track in the speaker's own language - human, or speech recognition - is read before it. Every
+  automatic track's name has `: numbers and names may be misheard` beside it in the answer's first line
+  (KNOWN-ISSUES 327). One
   more case is named the same way and is not a dub: a video whose original audio YouTube takes for English while
   it is spoken in Russian lists the Russian recognition as a dub's (1 of the 39 videos with a dub's recognition).
   Of the 39: 7 have only that (5 Chinese news videos with the English dub's, a Portuguese one and the Russian talk

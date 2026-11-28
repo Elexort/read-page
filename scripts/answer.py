@@ -325,6 +325,13 @@ def outline(lines, budget, block_starts):
     return rows if _bytes(rows) <= budget else _thinned(rows, budget)
 
 
+def outline_title(lines):
+    """The outline's first line: its rows are the text's headings, or - a text with fewer than two - where each block
+    of the answer's size starts, with its first words (outline). Under "(line, heading)" those rows were taken for the
+    document's structure: a sheet of one heading listed its rows (`59 | Jun.14 | 1,9 | ...`, KNOWN-ISSUES 321)."""
+    return "outline (line, heading):" if len(headings(lines)) >= 2 else "outline (line, first words):"
+
+
 def _human(n):
     for unit in ("B", "KB", "MB", "GB"):
         if n < 1024 or unit == "GB":
@@ -360,7 +367,11 @@ def header(manifest, view, total_lines, text_bytes):
             first.append("maybe a fragment: the text is %d%% of the page's words" % min(100, int(round(cover * 100)))
                          if isinstance(cover, (int, float)) else "maybe a fragment")
         if content.get("track"):
-            first.append(str(content["track"]))     # a video's subtitle track: human, automatic or machine-translated
+            # a video's subtitle track: human, automatic or machine-translated. Speech recognition's words are what it
+            # heard: a model could not tell whether a recipe's "0.2 g of active dry yeast" was said or misheard, so an
+            # automatic track says so beside it (KNOWN-ISSUES 327); content.track stays the track's name
+            track = str(content["track"])
+            first.append(track + (": numbers and names may be misheard" if ", automatic" in track else ""))
     stamp = str((m.get("archive") or {}).get("timestamp") or "")
     if stamp:
         first.append("archive copy of %s-%s-%s" % (stamp[:4], stamp[4:6], stamp[6:8]) if len(stamp) >= 8
@@ -534,7 +545,7 @@ def not_found(manifest, text, view, quote, budget=BUDGET_BYTES, max_lines=BUDGET
         n = window(lines, n, budget - _bytes(head) - POINTER_BYTES, max(1, max_lines - len(head) - 3),
                    chars - _chars(head) - POINTER_BYTES)
     rows = outline(lines, room, starts) if lines else []
-    return "\n".join(head + say + (["outline (line, heading):"] + rows if rows else [])) + "\n"
+    return "\n".join(head + say + ([outline_title(lines)] + rows if rows else [])) + "\n"
 
 
 def _lines(view, first, total):
@@ -595,13 +606,15 @@ def render(manifest, text, view, start, next_hint, budget=BUDGET_BYTES, max_line
                 n = window(lines, n, block, room_l - 3, block_c)
             return out
 
+        title = outline_title(lines)
+
         def outline_rows(room_o):
             rows = outline(lines, room_o, starts_after(window(lines, 1, block - OUTLINE_BYTES, room_l - 60,
                                                               block_c - OUTLINE_BYTES)))
             first_end = window(lines, 1, block - _bytes(rows) - 30, room_l - len(rows) - 4,
                                block_c - _chars(rows) - 30)
             rows = outline(lines, room_o, starts_after(first_end))
-            return ["outline (line, heading):"] + rows if rows else []
+            return [title] + rows if rows else []
 
         def first_fits(rows):
             # the text's first line whole beside the outline, under the longest pointer this text can have

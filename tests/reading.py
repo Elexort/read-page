@@ -431,6 +431,17 @@ try:
     plain = dict(dub, formats=[], language="en")
     got, calls, _ = yt_video(plain, on8, lang="en")
     check("... but an English talk is still `subtitles en, automatic`", got[2] == "subtitles en, automatic", got[2])
+    # an automatic track's numbers and names are speech recognition's: the answer says so beside the track - a model
+    # could not tell whether a recipe's "0.2 g of active dry yeast" was said or misheard (KNOWN-ISSUES 327); a
+    # person's track says nothing of it
+    h_auto = mod8.answer.header({"status": "ok", "content": {"engine": "video:yt-dlp", "track": got[2]}},
+                                "content.md", 75, 7188)[0]
+    h_human = mod8.answer.header({"status": "ok", "content": {"engine": "video:yt-dlp", "track": "subtitles en"}},
+                                 "content.md", 75, 7188)[0]
+    check("... and its answer says beside the track that numbers and names may be misheard; a person's track's says "
+          "nothing (it said `subtitles en, automatic` alone)",
+          "· subtitles en, automatic: numbers and names may be misheard ·" in h_auto and "misheard" not in h_human,
+          h_auto)
     human_zh = dict(dub, subtitles={"zh-Hant": [{"ext": "vtt", "name": "Chinese (Traditional)"}]})
     on_zh = dict(on8, **{"zh-Hant": {"vtt": cues("人工字幕")}})
     got, calls, _ = yt_video(human_zh, on_zh, lang="en")

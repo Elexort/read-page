@@ -56,8 +56,10 @@ line (a model copied the decoration) is left out and named on the `ignored:` lin
 The outline takes at most 2.5 KB: every heading when they fit, else the deepest levels that fit.
 When those give fewer than 12 rows and there are finer headings (a book's title over its chapters),
 the next level down is listed thinned evenly, the coarser rows kept, and a last row says how many
-are between them; a text without headings gets a row per block, thinned the same way. Either way
-the outline reaches the end of the text.
+are between them; a text with fewer than two headings gets a row per block, thinned the same way, under
+`outline (line, first words):` - each row is where a block starts and its first words, a sheet's row or a
+paragraph's start, not a heading (under `(line, heading)` a model took a sheet's rows for the document's
+structure, KNOWN-ISSUES 321). Either way the outline reaches the end of the text.
 
 Every answer fits the smallest output an agent harness passes on (7 900 characters, 9 980 bytes, 495
 lines), as the harnesses' code had it on 2026-11-26: Cline's SDK runtime (its CLI, and the VS Code
@@ -380,8 +382,11 @@ as `transcript.vtt` (WEBVTT whatever format the site sent: VTT, SRT, TTML, ASS .
 track: `subtitles en` (a person's), `subtitles fr, automatic` (speech recognition), `subtitles en, automatic, of a dub
 (original audio zh-Hant)` (the recognition of a dubbed video's default audio, which is not the speaker's words: a
 track in the speaker's own language, a human one first, is read before it), `subtitles zh-Hans, machine-translated
-from en` (YouTube's translation, read only when the video has no other track); `content.track`. No captions: the
-page is read as a page (description, comments) and `signals.no_transcript` says why. A video that has not
+from en` (YouTube's translation, read only when the video has no other track); `content.track`. An automatic track
+adds `: numbers and names may be misheard` there (speech recognition's words are what it heard - a model could not
+tell whether a recipe's "0.2 g of active dry yeast" was said or misheard, KNOWN-ISSUES 327); `content.track` keeps
+the name alone. No captions: the page is read as a page (description, comments) and
+`signals.no_transcript` says why. A video that has not
 premiered, a site that refused the request and any other error yt-dlp stopped with are said in its words, with an
 `advice:` (`--refresh` once the video has started or the refusal has passed; [video.md](video.md)). A video URL
 that is itself a file (`.mp4`) is `media_only`; one cut in transit is `error` or `too_large`, with how much arrived,
