@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **After a cut, `--from` takes a few words of the line, with no `$` in them** (KNOWN-ISSUES 303): SKILL.md said to go
+  on with `--from "<words of the last line before the gap>"`, and a model that quotes a whole line hands its shell a `$`
+  or a backtick inside double quotes, which bash and PowerShell expand before the skill sees the words: the quote is not
+  found. SKILL.md now asks for a few words in a row of that line, as they stand, that hold no `$`, backtick or quote.
+  Measured with Haiku under the harnesses' cuts as rows 279-280 were: on a page whose cut falls in a line of `${...}`
+  the old wording missed 1 quote of 6 and the new one none; a first new wording, "letters and digits", made the model
+  take a `$` or a comma out of the middle of its quote, and missed 2 of 7.
 - **A paywalled article gets no teasers of other articles from page.md** (KNOWN-ISSUES 336): on Bloomberg Law's article
   the block rule put back the paywall's prompt and five other articles' summaries, which read as the article's and
   raised `cover` over a third, so `paywalled: the rest of the article is not in the page` did not come. On a page that
