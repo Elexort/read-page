@@ -121,6 +121,8 @@ class _Clock(object):
 
 LOST = "lost in the cut"     # tabs.STATE["cut"], which this module, the standard library alone, does not import
 SHEET_ROWS = 1048576         # a sheet's rows at most: past it no row is lost
+LOST_SHEETS = 50             # a cut workbook's lost sheets named one by one, then how many more (_cut_lost)
+SHEETS_AT_MOST = 10000       # a workbook's sheets at most (LibreOffice's own limit): a count past it is not believed
 
 
 def lost_marker(kind, name, *props):
@@ -2751,19 +2753,28 @@ def _cut_lost(zf, b, sheet):
     settings, meta = zf.read("settings.xml", 16 << 20), zf.read("meta.xml", 1 << 20)
     names = []
     if settings:
-        box = re.search(rb'config:name="Tables"\s*>(.*?)</config:config-item-map-named>', settings, re.S)
-        names = [html.unescape(n.decode("utf-8", "replace"))
-                 for n in re.findall(rb'<config:config-item-map-entry\s+config:name="([^"]*)"', box.group(1))] \
-            if box else []
+        # the list's opening found once and its end once: a pattern that took what lies between them scanned the rest
+        # of the file again from each opening with no end - 10.7 s for 398 KB, quadratic, and the readers' process
+        # was stopped with the workbook's text (KNOWN-ISSUES 339)
+        start = re.search(rb'config:name="Tables"\s*>', settings)
+        end = settings.find(b"</config:config-item-map-named>", start.end()) if start else -1
+        names = [html.unescape(n.decode("utf-8", "replace")) for n in re.findall(
+            rb'<config:config-item-map-entry\s+config:name="([^"]*)"', settings[start.end():end])] if end >= 0 else []
     seen = set(s.name for s in b.begun)
     gone = [n for n in names if n not in seen]
     # settings.xml lists the sheets by name, not in the workbook's order: they all follow the last sheet that arrived,
-    # and among themselves they have no order the file knows - said, when there are several
-    out.extend(lost_marker("sheet", n, *(("order unknown",) if len(gone) > 1 else ())) for n in gone)
+    # and among themselves they have no order the file knows - said, when there are several. LOST_SHEETS of them are
+    # named, then how many more: a file's list made a marker of each, as many as it said (KNOWN-ISSUES 339)
+    out.extend(lost_marker("sheet", n, *(("order unknown",) if len(gone) > 1 else ())) for n in gone[:LOST_SHEETS])
+    if len(gone) > LOST_SHEETS:
+        out.append(lost_marker("sheet", "", "%d more" % (len(gone) - LOST_SHEETS)))
     count = re.search(rb'meta:table-count="(\d{1,6})"', meta or b"")
-    if count and not names:
+    if count and not names and int(count.group(1)) <= SHEETS_AT_MOST:
         total = int(count.group(1))           # how many, not which: each by its place
-        out.extend(lost_marker("sheet", "the sheet %d of %d" % (k, total)) for k in range(len(begun) + 1, total + 1))
+        lost = list(range(len(begun) + 1, total + 1))
+        out.extend(lost_marker("sheet", "the sheet %d of %d" % (k, total)) for k in lost[:LOST_SHEETS])
+        if len(lost) > LOST_SHEETS:
+            out.append(lost_marker("sheet", "", "%d more of the %d" % (len(lost) - LOST_SHEETS, total)))
     return out
 
 

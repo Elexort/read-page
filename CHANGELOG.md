@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A cut workbook names 50 lost sheets at most, and its list is found in linear time** (KNOWN-ISSUES 339): a meta.xml
+  that said 999 999 sheets made a marker of each - 56 MB from a 10 KB file -, and a settings.xml list with no end was
+  searched again from each opening, quadratic: an 11 KB file had the reader stopped with its text. The rest is
+  counted in one marker, a count past 10 000 is not believed, and the list is found by its opening and its end.
 - **An ODS's tree holds 100 000 elements, an open row 1 024 cells** (KNOWN-ISSUES 338): the streaming reader built
   what was open whole until it ended - a row of 800 000 cells took 365 MB, 300 000 named ranges 173 MB, and up to its
   512 MB of XML some 2.7 GB, with no limit on macOS. Past 1 024 cells a row keeps their text alone, joined to its last

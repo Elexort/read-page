@@ -510,6 +510,40 @@ md, info = hostile("named-ranges.ods", "ods", secs=BUDGET, wall=BUDGET + 30, mb=
 check("338: 300 000 named ranges before a sheet are held 100 000 at most, the sheet after them read and the rest said "
       "left out (they were held whole: 173 MB)", fine(info, BUDGET, 120) and "AFTER-THE-NAMED-RANGES" in md
       and "left out" in info.get("note", ""), show(info, md[-80:]))
+# a cut workbook's lost sheets, as the file names them: a meta.xml that says 999 999 sheets made a marker of each, 56
+# MB from a file of 10 KB, and a settings.xml whose list never ends was searched again from each opening - quadratic:
+# 10.7 s at 398 KB, and the readers' process stopped with the workbook's text (KNOWN-ISSUES 339). The copy of an archive
+# cut in its content.xml (what zip_salvage writes), read as "ods+cut"
+def cut_ods(name, extra):
+    rows = "".join("<table:table-row><table:table-cell><text:p>CUT-SHEET-ROW %d</text:p></table:table-cell>"
+                   "<table:table-cell><text:p>%d</text:p></table:table-cell></table:table-row>" % (k, k) for k in range(300))
+    content = ('<?xml version="1.0" encoding="UTF-8"?><office:document-content %s><office:body><office:spreadsheet>'
+               '<table:table table:name="First">%s</table:table><table:table table:name="Second">%s' % (NS_ODS, rows, rows))
+    with zipfile.ZipFile(path(name), "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/vnd.oasis.opendocument.spreadsheet")
+        for member, text in extra:
+            z.writestr(member, text)
+        z.writestr("content.xml", content[:-200])
+    return path(name)
+
+
+said339 = []
+for count in (9999, 999999):
+    cut_ods("lost-count.ods", [("meta.xml", '<?xml version="1.0"?><office:document-meta %s><office:meta><meta:document-'
+                                'statistic meta:table-count="%d"/></office:meta></office:document-meta>' % (NS_ODS, count))])
+    md, info = hostile("lost-count.ods", "ods+cut", secs=BUDGET, wall=BUDGET + 30, mb=300)
+    said339.append((count, fine(info, 10, 300) and "CUT-SHEET-ROW 299" in md, md.count("[sheet · lost in the cut"),
+                    "[sheet · lost in the cut · 9947 more of the 9999]" in md, show(info, md[-100:])))
+check("339: a cut workbook whose meta.xml says 9 999 sheets names 50 lost sheets and counts the rest, and one that says "
+      "999 999 (past LibreOffice's 10 000) is not believed (it made a marker of each: 56 MB)",
+      said339[0][1:4] == (True, 51, True) and said339[1][1:3] == (True, 0), str(said339)[:300])
+cut_ods("lost-list.ods", [("settings.xml", '<?xml version="1.0"?><office:document-settings %s><office:settings>%s'
+                           '</office:settings></office:document-settings>' % (
+                               NS_ODS, '<config:config-item-map-named config:name="Tables">' * 8000))])
+md, info = hostile("lost-list.ods", "ods+cut", secs=BUDGET, wall=BUDGET + 30, mb=300)
+check("339: a cut workbook whose settings.xml list never ends is read in linear time, its text whole (each opening was "
+      "searched to the end: 10.7 s, and the reader stopped)", fine(info, 3, 300) and "CUT-SHEET-ROW 299" in md,
+      show(info, md[-80:]))
 odt("big.odt", "".join("<text:p>%s</text:p>" % ("a word of the long text " * 20) for _k in range(70000)))
 md, info = hostile("big.odt", "odt", secs=60, wall=120, mb=800)
 check("an ODT over its 32 MB is said to be cut at its size limit, not to be XML that breaks",
