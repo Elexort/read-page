@@ -860,7 +860,7 @@ def _host_part(rest):
     if "@" in after:
         query = min([i for i in (after.find(c) for c in "?#") if i >= 0] or [len(after)])
         at = after.rfind("@")
-        host = re.split(r"[/?#]", after[at + 1:], 1)[0] if at < query else ""
+        host = re.split(r"[/?#]", after[at + 1:], maxsplit=1)[0] if at < query else ""   # (by name: KNOWN-ISSUES 358)
     return host if _HOST.fullmatch(host) else ""
 
 

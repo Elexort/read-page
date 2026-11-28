@@ -4086,6 +4086,20 @@ if uvx:
 else:
     print("SKIP the index's way of yt-dlp against a local index (no uv here: --setup's, or one on PATH)")
 
+# ---------------------------------------------------------------- redact on a Python that deprecates more (row 358)
+# redact passed re.split its maxsplit by position: a DeprecationWarning since Python 3.13 (this machine's `python` is
+# 3.15), which the worker - it is __main__ - printed into the detail log, and a TypeError once the argument is
+# keyword-only. An address with an @ past its first / is the one that reaches that line.
+import warnings                                          # noqa: E402
+with warnings.catch_warnings():
+    warnings.simplefilter("error")
+    try:
+        r358, e358 = envsetup.redact("index https://user:pa/ss@host.example:8443/simple and http://a.example/x?k=a@b"), ""
+    except Exception as e_:                              # noqa: BLE001
+        r358, e358 = "", "%s: %s" % (type(e_).__name__, e_)
+attempt("redact reads an address whose password holds a / with no warning under any Python (re.split's maxsplit by name)",
+        lambda: (not e358 and "https://host.example:8443" in r358 and "pa/ss" not in r358, e358 or r358))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)

@@ -47,6 +47,8 @@
   package of the lock is let through by its own date, so that a pin of the lock younger than three days sends uv
   nowhere (measured: a package yt-dlp brings in comes in its release of then; a lock package uploaded an hour before
   comes all the same). `YTDLP_FLOATS` is gone.
+- **`redact` passes `re.split` its `maxsplit` by name** (KNOWN-ISSUES 358): by position it warned under Python 3.13 and
+  3.15 (into the detail log, from the worker), and fails once the argument is keyword-only.
 
 ## 0.5.0 - 2026-11-28
 
