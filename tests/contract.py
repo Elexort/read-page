@@ -413,6 +413,16 @@ try:
           n_d and last_rows(dollar.text, 2) == ["── next: line %d of %d ──" % (n_d, len(lines_of(dollar))),
                                                 "the same command with --from %d --chars 7900 --file content.md" % n_d],
           str(last_rows(dollar.text, 1))[:120])
+    # PowerShell takes “ ” and „ for `"`, and Windows forbids `"` in a file name, so a name holds them: in PowerShell
+    # 5.1 and 7 the command split the path there and read its second half as a host (KNOWN-ISSUES 292)
+    curly = os.path.join(tempfile.mkdtemp(prefix="rp-curly-"), "Report “Final” „de“.html")
+    with open(curly, "wb") as fh_:
+        fh_.write(ROUTES["/long"][2])
+    cq = run_read(curly)
+    n_c = next_line(cq.text)
+    check("a path holding PowerShell's other double quotes (“ ” „): the words instead of the command",
+          bool(n_c) and last_rows(cq.text, 1) == ["the same command with --from %d --chars 7900 --file content.md" % n_c],
+          str(last_rows(cq.text, 1))[:120])
     stray = run_read(srv.url("/long"), "--from", "5", "--file", "content.md", "──", reuse=first)
     ign = next((ln for ln in stray.text.split("\n") if ln.startswith("ignored: ")), "")
     check("a stray ── (a model copied the decoration): left out and named, the read goes on",

@@ -11621,10 +11621,11 @@ def remember_view(workdir, view, start=None):
         pass
 
 
-# What a shell reads inside double quotes - $ and a backtick (bash, PowerShell), % (cmd) -, the quote that ends them,
+# What a shell reads inside double quotes - $ and a backtick (bash, PowerShell), % (cmd) -, the quote that ends them
+# and the three PowerShell takes for it (“ ” „: a file name holds them, as Windows forbids `"`; KNOWN-ISSUES 292),
 # a backslash bash may take for an escape, and what no command line holds: an address, a folder or a script path
 # with one gets the command in words (cli_command)
-UNQUOTABLE = re.compile(r'["$`%\\\x00-\x1f\x7f�\ud800-\udfff]')
+UNQUOTABLE = re.compile(r'["“”„$`%\\\x00-\x1f\x7f�\ud800-\udfff]')
 # the flags that matter if the saved copy is gone and the page is read again; never --refresh (each step would fetch
 # again and the lines could move), --clear-cookies, --screenshots, --ocr or --json
 CARRIED = (("allow_external", "--allow-external"), ("force_external", "--force-external"), ("alternate", "--alternate"),

@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A path with “ ” or „ gets the words under `next:`, not a command PowerShell splits** (KNOWN-ISSUES 292):
+  PowerShell takes the three for `"`, and a Windows file name holds them where it cannot hold `"`; the command split
+  such a path in PowerShell 5.1 and 7 and read its second half as a host. They join `"`, `$`, the backtick, `%` and the
+  backslash in what gets the words.
 - **MCP: an address that is a flag reaches no child** (KNOWN-ISSUES 291): `read_url` gave its `url` to the reader's
   child as the first argument, so `url="--setup"` (or the typo `--stup`) ran the installer without the user's yes,
   and `--version` or `--caps` answered as flags. An address that starts with `-` is refused before any child, and the
