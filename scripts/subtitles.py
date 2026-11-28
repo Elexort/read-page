@@ -7,12 +7,14 @@ is what `transcript.vtt` holds. YouTube's automatic VTT rolls (each cue repeats 
 gives its lines once, and `unrolled(vtt)` is what `transcript.vtt` holds then. Nothing here installs or runs
 anything; the standard library only.
 """
+import bisect
 import json
 import re
-from html import unescape
+from html import escape, unescape
 
-# the text formats a track may come in, in the order one is taken when a language has several
-EXTS = ("vtt", "srt", "sbv", "ttml", "dfxp", "srv3", "srv2", "srv1", "json3", "ass", "ssa", "lrc")
+# the text formats a track may come in, in the order one is taken when a language has several; `xml` is a TTML or a
+# YouTube XML track whose address yt-dlp took its extension from (an EBU-TT file at `...deu.xml`, KNOWN-ISSUES 305)
+EXTS = ("vtt", "srt", "sbv", "ttml", "dfxp", "srv3", "srv2", "srv1", "json3", "ass", "ssa", "lrc", "xml")
 
 
 def track_of(name):
@@ -51,7 +53,7 @@ def _stamp(sec):
 
 def _clean(text):
     """One line of cue text: tags, ASS overrides and entities out, the break between lines a space."""
-    s = re.sub(r"<br\s*/?>", " ", text or "", flags=re.I)
+    s = re.sub(r"<(?:[\w.-]+:)?br\s*/?>", " ", text or "", flags=re.I)   # <tt:br/> too: "Abend,meine" was glued
     s = re.sub(r"<[^<>]*>", "", s)
     s = re.sub(r"\{\\[^}]*\}", "", s)                        # {\an8}, {\i1}: an override, never a word
     s = unescape(s)
@@ -62,9 +64,17 @@ def _clean(text):
 
 
 def _vtt(cues):
-    """WEBVTT from [(start, end, text)]; "" when there is no cue with text."""
-    out = ["%s --> %s\n%s" % (_stamp(a), _stamp(max(a, b)), t) for a, b, t in cues if t]
+    """WEBVTT from [(start, end, text)]; "" when there is no cue with text. A cue's text is escaped as WebVTT asks
+    (&, <, >): it is read back tags first, then entities, and "x < y and y > z" lost "< y and y >" (KNOWN-ISSUES 306)."""
+    out = ["%s --> %s\n%s" % (_stamp(a), _stamp(max(a, b)), escape(t, quote=False)) for a, b, t in cues if t]
     return "WEBVTT\n\n" + "\n\n".join(out) + "\n" if out else ""
+
+
+def cue_text(line):
+    """A WebVTT cue's line as text: its tags out (<c>, <i>, a word's time <00:00:01.500>), then its entities (&amp;,
+    &gt;&gt;, &lt;), which stayed in the transcript as they were written (KNOWN-ISSUES 306). In that order, so an
+    escaped tag stays text."""
+    return unescape(re.sub(r"<[^>]+>", "", line or ""))
 
 
 def _split_blocks(raw):
@@ -94,20 +104,58 @@ def _sbv(raw):
     return cues
 
 
+_PREFIX = r"(?:[\w.-]+:)?"          # an element's namespace prefix: EBU-TT-D writes every one <tt:...>
+
+
+def _attr(attrs, name):
+    """An attribute's value, in either quote; None without it."""
+    m = re.search(r"""(?<![\w:.-])%s\s*=\s*(?:"([^"]*)"|'([^']*)')""" % name, attrs)
+    return None if m is None else (m.group(1) if m.group(1) is not None else m.group(2))
+
+
+def _times(attrs, tick):
+    """(begin, end) of an element's own attributes, in seconds: end from `end`, else begin + `dur`; (None, None)
+    without a begin."""
+    b, e, d = (_attr(attrs, k) for k in ("begin", "end", "dur"))
+    if b is None:
+        return None, None
+    start = _seconds(b, tick)
+    return start, (_seconds(e, tick) if e is not None else start + (_seconds(d, tick) if d is not None else 0.0))
+
+
 def _ttml(raw):
-    m = re.search(r'tickRate="(\d+)"', raw)
+    """TTML and DFXP: each paragraph a cue. Elements are known by their local name - EBU-TT-D, the broadcasters' TTML,
+    writes <tt:p>, and none of its cues was read (KNOWN-ISSUES 305) - and attributes in either quote. A paragraph's time
+    is its own, else its spans' (the first begin, the last end); a time under a <div> that has one is relative to it,
+    as TTML says; a paragraph with no time at all keeps its text, at the end of the cue before it."""
+    m = re.search(r"""tickRate\s*=\s*["'](\d+)["']""", raw)
     tick = float(m.group(1)) if m else 10000000.0
+    # where each <div> that has a begin opens and closes: a paragraph's time under it is relative to it
+    marks, open_ = [], []
+    for d in re.finditer(r"<(/?)%sdiv\b([^<>]*)>" % _PREFIX, raw):
+        if d.group(1):
+            if open_:
+                open_.pop()
+        elif not d.group(2).rstrip().endswith("/"):
+            open_.append(_times(d.group(2), tick)[0] or 0.0)
+        marks.append((d.start(), sum(open_)))
+    at = [k for k, _off in marks]
     cues = []
     # a paragraph's text holds no other <p>: one that no </p> closes is not scanned to the end of the file from
     # each of a run of them (8 000 took 5 s), and an opening's attributes stop at the next tag
-    for p in re.finditer(r"<p\b([^<>]*)>((?:(?!</?p\b).)*)</p>", raw, re.S):
-        attrs = p.group(1)
-        b, e, d = (re.search(r'\b%s="([^"]+)"' % k, attrs) for k in ("begin", "end", "dur"))
-        if not b:
-            continue
-        start = _seconds(b.group(1), tick)
-        end = _seconds(e.group(1), tick) if e else start + (_seconds(d.group(1), tick) if d else 0.0)
-        cues.append((start, end, _clean(p.group(2))))
+    for p in re.finditer(r"<%sp\b([^<>]*)>((?:(?!</?%sp\b).)*)</%sp\s*>" % (_PREFIX, _PREFIX, _PREFIX), raw, re.S):
+        start, end = _times(p.group(1), tick)
+        if start is None:
+            spans = [_times(s.group(1), tick) for s in re.finditer(r"<%sspan\b([^<>]*)>" % _PREFIX, p.group(2))]
+            spans = [t for t in spans if t[0] is not None]
+            if spans:
+                start, end = min(t[0] for t in spans), max(t[1] for t in spans)
+        k = bisect.bisect_right(at, p.start()) - 1
+        offset = marks[k][1] if k >= 0 else 0.0
+        if start is None:
+            start = end = cues[-1][1] if cues else 0.0     # no time of its own: its words stay, after the cue before
+            offset = 0.0
+        cues.append((start + offset, end + offset, _clean(p.group(2))))
     return cues
 
 
@@ -146,6 +194,27 @@ def _json3(raw):
     return cues
 
 
+_ASS_BLOCK = re.compile(r"\{[^}]*\}")
+_ASS_DRAW = re.compile(r"\\p(\d+)")
+
+
+def _ass_words(text):
+    """A Dialogue line's text without its drawings: an override block's `\\p1` (any scale past 0) starts a vector
+    drawing - "m 0 0 l 100 0 100 100", a sign's or a karaoke effect's shape - which `\\p0` or the line's end ends
+    (they were words in the transcript, KNOWN-ISSUES 308). `\\pos` and `\\pbo` are other tags."""
+    out, drawing, pos = [], False, 0
+    for m in _ASS_BLOCK.finditer(text):
+        if not drawing:
+            out.append(text[pos:m.start()])
+        out.append(m.group(0))                               # the overrides themselves: _clean takes them out
+        for scale in _ASS_DRAW.findall(m.group(0)):
+            drawing = int(scale) > 0
+        pos = m.end()
+    if not drawing:
+        out.append(text[pos:])
+    return "".join(out)
+
+
 def _ass(raw):
     fields, in_events, cues = None, False, []
     for line in raw.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
@@ -159,7 +228,7 @@ def _ass(raw):
             parts = line[9:].split(",", len(names) - 1)
             if len(parts) == len(names) and "start" in names and "end" in names and "text" in names:
                 row = dict(zip(names, parts))
-                cues.append((_seconds(row["start"]), _seconds(row["end"]), _clean(row["text"])))
+                cues.append((_seconds(row["start"]), _seconds(row["end"]), _clean(_ass_words(row["text"]))))
     return sorted(cues, key=lambda c: c[0])
 
 
@@ -174,8 +243,19 @@ def _lrc(raw):
     return [(a, stamped[i + 1][0] if i + 1 < len(stamped) else a + 3.0, t) for i, (a, t) in enumerate(stamped)]
 
 
+def _xml(raw):
+    """A track yt-dlp named by its address's `.xml`: TTML (its root `tt`, or TTML's namespace), else YouTube's own XML;
+    no cue for any other XML."""
+    head = raw[:4096]
+    if re.search(r"<%stt\b|http://www\.w3\.org/ns/ttml|http://www\.w3\.org/2006/(?:04|10)/ttaf1" % _PREFIX, head):
+        return _ttml(raw)
+    if re.search(r"<(?:transcript|timedtext)\b", head):
+        return _srv(raw)
+    return []
+
+
 _READERS = {"srt": _arrow, "sbv": _sbv, "ttml": _ttml, "dfxp": _ttml, "srv1": _srv, "srv2": _srv, "srv3": _srv,
-            "json3": _json3, "ass": _ass, "ssa": _ass, "lrc": _lrc}
+            "json3": _json3, "ass": _ass, "ssa": _ass, "lrc": _lrc, "xml": _xml}
 
 _WORD_TIME = re.compile(r"<(\d\d:\d\d:\d\d[.,]\d+)>")
 
@@ -224,7 +304,7 @@ def rolled_cues(vtt):
             take.append(bottom)
         for i in take:
             times = _WORD_TIME.findall(rows[i])
-            out.append((start, end, re.sub(r"<[^>]+>", "", rows[i]).strip(), since))
+            out.append((start, end, cue_text(rows[i]).strip(), since))
             since = _seconds(times[-1]) if times else start
             shown.append(keys[i])
         del shown[:-8]

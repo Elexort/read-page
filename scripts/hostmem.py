@@ -3,10 +3,12 @@
 free_memory() -> {"phys": bytes of physical memory free (Windows' available physical, Linux MemAvailable, macOS's
 free and inactive pages), "commit": bytes of commit left or None (Windows: the commit limit - RAM and the pagefile as
 it is now - less the commit charge; Linux under vm.overcommit_memory = 2: CommitLimit less Committed_AS), "room":
-bytes left under a limit of the read's own or None (a Windows job's memory limit less its use, a Linux cgroup's)}.
+bytes left under a limit of the read's own or None (a Windows job's memory limit less its use, a Linux cgroup's),
+"per": a Windows job's limit on each process's commit or None, and "why" where a figure did not answer}.
 READ_PAGE_TEST_MEMORY (a JSON object of those keys, in bytes) stands in for them, with "fake": true - figures that
 do not fall as processes take memory, so the caller subtracts its processes itself: the suites and the measurements
-never squeeze a machine's memory to see the rule work. alive(pid) tells whether a process still runs.
+never squeeze a machine's memory to see the rule work. alive(pid, since) tells whether a process still runs - the
+same one, when started(pid) was kept as `since`.
 
 cgroup_room() and cgroup_cpus(): a Linux cgroup's memory room and CPU quota, each the smallest from the read's cgroup
 up to the root (KNOWN-ISSUES 284, 285). READ_PAGE_TEST_CGROUP names a folder that stands for / (proc/self/cgroup and
@@ -23,7 +25,7 @@ def _test_figures():
         return None
     try:
         got = json.loads(raw)
-        out = {k: (int(got[k]) if got.get(k) is not None else None) for k in ("phys", "commit", "room")}
+        out = {k: (int(got[k]) if got.get(k) is not None else None) for k in ("phys", "commit", "room", "per")}
         out["fake"] = True           # figures that do not fall as processes take memory: the caller counts them
         return out
     except (ValueError, TypeError, AttributeError):
@@ -67,11 +69,16 @@ def _windows():
         return {"phys": None, "commit": None, "room": None}
     # ullAvailPageFile: the commit limit less the commit charge - what every program on the machine may still
     # reserve before allocations fail; the pagefile counts as it is now, never as it might grow
-    return {"phys": int(st.ullAvailPhys), "commit": int(st.ullAvailPageFile), "room": _windows_job(k32)}
+    out = {"phys": int(st.ullAvailPhys), "commit": int(st.ullAvailPageFile), "room": None, "per": None}
+    out.update(_windows_job(k32))
+    return out
 
 
 def _windows_job(k32):
-    """The room left under the memory limit of a job the read runs in, None without one."""
+    """What a job the read runs in holds it to: {"room": what is left under the job's memory limit, "per": its limit
+    on each process's commit (JOB_OBJECT_LIMIT_PROCESS_MEMORY: a model process under it dies at its load), "why": a
+    query that did not answer}; {} outside a job. Windows answers for the read's own job, the innermost: a limit of a
+    job around it (a sandbox's, a CI runner's) is not seen (KNOWN-ISSUES 317)."""
     import ctypes
     from ctypes import wintypes
 
@@ -79,7 +86,7 @@ def _windows_job(k32):
     k32.IsProcessInJob.argtypes = (wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL))
     inside = wintypes.BOOL(False)
     if not k32.IsProcessInJob(k32.GetCurrentProcess(), None, ctypes.byref(inside)) or not inside.value:
-        return None
+        return {}
 
     class IO(ctypes.Structure):
         _fields_ = [(n, ctypes.c_ulonglong) for n in ("r", "w", "o", "rb", "wb", "ob")]
@@ -102,13 +109,18 @@ def _windows_job(k32):
                                               ctypes.POINTER(wintypes.DWORD))
     lim = EXTENDED()
     if not k32.QueryInformationJobObject(None, 9, ctypes.byref(lim), ctypes.sizeof(lim), None):
-        return None
+        return {"why": "the job's limits did not answer (error %d)" % ctypes.get_last_error()}
+    out = {}
+    if lim.Basic.LimitFlags & 0x100 and lim.ProcessMemoryLimit:          # JOB_OBJECT_LIMIT_PROCESS_MEMORY
+        out["per"] = int(lim.ProcessMemoryLimit)
     if not lim.Basic.LimitFlags & 0x200 or not lim.JobMemoryLimit:       # JOB_OBJECT_LIMIT_JOB_MEMORY
-        return None
+        return out
     use = USAGE()
     if not k32.QueryInformationJobObject(None, 28, ctypes.byref(use), ctypes.sizeof(use), None):   # memory usage
-        return None
-    return max(0, int(lim.JobMemoryLimit) - int(use.JobMemory))
+        out["why"] = "the job's memory use did not answer (error %d): its limit is not counted" % ctypes.get_last_error()
+        return out
+    out["room"] = max(0, int(lim.JobMemoryLimit) - int(use.JobMemory))
+    return out
 
 
 def _meminfo():
@@ -251,10 +263,49 @@ def _macos():
     return {"phys": free * size, "commit": None, "room": None}
 
 
-def alive(pid):
-    """Does process `pid` still run?"""
+def started(pid):
+    """When process `pid` started, as the OS keeps it - Windows: its creation time (100 ns since 1601), Linux: its start
+    in clock ticks after boot (/proc/PID/stat) -, or None where the OS will not say (macOS here, a process gone): what
+    tells a process from a later one that got its pid (KNOWN-ISSUES 316)."""
+    if not pid or pid <= 0:
+        return None
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.OpenProcess.restype = wintypes.HANDLE
+            k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+            k32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.POINTER(wintypes.FILETIME),) * 4
+            k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+            h = k32.OpenProcess(0x1000, False, pid)              # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return None
+            try:
+                t = [wintypes.FILETIME() for _ in range(4)]
+                if not k32.GetProcessTimes(h, *(ctypes.byref(x) for x in t)):
+                    return None
+                return (t[0].dwHighDateTime << 32) | t[0].dwLowDateTime
+            finally:
+                k32.CloseHandle(h)
+        if sys.platform.startswith("linux"):
+            with open("/proc/%d/stat" % pid, encoding="ascii", errors="replace") as fh:
+                data = fh.read()
+            return int(data[data.rindex(")") + 2:].split()[19])   # field 22, its name (in parentheses) set aside
+    except (OSError, ValueError, IndexError, AttributeError):
+        return None
+    return None
+
+
+def alive(pid, since=None):
+    """Does process `pid` still run - and, `since` given (started() of it when it was noted), is it the same process,
+    not a later one that got its pid?"""
     if not pid or pid <= 0:
         return False
+    if since is not None:
+        now_started = started(pid)
+        if now_started is not None and now_started != since:
+            return False
     if os.name == "nt":
         import ctypes
         from ctypes import wintypes

@@ -3613,7 +3613,7 @@ def pdf_shots(path, workdir, want):
 
 def _pdf_shots(path, workdir, want):
     try:
-        import pymupdf
+        pymupdf = pymupdf_quiet()           # MuPDF silent (310)
     except Exception as _dbg_e:                                     # noqa: BLE001
         debuglog.exc("pdf shots: import", _dbg_e)
         return [], 0
@@ -5123,6 +5123,57 @@ def docx_para(p, qn):
 
 LOST = tabs.STATE["cut"]               # the state of what a cut archive lost, in its markers
 LOST_MARK = re.compile(r"\[(?:rows|sheet) · %s · [^\]\n]*\]" % re.escape(LOST))
+XLSX_WIDTH = docreaders.WIDTH          # a sheet's columns read (the ODS reader's cap): past it a row's cells are not
+XLSX_CLOCK_ROWS = 256                  # a sheet's rows between two looks at the converter's clock
+
+
+class _XlsxLate(Exception):
+    """The converter's time ran out in a sheet: the rows and the sheets after it are not read."""
+
+
+def _xlsx_lines(ws, until, said):
+    """A read-only sheet's rows as lines of " | "-joined cells, its trailing empty cells left out. openpyxl takes a
+    sheet's size from its <dimension ref> and pads every row to it, a missing row too: a sheet that says A1:XFD1048576
+    made each of its million rows 16 384 cells - minutes in this process, which nothing timed - and one that says less
+    than it holds (A1, which some writers put) was read up to that size (KNOWN-ISSUES 304). So the size is set aside
+    (reset_dimensions): a row is its own cells, a missing row none; a row with no value is passed over at C's speed;
+    a row's cells past XLSX_WIDTH join its last one, as the ODS reader's do (`said` counts those rows); and the
+    converter's clock (`until`, a now()) is looked at every XLSX_CLOCK_ROWS rows: past it _XlsxLate, `said` naming the
+    sheet and the row. (Every row padded to XLSX_WIDTH, as max_col does, read a sheet of ten columns at half the
+    speed it had.)"""
+    reset = getattr(ws, "reset_dimensions", None)
+    if reset is not None:
+        reset()
+    n, wide = 0, [0]
+
+    def note_wide():
+        if wide[0]:
+            said.append("sheet %s: the cells past column %d of %d row(s) joined to the row's last"
+                        % (ws.title, XLSX_WIDTH, wide[0]))
+    for row in ws.iter_rows(values_only=True):
+        n += 1
+        if until is not None and not n % XLSX_CLOCK_ROWS and now() > until:
+            note_wide()
+            said.append("the time ran out in sheet %s at its row %d: what comes after it is not read; --download "
+                        "has no time limit" % (ws.title, n))
+            raise _XlsxLate()
+        if not row or row.count(None) == len(row):
+            continue
+        rest = ""
+        if len(row) > XLSX_WIDTH:
+            far = row[XLSX_WIDTH:]
+            if far.count(None) != len(far):
+                rest = " ".join(str(v) for v in far if v is not None)
+                wide[0] += 1
+            row = row[:XLSX_WIDTH]
+        cells = ["" if v is None else str(v) for v in row]
+        if rest:
+            cells[-1] = (cells[-1] + " " + rest).strip()
+        while cells and not cells[-1]:
+            cells.pop()
+        if cells:
+            yield " | ".join(cells)
+    note_wide()
 
 
 def _xlsx_cut(sheets, sheet, out, broke):
@@ -5153,13 +5204,15 @@ def _xlsx_cut(sheets, sheet, out, broke):
             one(ws)                        # a sheet the list does not name (it was lost, and made here)
 
 
-def office_fast(path, sub, broke=None):
+def office_fast(path, sub, broke=None, until=None):
     """The fast path: a library that reads the format directly, no markitdown startup.
 
     The libraries check the file extension, and our download is raw.zip - so feed them bytes.
     What stopped it is in _OFFICE: a member that does not unpack ("damaged"), or the library not
-    installed here ("missing", its name on PyPI). `broke`: what was wrong with the archive (zip_salvage) -
-    a workbook cut short says where it lost its rows and its sheets (_xlsx_cut).
+    installed here ("missing", its name on PyPI); what the reader has to say of what it read, "note".
+    `broke`: what was wrong with the archive (zip_salvage) - a workbook cut short says where it lost
+    its rows and its sheets (_xlsx_cut). `until`: when a workbook's reading stops (a now(); None, no
+    limit), its sheets being read in this process (_xlsx_lines).
     """
     import io
     import zipfile
@@ -5226,15 +5279,23 @@ def office_fast(path, sub, broke=None):
         if sub == "xlsx":
             import openpyxl
             wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-            out = []
+            out, said, late = [], [], []
 
             def sheet(ws):
+                if late:
+                    late.append(ws.title)          # the time ran out in a sheet before it
+                    return
                 out.append("## " + ws.title)
-                for row in ws.iter_rows(values_only=True):
-                    cells = ["" if v is None else str(v) for v in row]
-                    if any(cells):
-                        out.append(" | ".join(cells))
+                try:
+                    for line in _xlsx_lines(ws, until, said):
+                        out.append(line)               # (the rows before the time ran out stand)
+                except _XlsxLate:
+                    late.append(ws.title)
             _xlsx_cut(wb.worksheets, sheet, out, broke)
+            if len(late) > 1:
+                said.append("%d sheet(s) after it not read" % (len(late) - 1))
+            if said:
+                _OFFICE["note"] = "; ".join(said)[:400]
             return "\n".join(out)
         if sub == "pptx":
             from pptx import Presentation
@@ -5280,20 +5341,68 @@ def office_fast(path, sub, broke=None):
 
 
 OCR_RENDER_DPI = 150                    # a scanned page's picture for OCR
+_PYMUPDF_QUIET = []                     # MuPDF made silent, once a process (pymupdf_quiet)
+
+
+class _Silent:
+    """A stream that keeps nothing, for what PyMuPDF says itself (set_messages): no display setting turns it off."""
+
+    def write(self, s):
+        return len(s)
+
+    def flush(self):
+        pass
+
+
+def pymupdf_quiet():
+    """PyMuPDF with MuPDF silent (KNOWN-ISSUES 310). MuPDF wrote its errors on file descriptor 1, the answer's - a
+    damaged PDF's "MuPDF error: format error: object is not a stream" stood before the answer's first line, and
+    `--json` did not parse - and the MCP server's, its protocol, where an SVG with a broken picture made lines that
+    are no JSON-RPC; on stderr they were lines a harness shows with the answer. MuPDF's errors and warnings are not
+    shown, and what PyMuPDF says itself goes nowhere: as it opens an SVG it repeats MuPDF's warnings of it whatever
+    the display. What MuPDF said stays in pymupdf.TOOLS.mupdf_warnings(), which a PDF's read traces (pdf.mupdf). A
+    PyMuPDF that cannot turn the display off sends its messages to stderr."""
+    import pymupdf
+    if not _PYMUPDF_QUIET:
+        _PYMUPDF_QUIET.append(True)
+        try:
+            pymupdf.TOOLS.mupdf_display_errors(False)
+            pymupdf.TOOLS.mupdf_display_warnings(False)
+            where = {"stream": _Silent()}
+        except Exception as e:                                # noqa: BLE001  (an older PyMuPDF)
+            debuglog.exc("pymupdf: display", e)
+            where = {"fd": 2}
+        try:
+            pymupdf.set_messages(**where)
+        except Exception as e:                                # noqa: BLE001  (an older PyMuPDF has no set_messages)
+            debuglog.exc("pymupdf: messages", e)
+    return pymupdf
+
+
+OCR_RENDER_PIXELS = 25000000            # a rendered page's pixels at most: a large page gets fewer dots an inch
+
+
+def render_dpi(width_pt, height_pt, dpi=OCR_RENDER_DPI):
+    """The resolution a page of these points is rendered at: `dpi`, or less where the page would be over
+    OCR_RENDER_PIXELS - a page of 200 x 200 in, the size PDF allows, was 30 000 x 30 000 pixels at 150 dpi, 2.7 GB in
+    the read's own process (KNOWN-ISSUES 311), and is 25 dpi now; an A0 drawing is 127."""
+    px = max(1.0, width_pt / 72.0 * dpi) * max(1.0, height_pt / 72.0 * dpi)
+    return dpi if px <= OCR_RENDER_PIXELS else max(1, int(dpi * (OCR_RENDER_PIXELS / px) ** 0.5))
 
 
 def render_pdf_pages(path, workdir, pages=3, dpi=OCR_RENDER_DPI):
     """PNG of the first pages, for a model that can look. Returns the file paths. PyMuPDF opens the document by a
-    path it takes as UTF-8, and the pictures are written by Python, which writes any path (KNOWN-ISSUES 175)."""
+    path it takes as UTF-8, and the pictures are written by Python, which writes any path (KNOWN-ISSUES 175). A
+    large page at fewer dots an inch (render_dpi)."""
     try:
-        import pymupdf
+        pymupdf = pymupdf_quiet()           # MuPDF silent (310)
         with lib_path(path) as at:
             doc = pymupdf.open(at)
             out = []
             for i, page in enumerate(doc, 1):
                 if i > pages:
                     break
-                data = page.get_pixmap(dpi=dpi).tobytes("png")
+                data = page.get_pixmap(dpi=render_dpi(page.rect.width, page.rect.height, dpi)).tobytes("png")
                 fn = os.path.join(workdir, "page-%02d.png" % i)
                 with open(fn, "wb") as fh:
                     fh.write(data)
@@ -6279,12 +6388,15 @@ PDF_TABLES_SLOW = 1.1          # slowed less than this, the model keeps its 10 s
 # page, and several reads count together through a note in the cache.
 PDF_TABLES_MEM_SHARE = 0.8
 # What one model process takes, rounded up, with numpy's OpenBLAS on one thread (pdftables.main): its peak working
-# set and private commit at the end of GPT-3's 33 pages 450 and 442 MB, after its first page 255-277 and 239-259 MB
-# (2026-11-27, here and on an emulated N100; 0.9 GB of commit before OpenBLAS's threads were one). A read takes the
-# larger of these and what its processes say: one grows over its pages. They hold for the onnxruntime and the
-# layout model `--setup` installs; tests/environment.py fails when scripts/setup-lock.txt names other versions.
+# set and private commit at the end of GPT-3's 33 pages in one process 450 and 442 MB, after its first page 255-277
+# and 239-259 MB (2026-11-27, Windows here and on an emulated N100; 0.9 GB of commit before OpenBLAS's threads were
+# one). Linux charges a process's commit by its private writable mappings, touched or not (pdftables.own_memory):
+# 554 MB of VmData at GPT-3's last table page with 8 onnxruntime threads, 383 with one, its peak resident size 490
+# (2026-11-28, WSL, the lock's engines; KNOWN-ISSUES 314). A read takes the larger of these and what its processes say:
+# one grows over its pages. They hold for the onnxruntime and the layout model `--setup` installs; tests/environment.py
+# fails when scripts/setup-lock.txt names other versions.
 TABLES_PROC_RAM = 512 << 20
-TABLES_PROC_COMMIT = 512 << 20
+TABLES_PROC_COMMIT = (640 << 20) if sys.platform.startswith("linux") else 512 << 20
 TABLES_PROC_MEASURED = {"onnxruntime": "1.20.1", "pymupdf4llm": "1.28.2", "pymupdf-layout": "1.28.2"}
 TABLES_NOTE = "tables-procs"   # .json and .lock in the cache root: every read's model processes, what each takes
 PDF_TABLES_CROWDED = 1.5       # their pace past which no more processes start: they wait for the CPU already
@@ -6332,7 +6444,7 @@ def tables_note(change=None):
     process it is starting (its pid the read's until the process takes it)."""
     root = cache_root()
     path = os.path.join(root, TABLES_NOTE + ".json")
-    entries = []
+    entries, tmp = [], path + ".%d.tmp" % os.getpid()
     try:
         os.makedirs(root, exist_ok=True)
         with file_lock(os.path.join(root, TABLES_NOTE + ".lock"), seconds=2.0):
@@ -6342,18 +6454,41 @@ def tables_note(change=None):
             except (OSError, ValueError):
                 entries = []
             was = len(entries)
-            # (a model process ends with its read: an entry whose read has gone is gone, its pid maybe another's)
-            entries = [e for e in entries if hostmem.alive(int(e.get("pid") or 0))
-                       and hostmem.alive(int(e.get("read") or 0))]
+            # (a model process ends with its read: an entry whose read has gone is gone; a pid is the same process
+            # only with the start it had - Windows soon gives a pid to another, which kept a hold of 512 MB alive
+            # for as long as that one ran, KNOWN-ISSUES 316)
+            entries = [e for e in entries if hostmem.alive(int(e.get("pid") or 0), e.get("pid_at"))
+                       and hostmem.alive(int(e.get("read") or 0), e.get("read_at"))]
             changed = change is not None and change(entries) is not False
             if changed or len(entries) != was:
-                tmp = path + ".%d.tmp" % os.getpid()
                 with open(tmp, "w", encoding="utf-8") as fh:
                     json.dump(entries, fh)
-                os.replace(tmp, path)
+                # a reader that has the file open - a virus scanner - refuses the replace on Windows for as long as it
+                # holds it: tried for 2 s, as setup.state is (the update was lost at once, and its .tmp stayed)
+                for k in range(41):
+                    try:
+                        os.replace(tmp, path)
+                        break
+                    except PermissionError:
+                        if k == 40:
+                            raise
+                        time.sleep(0.05)
     except (OSError, ValueError, TypeError) as e:
         debuglog.exc("pdf: tables note", e)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
     return entries
+
+
+_READ_STARTED = []                     # this read's process's start, once (hostmem.started): the note's entries hold it
+
+
+def read_started():
+    if not _READ_STARTED:
+        _READ_STARTED.append(hostmem.started(os.getpid()))
+    return _READ_STARTED[0]
 
 
 def tables_fit(ram, commit, hold=False):
@@ -6368,6 +6503,14 @@ def tables_fit(ram, commit, hold=False):
     process the read starts takes it over (TablesWorker)."""
     m = hostmem.free_memory()
     got = {"n": None}
+    if m.get("why") and not _TABLES.get("why"):
+        _TABLES["why"] = m["why"]
+        trace("pdf.tables", memory=m["why"])           # a job's figure that did not answer: said once
+    per = m.get("per")
+    if per is not None and per < max(ram, commit):
+        # a job holds each process to less than one model process takes: one would die at its load (KNOWN-ISSUES 317)
+        _TABLES["per"] = per
+        return 0
 
     def count(entries):
         still_ram = still_commit = 0
@@ -6378,15 +6521,18 @@ def tables_fit(ram, commit, hold=False):
             still_ram += max(0, max(TABLES_PROC_RAM, r) - (r if took else 0))
             still_commit += max(0, max(TABLES_PROC_COMMIT, c) - (c if took else 0))
         counts = []
+        # a Windows job's memory limit charges commit; a Linux cgroup's charges what is resident (KNOWN-ISSUES 314)
+        job = os.name == "nt" and not os.environ.get("READ_PAGE_TEST_CGROUP")
         for free, each, still in ((m.get("phys"), ram, still_ram), (m.get("commit"), commit, still_commit),
-                                  (m.get("room"), max(ram, commit), max(still_ram, still_commit))):
+                                  (m.get("room"), max(ram, commit) if job else ram,
+                                   max(still_ram, still_commit) if job else still_ram)):
             if free is not None and each > 0:
                 counts.append(int(max(0.0, PDF_TABLES_MEM_SHARE * free - still) // each))
         got["n"] = min(counts) if counts else None
         if not hold or got["n"] == 0:
             return False
-        entries.append({"pid": os.getpid(), "read": os.getpid(), "ram": ram, "commit": commit, "said": False,
-                        "hold": True})
+        entries.append({"pid": os.getpid(), "read": os.getpid(), "pid_at": read_started(), "read_at": read_started(),
+                        "ram": ram, "commit": commit, "said": False, "hold": True})
         _TABLES["held"] = True
         return True
     tables_note(count)
@@ -6439,6 +6585,8 @@ def tables_reset():
         _PDF.clear()
         _TABLES["spent"] = 0.0
         _TABLES["slow"] = 1.0
+        _TABLES.pop("per", None)
+        _TABLES.pop("why", None)
 
 
 class TablesWorker:
@@ -6468,7 +6616,8 @@ class TablesWorker:
         _CHILDREN.add(self.p)
         self.q = _TABLES["q"]                    # one queue for the read's processes: an answer names its own
         threading.Thread(target=self._pump, daemon=True).start()
-        me = {"pid": self.p.pid, "read": os.getpid(), "ram": TABLES_PROC_RAM, "commit": TABLES_PROC_COMMIT, "said": False}
+        me = {"pid": self.p.pid, "read": os.getpid(), "pid_at": hostmem.started(self.p.pid), "read_at": read_started(),
+              "ram": TABLES_PROC_RAM, "commit": TABLES_PROC_COMMIT, "said": False}
 
         def take(entries):
             for k, e in enumerate(entries):
@@ -6606,10 +6755,28 @@ def tables_stop(w, kill=False):
     w.kill() if kill else w.close()
 
 
+TABLES_CLOSE_SECONDS = 2.0     # the read's end: what its model processes get, together, to end by themselves
+
+
 def tables_close(kill=False):
-    """Every model process of the read goes (its end, or a step that killed them)."""
-    for w in list(_TABLES["pool"]):
-        tables_stop(w, kill)
+    """Every model process of the read goes (its end, or a step that killed them): each is told it has no more, they
+    are waited for together, TABLES_CLOSE_SECONDS in all, and those still there are killed - one at a time, a process
+    still loading its model (it reads its requests only after) held the read's exit 2 s each (KNOWN-ISSUES 315)."""
+    pool = list(_TABLES["pool"])
+    if not kill:
+        for w in pool:
+            try:
+                w.p.stdin.close()
+            except Exception:                                 # noqa: BLE001  (closed already, a pipe that broke)
+                pass
+        end = now() + TABLES_CLOSE_SECONDS
+        for w in pool:
+            try:
+                w.p.wait(max(0.0, end - now()))
+            except subprocess.TimeoutExpired:
+                pass
+    for w in pool:
+        tables_stop(w, kill or w.p.poll() is None)
     tables_unhold()
 
 
@@ -6704,6 +6871,13 @@ def pdf_tables(path, doc, pages):
         state = {"stop": "", "by_text": 0, "deaths": 0, "load_deaths": 0, "nomem": False, "most": len(pool),
                  "cap": min(top, 2 if fits is None or fits >= 2 else 1), "ram": 0, "commit": 0,
                  "load": 0.0, "page_s": [], "fit_at": 0.0, "last": {}}
+        per = _TABLES.pop("per", None)
+        if per is not None and not pool:
+            # a job's limit on each process is under what one model process takes: none starts, the first included
+            # (it died at its load, and the step's time went to starts), and the pages are named (KNOWN-ISSUES 317)
+            info["error"] = "a job holds each process here to %d MB, under the %d MB a model process takes" % (
+                per >> 20, max(TABLES_PROC_RAM, TABLES_PROC_COMMIT) >> 20)
+            state["stop"] = "error"
         todo, named, retried = [], [], set()
 
         def grow():
@@ -6901,8 +7075,10 @@ def pdf_tables(path, doc, pages):
         tables_unhold()                            # (room held for a process that did not start)
         slow = tables_pace()
         for w in list(pool):
-            if w.pages or state["stop"] == "error":
-                named += [p + 1 for p in w.pages]          # still at a page: it goes, its pages named
+            if w.pages or state["stop"] == "error" or not w.ready:
+                # still at a page: it goes, its pages named; one still loading its model, with no page, goes too - kept,
+                # it held the read's exit while it loaded (KNOWN-ISSUES 315)
+                named += [p + 1 for p in w.pages]
                 w.pages = []
                 tables_stop(w, kill=True)
         info["pages"] = sorted(info["pages"])             # (answered as each process was done)
@@ -7126,6 +7302,46 @@ def tables_advice(info):
     return "the tables on " + said("still one cell a line") + flag
 
 
+PDF_END_LOOK = 1024                     # a PDF's last bytes, where its %%EOF stands (where readers look for it)
+
+
+def pdf_broke(path, pages, why=""):
+    """What is wrong with a PDF that does not open whole (KNOWN-ISSUES 309): {"how": "cut" - it ends without its
+    %%EOF in its last PDF_END_LOOK bytes - or "damaged" - it ends as a PDF does and no page of it opens -, "pages":
+    the pages that opened (None: not known, no PyMuPDF), "size", "reason": the line an answer gives}; None for one
+    that ends as a PDF does and opened (or was not opened). `why`: what the opening said, when it failed."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            fh.seek(max(0, size - PDF_END_LOOK))
+            ends = b"%%EOF" in fh.read()
+    except OSError:
+        return None
+    if ends and (pages is None or pages):
+        return None
+    where = "damaged" if ends else "cut after %s: it ends without its end-of-file marker" % human_bytes(size)
+    opened = ("" if pages is None else "; %d of its pages opened" % pages if pages else
+              "; no page of it opens%s" % (" (%s)" % why if why else ""))
+    return {"how": "damaged" if ends else "cut", "pages": pages, "size": size,
+            "reason": "not a whole PDF: %s%s" % (where, opened)}
+
+
+def pdf_advice(info, local, words):
+    """The advice line for a PDF that is not whole (pdf_broke): what of it the answer holds, and what gets the rest -
+    a whole copy of a file on this machine, another fetch of a server's."""
+    what = ("the PDF is cut after %s (it ends without its end-of-file marker)" % human_bytes(info["size"])
+            if info["how"] == "cut" else "the PDF is damaged")
+    n = info.get("pages")
+    held = ("no page of it opens" if n == 0 else
+            "the %d pages that opened are read here, what came after the cut is missing" % n if n and words >= 40
+            and info["how"] == "cut" else "the %d pages that opened are read here" % n if n and words >= 40 else
+            "its %d pages that opened hold no text of their own" % n if n else
+            "what of it was read is here" if words >= 40 else "no text could be read from it")
+    rest = ("a whole copy of the file is needed%s" % (" for the rest" if words >= 40 else "") if local else
+            "--refresh fetches it again, and the same bytes come back while the server's copy is %s" % info["how"])
+    return "%s: %s; %s" % (what, held, rest)
+
+
 def doc_text(path, kind, c, workdir, alternate=False, name=""):
     """PDF / DOCX / PPTX / XLSX / EPUB / ODT / RTF / a plain ZIP -> text, plus a note when a text
     layer is missing. EPUB, ODT and RTF are our own readers' (docreaders.py, the standard library
@@ -7212,7 +7428,9 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
     sub = zip_subtype(path) if kind == "zip" else ""
     secs = budget.cap(CONVERTER_TIMEOUT, floor=1.0)
     if sub in ("docx", "xlsx", "pptx"):
-        fast = office_fast(path, sub, state["broke"])
+        # a workbook is read in this process: the converter's seconds bound it (KNOWN-ISSUES 304)
+        until = None if budget.unlimited() else now() + secs
+        fast = office_fast(path, sub, state["broke"], until)
         if len(fast.strip()) <= 5 and not state["broke"] and _OFFICE.get("damaged"):
             # a member python-docx, python-pptx or openpyxl met does not unpack: the ones that do
             dest = os.path.join(workdir, "_mended-%s.zip" % hashlib.sha1(
@@ -7238,9 +7456,9 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 if not info["whole"]:
                     return "", ""
                 path = dest
-                fast = office_fast(path, sub, info)
+                fast = office_fast(path, sub, info, until)
         if len(fast.strip()) > 5:
-            return fast, ""
+            return fast, _OFFICE.get("note") or ""          # a sheet's columns past the cap, its time run out
     if kind == "rtf" or sub in ("odt", "ods", "odp"):
         # our reader's answer stands: a reader that breaks gives its plain text itself, in its own
         # process (the old plain readers here read a part whole, or in quadratic time; a sheet or a
@@ -7261,20 +7479,36 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
             md, why = own_doc(again, sub, pics)
         return md, why or ("" if md.strip() else "no text in this %s" % (sub or kind).upper())
     if kind == "pdf":
+        broken = None
         if c["libs"].get("pymupdf"):
-            text = None
+            text, pages = None, []
             try:
-                import pymupdf
+                pymupdf = pymupdf_quiet()           # MuPDF silent (310)
                 doc = pymupdf.open(path)
                 pages = [p.get_text() for p in doc]
                 text = "\n\f\n".join(pages)
+                said = pymupdf.TOOLS.mupdf_warnings()           # what MuPDF said of the file: the trace's
+                if said:
+                    trace("pdf.mupdf", said=" | ".join(said.splitlines())[:300])
             except Exception as e:                            # noqa: BLE001
                 debuglog.exc("document: converter", e)
-                note = str(e)[:100]
+                note = short_reason(e, 160)                   # (its end says what: "... as type pdf")
+            # a PDF that does not open whole - one cut short ends without its %%EOF (KNOWN-ISSUES 309) - says so: it
+            # was `empty`, "no text in it", or a scan with no page to render, or `ok` with its last pages unsaid
+            broken = pdf_broke(path, len(pages), "" if text is not None else note)
+            if broken and not name:
+                _ZIPS["pdf"] = broken
+            if broken and not pages:
+                note = broken["reason"]
+                if text is not None:
+                    return "", note                           # it opens with no page: no scan, nothing to render
             if text is not None and len(text.strip()) < 20 * max(1, len(pages)):
                 # a scan, with --alternate too: no layout tool finds text that is not there (its
                 # three words once stood for the document, and the pages were never read)
-                return text, "no text layer: this PDF is a scan; render pages to images and look at them"
+                return text, "no text layer: this PDF is a scan; render pages to images and look at them" + (
+                    "; " + broken["reason"] if broken else "")
+            if broken:
+                note = broken["reason"]                       # its pages that opened are read, the cut said
             model = c["libs"].get("pymupdf4llm") and c["libs"].get("onnxruntime") is not False
             if text is not None and alternate and model:
                 # with --alternate, pymupdf4llm's Markdown of the document - headings, every
@@ -7325,6 +7559,12 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                             _PDF["wanted"] = _PDF.get("wanted", 0) + wanted
             if text is not None:
                 return text, note
+        else:
+            broken = pdf_broke(path, None)                    # no PyMuPDF: its end alone tells a cut
+            if broken and not name:
+                _ZIPS["pdf"] = broken
+            if broken:
+                note = broken["reason"]
         if c["cli"].get("pdftotext"):
             outp = os.path.join(workdir, "_pdf.txt")
             pdf_in, pdf_out, pdf_done = narrow_paths([path], [outp])
@@ -7334,7 +7574,7 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 pdf_done()
             if os.path.exists(outp):
                 text = open(outp, encoding="utf-8", errors="replace").read()
-                if len(text.strip()) < 20:
+                if len(text.strip()) < 20 and not broken:
                     # the same verdict pymupdf reaches: nothing to read, so this is a scan.
                     # Without it a scan on a machine without pymupdf was just `empty`.
                     note = ("no text layer: this PDF is a scan; render pages to images "
@@ -8151,7 +8391,7 @@ def vtt_to_text(vtt, block_seconds=30):
         for nxt in lines[i + 1:]:
             if "-->" in nxt or re.match(r"^(WEBVTT|Kind:|Language:|NOTE|\d+\s*$)", nxt):
                 break
-            clean = re.sub(r"<[^>]+>", "", nxt).strip()
+            clean = subtitles.cue_text(nxt).strip()        # tags, then entities: `&amp;` was the text's
             if clean:
                 text.append(clean)
         if text:
@@ -8180,7 +8420,24 @@ def vtt_to_text(vtt, block_seconds=30):
 
 
 SUB_FORMATS = "vtt/srt/best"      # a site without VTT gives SRT (RuTube), else the best it has: subtitles.py reads them
-SUB_LIMIT = 16 * 1024 * 1024      # characters of a subtitle file read: a ten-hour video's track is a few MB
+SUB_LIMIT = 16 * 1024 * 1024      # bytes of a subtitle file read: a ten-hour video's track is a few MB
+
+
+def subtitle_text(data):
+    """A subtitle file's bytes as text: by its BOM (UTF-8, UTF-16, UTF-32), else UTF-8 (a character cut at the read's
+    end is no reason to doubt it), else the guess a page's bytes get (smart_decode). yt-dlp writes a site's file as it
+    came: a UTF-16 SRT or ASS read as UTF-8 had no cue ("subtitles were empty"), a cp1251 one was U+FFFD throughout
+    (KNOWN-ISSUES 307)."""
+    for bom, codec in ((b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"),
+                       (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if data.startswith(bom):
+            return data[len(bom):].decode(codec, "replace")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError as e:
+        if e.start >= len(data) - 3 and e.reason == "unexpected end of data":
+            return data.decode("utf-8", "replace")
+    return smart_decode(data, "")[0]
 _VIDEO = {"kind": "", "advice": "", "fix": ""}     # what video_text() learned about a failure, for the answer's advice
 
 
@@ -8276,19 +8533,14 @@ def video_text(url, c, workdir):
             return "", title, "yt-dlp stopped with: %s" % msg
         return "", title, "no subtitles in %s (set READ_PAGE_SUB_LANGS to change)" % langs
     lang, ext = subtitles.track_of(sub)
-    with open(os.path.join(workdir, sub), encoding="utf-8-sig", errors="replace") as fh:
-        raw = fh.read(SUB_LIMIT)                 # a site's file, whatever its size: the read holds this much at most
+    with open(os.path.join(workdir, sub), "rb") as fh:
+        raw = subtitle_text(fh.read(SUB_LIMIT))  # a site's file, whatever its size: the read holds this much at most
     vtt = subtitles.to_vtt(raw, ext)
     rolled = subtitles.unrolled(vtt)             # YouTube's rolling captions, each line once; "" for any other track
     try:
-        if rolled:
+        if rolled or vtt:                        # (in UTF-8, whatever the site's file was in)
             with open(os.path.join(workdir, "transcript.vtt"), "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(rolled)
-        elif ext == "vtt":
-            shutil.copyfile(os.path.join(workdir, sub), os.path.join(workdir, "transcript.vtt"))
-        elif vtt:
-            with open(os.path.join(workdir, "transcript.vtt"), "w", encoding="utf-8", newline="\n") as fh:
-                fh.write(vtt)
+                fh.write(rolled or vtt)
     except OSError:
         pass
     text = vtt_to_text(vtt)
@@ -8505,7 +8757,9 @@ def transcript_video(url, workdir):
 
     def stamp(t):
         return "%02d:%02d:%06.3f" % (int(t) // 3600, (int(t) % 3600) // 60, t % 60)
-    vtt = "WEBVTT\n\n" + "\n\n".join("%s --> %s\n%s" % (stamp(a), stamp(a + max(0.01, d)), (t or "").replace("\n", " "))
+    from html import escape                  # a cue's text escaped, as WebVTT asks (KNOWN-ISSUES 306)
+    vtt = "WEBVTT\n\n" + "\n\n".join("%s --> %s\n%s" % (stamp(a), stamp(a + max(0.01, d)),
+                                                        escape((t or "").replace("\n", " "), quote=False))
                                      for a, d, t in cues if (t or "").strip())
     try:
         with open(os.path.join(workdir, "transcript.vtt"), "w", encoding="utf-8") as fh:
@@ -10669,6 +10923,9 @@ def read(args):
                     "members": broke["members"], "whole": len(broke["whole"]),
                     "not_whole": ["%s: %s" % b for b in broke["broken"][:20]]},
                     **({"lost_strings": broke["lost"]["cells"]} if (broke.get("lost") or {}).get("cells") else {}))))
+        pdf_broken = _ZIPS.get("pdf") if kind == "pdf" else None
+        if pdf_broken:                         # a PDF cut short or damaged (KNOWN-ISSUES 309)
+            manifest["signals"]["broken_pdf"] = {k: pdf_broken[k] for k in ("how", "pages") if pdf_broken.get(k) is not None}
         if kind in ("zip", "rtf"):
             # an archive's pictures, or the ones our RTF reader wrote out; the names of those left out
             left = {}
@@ -11242,6 +11499,7 @@ def read(args):
     # an archive that is cut, damaged or no ZIP at all: what was read of it is the text
     broke = _ZIPS.get("read") if kind == "zip" and source == "http" else None
     complete = bool(broke and broke.get("all_members") and not broke.get("broken"))   # only its index is broken
+    pdf_broken = _ZIPS.get("pdf") if kind == "pdf" and source == "http" else None    # a PDF cut short or damaged
     if broke and ((broke.get("lost") or {}).get("cells") or LOST in text):
         # a cut workbook's cells whose text was lost read LOST_TEXT, and its rows and sheets the cut took are
         # marked (LOST_MARK): the skill's words, not the document's
@@ -11279,6 +11537,10 @@ def read(args):
         # the members that are whole hold a few words or none: not the document (40, as a transfer cut)
         manifest["status"] = "error"
         error_why = broke["reason"]
+    elif pdf_broken and word_count < 40:
+        # a PDF cut short or damaged whose pages that opened hold a few words or none (it was `empty`, "no text in it")
+        manifest["status"] = "error"
+        error_why = pdf_broken["reason"]
     elif not (text or "").strip():
         manifest["status"] = "empty"
     elif word_count < 5 and not str(engine or "").startswith("server:") and not (doc_engine and word_count):
@@ -11371,6 +11633,8 @@ def read(args):
                               else "the page is gone")
     elif broke:
         manifest["advice"] = zip_advice(broke, local, word_count, transit, f.get("cut") == "step")
+    elif pdf_broken:
+        manifest["advice"] = pdf_advice(pdf_broken, local, word_count)
     elif manifest["status"] == "empty":
         if manifest["signals"].get("binary"):
             manifest["advice"] = "the response is binary, not a page; there is no text to read"

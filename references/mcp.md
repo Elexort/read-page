@@ -151,9 +151,11 @@ Only the content pictures go in: not a decoration (the same picture 3+ times in 
 less, 1 KB or less) and not a logo, icon, avatar or badge of 100 px or less, by its name, `alt`
 or address. Screenshots asked for go first, then the biggest pictures; each stands right after its
 marker. A picture that did not fit keeps its marker, and a note counts it. Converting needs Pillow (GIF, WebP, AVIF,
-BMP, scaling) and PyMuPDF (SVG); without them only a PNG or JPEG that already fits goes in, the rest
-stays a marker - the setup report names both. The text gives up the room the pictures, the notes and JSON take: the
-server counts the blocks of one result together as Cline's SDK counts them - the result's JSON, so the escapes of the
+BMP, scaling) and PyMuPDF (SVG; MuPDF is silent, on the server's stdout, the protocol, and on its stderr: an SVG
+with a broken picture wrote lines there that are no JSON-RPC, KNOWN-ISSUES 310 - only libjpeg's own warning of a
+broken JPEG, which the C library writes itself, reaches its stderr); without them only a PNG or JPEG
+that already fits goes in, the rest stays a marker - the setup report names both. The text gives up the room the
+pictures, the notes and JSON take: the server counts the blocks of one result together as Cline's SDK counts them - the result's JSON, so the escapes of the
 text too (a line's `\n` is two characters, a quote two), and for each image block the `[image attached]` that Cline
 puts in its place - and when they would pass the three limits of the text, the text is rendered again inside what
 is left (a block ends at a paragraph, so it loses a paragraph at most more than it must); `read`'s blocks the same.
