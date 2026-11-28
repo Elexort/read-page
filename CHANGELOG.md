@@ -8,6 +8,10 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **The docs of the answer say what the code does** (KNOWN-ISSUES 301): references/mcp.md's header named `cover` on
+  every first line and a range that is gone, its images a marker on a line of its own; "no network" for a
+  continuation, which fetches its block's pictures (SKILL.md: "the saved copy, not fetched again"); the list of what
+  gets the words, whole.
 - **`READ_PAGE_TEST_CUT=file:N` keeps the cut answer in the page's folder** (KNOWN-ISSUES 300): the test hook left a
   `read-page-cut-*.txt` in the temp folder at every cut; the file now goes where the page's files are, which the
   cache's prune takes.

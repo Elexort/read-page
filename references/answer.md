@@ -68,7 +68,8 @@ nothing is cut between the script and the agent. English text meets the characte
 about 7 700 characters where it was 9 850 (Node's fs reference, 381 KB, takes 54 answers instead of
 43); Cyrillic and CJK text meet the bytes, as before. `--from N`
 prints the block that starts at line N - the next one, or a heading from the outline - of the same
-file, from the saved copy, with no network; without `--file` it goes on in the file read last
+file, from the saved copy, with no new request for the page (its block's pictures come, see Pictures); without
+`--file` it goes on in the file read last
 (`--file` switches it). If the copy is gone the page is read again and a `note:` line says the
 lines may have moved. The files stay in the work folder: the per-URL cache entry under the system
 temp directory, or `--dir DIR`.
@@ -175,7 +176,7 @@ A PDF's tables come as Markdown tables where the layout model is installed (`--s
 
 | Flag | Meaning |
 |---|---|
-| `--from N` | print the block that starts at line N of the saved copy, no network; without `--file` it goes on in the file read last (`--file` switches it). `--from "text"`: from the first line that holds it, a marker by its type and name (see The answer) |
+| `--from N` | print the block that starts at line N of the saved copy, the page not fetched again; without `--file` it goes on in the file read last (`--file` switches it). `--from "text"`: from the first line that holds it, a marker by its type and name (see The answer) |
 | `--chars C` | how much one answer holds: C characters (UTF-16 units), whole lines, the bytes and lines in the same ratio; 7 900 by default, which fits every harness; 7 000 to 150 000 (see The answer) |
 | `--file page.md` | answer with the whole page (default: `content.md`, or `page.md` for a fragment) |
 | `--json` | print the manifest instead of the answer |

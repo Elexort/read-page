@@ -53,7 +53,8 @@ read(dir="C:/Users/me/AppData/Local/Temp/read-page/pages/example.com-9c1f…", f
 The call names its folder, in forward slashes on Windows (a client's JSON takes them unescaped), and the size the
 answer was asked with; the last block ends with `── EOF content.md: lines 352-389 of 389 ──`, as on the CLI.
 `dir` is the folder on the `files:` line. `read_url(url, from=127)` gives the same block, also from
-the saved copy, with no network. A call that names no `file` goes on in the text read last
+the saved copy, the page not fetched again (its block's pictures come). A call that names no `file` goes on in the
+text read last
 (a named one becomes the text being read; `read_url` without `from` starts at `content.md`, or
 `page.md` for a fragment), so a model that drops `file` still reads the same text under the
 same line numbers. A result is its blocks and `isError`, nothing else: no `structuredContent` (the tools declare
@@ -107,8 +108,10 @@ before its gap says about 3 985 utf16, whatever it says of characters and bytes.
 ## The header
 
 Custom text, not JSON, so it survives any client and costs a few dozen tokens. The first line says
-the status, the engine and how much of the visible page its text holds (`cover`), the archive date
-for a Wayback copy, which file and how big, `from cache`, `fragment` and the seconds taken. Then,
+the status and the engine; for a text that may be a fragment its share of the page's words (`maybe a fragment:
+the text is 12% of the page's words`, or `paywalled: ...`; KNOWN-ISSUES 255, 261), a video's subtitle track, the
+archive date for a Wayback copy, a guessed charset, which file and how big, `from cache`, `partial` and the
+seconds taken. Then,
 when there is something to say: `url:` (where a redirect ended), `reason:` (the rule behind any
 status but `ok`), `files:`, `advice:`, and at most two `missing:`/`improve:` lines - also on a cache
 hit (hiding them there made "why this answer is poor" invisible).
@@ -118,8 +121,8 @@ hit (hiding them there made "why this answer is poor" invisible).
 The text's pictures are downloaded by default and stand in it as numbered markers,
 `[img #3 · 100x80 3K · alt] img/03-alt.png` (the number is the file's; SKILL.md, Pictures).
 `deny_images=true` keeps the text and downloads nothing - the marker says
-`not downloaded` and keeps the address. `inline_images=true` turns every marker that stands on a
-line of its own into a real `image` block right after it, in reading order:
+`not downloaded` and keeps the address. `inline_images=true` turns the marker of every content picture
+into a real `image` block right after it, several on one line too (a gallery row), in reading order:
 
 ```
 text block -> [img #3 · 100x80 3K · alt] img/03-alt.png -> image block -> next text block
@@ -153,8 +156,8 @@ server counts the blocks of one result together as Cline's SDK counts them - the
 text too (a line's `\n` is two characters, a quote two), and for each image block the `[image attached]` that Cline
 puts in its place - and when they would pass the three limits of the text, the text is rendered again inside what
 is left (a block ends at a paragraph, so it loses a paragraph at most more than it must); `read`'s blocks the same.
-The pointer to the next line names where the shorter block ends. A range (`to`) and a quote that no line holds are
-not shortened.
+The pointer to the next line names where the shorter block ends. A quote that no line holds (the outline) is not
+shortened.
 
 ## How a client counts a result
 
