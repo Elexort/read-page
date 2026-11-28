@@ -703,19 +703,25 @@ def fake_sh(rc):
     return sh
 
 
+def offline_json(url, timeout=30):
+    """fetch_json where nothing answers: these checks are the index's way, which pypi.org's dates go before (row 350)."""
+    raise OSError("no network in this check")
+
+
 def run_update(before, after, rc, restored=None):
     """ytdlp_update with the installed version `before` and, after uv ran, `after` (then `restored`)."""
     del calls[:]
     versions[:] = [before, after] + ([restored] if restored else [])
-    saved = envsetup._ytdlp_version
+    saved, saved_fj = envsetup._ytdlp_version, envsetup.fetch_json
     envsetup._ytdlp_version = lambda py: versions.pop(0)
+    envsetup.fetch_json = offline_json
     try:
         for n in ("ytdlp.stamp", "ytdlp.failed"):
             if os.path.exists(os.path.join(ud, n)):
                 os.unlink(os.path.join(ud, n))
         return envsetup.ytdlp_update(ud, "uv", "py", {}, fake_sh(rc), lock="ENV-LOCK")
     finally:
-        envsetup._ytdlp_version = saved
+        envsetup._ytdlp_version, envsetup.fetch_json = saved, saved_fj
 
 
 ok1, note1 = run_update("2026.10.26", "2026.11.2", 0)
@@ -2194,14 +2200,15 @@ check("... and the closing line gives it",
                                                 "hard-linked into it)" and envsetup.Work.cache_note(0, 0) == ""
       and "mostly hard-linked" in envsetup.Work.cache_note(13000, None), envsetup.Work.cache_note(13000, 3000))
 del sh_calls[:]
-real_ytv = envsetup._ytdlp_version
+real_ytv, real_fj145 = envsetup._ytdlp_version, envsetup.fetch_json
 vs_ = ["2026.10.26", "2026.11.2"]
 envsetup._ytdlp_version = lambda py: vs_.pop(0)
+envsetup.fetch_json = offline_json
 try:
     ud_ok, ud_note = envsetup.ytdlp_update(d145, "uv", "py", {}, lambda cmd, timeout=600, env=None: (sh_calls.append(list(cmd)) or (0, "ok")),
                                           lock="ENV-LOCK")
 finally:
-    envsetup._ytdlp_version = real_ytv
+    envsetup._ytdlp_version, envsetup.fetch_json = real_ytv, real_fj145
 attempt("a yt-dlp update that brought a new release drops the old releases from uv's cache (one every three days)",
         lambda: (ud_ok and ["uv", "cache", "clean", "yt-dlp", "yt-dlp-ejs"] in sh_calls and sh_calls[0][:3] == ["uv", "pip", "install"],
                  str(sh_calls)[:200]))
@@ -3517,6 +3524,260 @@ for label_, args_, want_ in (
 attempt("ci_install's `suites` prints those words (not its own condition on the exit code)",
         lambda: ("suite_words(" in inspect.getsource(ci_install.cmd_suites)
                  and "no result line" not in inspect.getsource(ci_install.cmd_suites), "cmd_suites"))
+
+# ---------------------------------------------------------------- yt-dlp by pypi.org's dates and digests (rows 350, 351)
+# The three days were the index's dates (uv's --exclude-newer-package): an index that gives none - an HTML one, Aliyun's,
+# Tencent Cloud's, Huawei Cloud's, Douban's mirror - left every file of yt-dlp out, and a package a newer yt-dlp brings
+# in beyond YTDLP_FLOATS had no date at all. The release is chosen by pypi.org's JSON now, then installed by its exact
+# version, each file held to the SHA256 pypi.org publishes.
+YT_NOW = 1795000000.0
+
+
+def yt_iso(hours_ago):
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000000Z", time.gmtime(YT_NOW - hours_ago * 3600))
+
+
+def yt_file(name, version, sha, hours_ago, yanked=False, kind="bdist_wheel"):
+    return {"filename": "%s-%s-py3-none-any.whl" % (name.replace("-", "_"), version), "packagetype": kind,
+            "digests": {"sha256": sha}, "upload_time_iso_8601": yt_iso(hours_ago), "yanked": yanked}
+
+
+def yt_pypi(packages):
+    """A stand-in for pypi.org's JSON: {name: ({version: [files]}, {version: requires_dist})} -> fetch(url)."""
+    def fetch(url, timeout=30):
+        m = re.match(r"https://pypi\.org/pypi/([^/]+)/(?:([^/]+)/)?json$", url)
+        if not m or m.group(1) not in packages:
+            raise OSError("HTTP Error 404: Not Found (%s)" % url)
+        releases, requires = packages[m.group(1)]
+        newest = max((v for v in releases if envsetup.stable_version(v)), key=envsetup._vkey)
+        version = m.group(2) or newest
+        return {"info": {"name": m.group(1), "version": version, "requires_dist": requires.get(version)},
+                "releases": releases}
+    return fetch
+
+
+def no_pypi(url, timeout=30):
+    raise OSError("<urlopen error [Errno 11001] getaddrinfo failed>")
+
+
+h = "%064x"
+yt_packages = {
+    "yt-dlp": ({"2099.1.3": [yt_file("yt-dlp", "2099.1.3", h % 13, 1)],                 # an hour old
+                "2099.1.2.123.dev0": [yt_file("yt-dlp", "2099.1.2.123.dev0", h % 12, 120)],   # a nightly
+                "2099.1.1": [yt_file("yt-dlp", "2099.1.1", h % 11, 120), yt_file("yt-dlp", "2099.1.1", h % 99, 120,
+                                                                                 kind="sdist")],
+                "2099.1.0": [yt_file("yt-dlp", "2099.1.0", h % 10, 216)],
+                "2098.12.9": [yt_file("yt-dlp", "2098.12.9", h % 9, 300, yanked=True)]},
+               {"2099.1.1": ['newdep>=1.0; extra == "default"', 'certifi>=2026.1.1; extra == "default"',
+                             'secretstorage; extra == "secretstorage"',
+                             'brotli; implementation_name == "cpython" and extra == "default"'],
+                "2099.1.0": ['brotli; extra == "default"']}),
+    "newdep": ({"1.0": [yt_file("newdep", "1.0", h % 21, 120)], "2.0": [yt_file("newdep", "2.0", h % 22, 1)]},
+               {"1.0": ["subdep<3"]}),
+    "subdep": ({"2.5": [yt_file("subdep", "2.5", h % 31, 240)], "3.0": [yt_file("subdep", "3.0", h % 32, 96)]}, {}),
+    "brotli": ({"1.2.1": [yt_file("brotli", "1.2.1", h % 41, 720), yt_file("brotli", "1.2.1", h % 42, 720),
+                          yt_file("brotli", "1.2.1", h % 43, 1)]}, {}),                  # a wheel added an hour ago
+}
+yt_lock = "certifi==2026.10.23 \\\n    --hash=sha256:%s\n" % (h % 1)
+try:
+    plans_ = list(envsetup.ytdlp_plans(yt_lock, now=YT_NOW, fetch=yt_pypi(yt_packages)))
+except Exception as e_:                                  # noqa: BLE001  (each check below says it)
+    print("ytdlp_plans: %s: %s" % (type(e_).__name__, e_))
+    plans_ = []
+first_ = plans_[0] if plans_ else {}
+attempt("yt-dlp's release is chosen by pypi.org's dates: the newest final one out three days - not a nightly, not one an "
+        "hour old, not a yanked one - with its wheels' SHA256 (no sdist's)",
+        lambda: (first_.get("yt-dlp") == ("2099.1.1", [h % 11]) and [p["yt-dlp"][0] for p in plans_] == ["2099.1.1", "2099.1.0"],
+                 str([p.get("yt-dlp") for p in plans_])[:200]))
+attempt("... and every package it brings in beyond the lock is planned the same way: newdep 1.0 (2.0 is an hour old), "
+        "subdep 2.5 under newdep's <3, brotli; the lock's certifi and another extra's secretstorage are not",
+        lambda: (sorted(first_) == ["brotli", "newdep", "subdep", "yt-dlp"] and first_["newdep"][0] == "1.0"
+                 and first_["subdep"][0] == "2.5", str(dict((k, v[0]) for k, v in first_.items()))))
+attempt("... and a wheel added to an old release after the cutoff is no file of it: its digest is not among the pins",
+        lambda: (first_.get("brotli") == ("1.2.1", sorted([h % 41, h % 42])), str(first_.get("brotli"))))
+attempt("... never older than the floor (the version installed): with 2099.1.1 there, 2099.1.1 again; with 2099.1.3 "
+        "there, nothing",
+        lambda: ([p["yt-dlp"][0] for p in envsetup.ytdlp_plans(yt_lock, now=YT_NOW, floor="2099.1.1",
+                                                                fetch=yt_pypi(yt_packages))] == ["2099.1.1"]
+                 and list(envsetup.ytdlp_plans(yt_lock, now=YT_NOW, floor="2099.1.3", fetch=yt_pypi(yt_packages))) == [],
+                 ""))
+fresh_ = dict(yt_packages, newdep=({"2.0": [yt_file("newdep", "2.0", h % 22, 1)]}, {}))
+attempt("... and where a release needs a package no release of which has been out three days, the next one down is "
+        "planned (2099.1.0, which does not need it)",
+        lambda: ([p["yt-dlp"][0] for p in envsetup.ytdlp_plans(yt_lock, now=YT_NOW, fetch=yt_pypi(fresh_))] == ["2099.1.0"],
+                 ""))
+attempt("requirement specifiers as pip reads them: <3,>=2.32.2; ==0.8.0; ~=1.2; !=0.6.*; ==1.*; one not read is uv's",
+        lambda: (envsetup.spec_allows("2.34.2", "<3,>=2.32.2") and not envsetup.spec_allows("3.0", "<3,>=2.32.2")
+                 and envsetup.spec_allows("0.8.0", "==0.8.0") and not envsetup.spec_allows("0.8.1", "==0.8")
+                 and envsetup.spec_allows("1.9", "~=1.2") and not envsetup.spec_allows("2.0", "~=1.2")
+                 and not envsetup.spec_allows("0.6.3", "!=0.6.*") and envsetup.spec_allows("0.7", "!=0.6.*")
+                 and envsetup.spec_allows("1.4.2", "==1.*") and envsetup.spec_allows("1.0", "@ https://x"), ""))
+attempt("Requires-Dist read for an extra: its own and those with no extra, another extra's not, names as pip compares them",
+        lambda: (envsetup.requirements_of(['Brotli; extra == "default"', 'yt_dlp.ejs==0.8.0; extra == "default"',
+                                           "requests (<3,>=2.32.2)", 'deno>=2.9.8; extra == "deno"'], "default")
+                 == [("brotli", ""), ("yt-dlp-ejs", "==0.8.0"), ("requests", "<3,>=2.32.2")], ""))
+
+
+def made_wheel(folder, name, version, requires=(), extras=(), main=""):
+    """A wheel of a package of nothing (py3-none-any) at a version: (file name, its bytes)."""
+    dist = name.replace("-", "_")
+    info_ = "%s-%s.dist-info" % (dist, version)
+    meta = "Metadata-Version: 2.1\nName: %s\nVersion: %s\n%s%s" % (name, version, "".join(
+        "Provides-Extra: %s\n" % e for e in extras), "".join("Requires-Dist: %s\n" % r for r in requires))
+    path = os.path.join(folder, "%s-%s-py3-none-any.whl" % (dist, version))
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("%s/__init__.py" % dist, "__version__ = %r\n" % version)
+        if main:
+            z.writestr("%s/__main__.py" % dist, main)
+        z.writestr(info_ + "/METADATA", meta)
+        z.writestr(info_ + "/WHEEL", "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+        z.writestr(info_ + "/RECORD", "%s/__init__.py,,\n%s%s/METADATA,,\n%s/WHEEL,,\n%s/RECORD,,\n" % (
+            dist, ("%s/__main__.py,,\n" % dist) if main else "", info_, info_, info_))
+    with open(path, "rb") as fh2:
+        return os.path.basename(path), fh2.read()
+
+
+if uvx:
+    # an index as an HTML mirror serves it - Aliyun's, a company's Nexus: the files and their hashes, no upload dates
+    ydir = tempfile.mkdtemp(prefix="rp-env-ytidx-")
+    junk.append(ydir)
+    yt_files, yt_shas = {}, {}
+    for name_, version_, req_ in (("yt-dlp", "2099.1.1", ['newdep; extra == "default"']),
+                                  ("yt-dlp", "2099.1.3", ['newdep; extra == "default"']),
+                                  ("newdep", "1.0", []), ("newdep", "2.0", [])):
+        fn_, bytes_ = made_wheel(ydir, name_, version_, req_, ("default",) if req_ else (),
+                                 "print(%r)\n" % version_ if name_ == "yt-dlp" else "")
+        yt_files[fn_] = bytes_
+        yt_shas[(name_, version_)] = hashlib.sha256(bytes_).hexdigest()
+
+    class YtIndex(http.server.BaseHTTPRequestHandler):
+        dates = False              # True: PEP 691 JSON with PEP 700 upload times (pypi.org, TUNA); False: HTML, none
+
+        def do_GET(self, head=False):
+            path = self.path.split("?")[0].split("#")[0]
+            body, kind = None, "application/octet-stream"
+            m = re.match(r"/simple/([^/]+)/$", path)
+            if m:
+                mine = [(fn, b) for fn, b in sorted(yt_files.items()) if fn.startswith(m.group(1).replace("-", "_") + "-")]
+                if mine and YtIndex.dates:
+                    files = [{"filename": fn, "url": "/files/" + fn, "hashes": {"sha256": hashlib.sha256(b).hexdigest()},
+                              "upload-time": yt_iso(1 if fn.split("-")[1] in ("2099.1.3", "2.0") else 120)}
+                             for fn, b in mine]
+                    body = json.dumps({"meta": {"api-version": "1.1"}, "name": m.group(1), "files": files,
+                                       "versions": sorted(set(fn.split("-")[1] for fn, _b in mine))}).encode()
+                    kind = "application/vnd.pypi.simple.v1+json"
+                elif mine:
+                    body, kind = ("<html><body>%s</body></html>" % "<br>".join(
+                        '<a href="/files/%s#sha256=%s">%s</a>' % (fn, hashlib.sha256(b).hexdigest(), fn)
+                        for fn, b in mine)).encode(), "text/html"
+            elif path.startswith("/files/"):
+                body = yt_files.get(path[len("/files/"):])
+            self.send_response(200 if body is not None else 404)
+            self.send_header("Content-Type", kind)
+            self.send_header("Content-Length", str(len(body or b"")))
+            self.end_headers()
+            if not head:
+                self.wfile.write(body or b"")
+
+        def do_HEAD(self):
+            self.do_GET(head=True)
+
+        def log_message(self, *a):
+            pass
+
+    ysrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), YtIndex)
+    threading.Thread(target=ysrv.serve_forever, daemon=True).start()
+    yt_env = dict((k, v) for k, v in envsetup.net_env().items()
+                  if not k.upper().startswith(("UV_INDEX", "UV_EXTRA_INDEX", "UV_FIND_LINKS", "UV_CONFIG_FILE")))
+    yt_env.update(UV_DEFAULT_INDEX="http://127.0.0.1:%d/simple" % ysrv.server_address[1], UV_NO_CONFIG="1",
+                  UV_CACHE_DIR=os.path.join(ydir, "cache"), UV_PYTHON_DOWNLOADS="never")
+    yt_lockfile = os.path.join(ydir, "lock.txt")
+    with open(yt_lockfile, "w", encoding="utf-8") as fh_:
+        fh_.write("\n")
+    pypi_dates = {"yt-dlp": ({"2099.1.1": [yt_file("yt-dlp", "2099.1.1", yt_shas[("yt-dlp", "2099.1.1")], 120)],
+                              "2099.1.3": [yt_file("yt-dlp", "2099.1.3", yt_shas[("yt-dlp", "2099.1.3")], 1)]},
+                             {"2099.1.1": ['newdep; extra == "default"'], "2099.1.3": ['newdep; extra == "default"']}),
+                  "newdep": ({"1.0": [yt_file("newdep", "1.0", yt_shas[("newdep", "1.0")], 120)],
+                              "2.0": [yt_file("newdep", "2.0", yt_shas[("newdep", "2.0")], 1)]}, {})}
+    other_bytes = dict(pypi_dates, newdep=({"1.0": [yt_file("newdep", "1.0", h % 77, 120)]}, {}))
+
+    class YtShell(object):
+        """Work.sh's shape: (exit code, the last lines), the whole output in .full."""
+        full = ""
+
+        def sh(self, cmd, timeout=600, env=None):
+            p = subprocess.run([str(c) for c in cmd], env=env, capture_output=True, timeout=timeout, cwd=ydir)
+            self.full = (p.stdout + p.stderr).decode("utf-8", "replace")
+            return p.returncode, " | ".join(x.strip() for x in self.full.strip().splitlines()[-3:])[-300:]
+
+    yt_sh = YtShell().sh
+
+    def yt_venv(label):
+        venv = os.path.join(ydir, label)
+        subprocess.run([uvx, "venv", venv, "--python", sys.executable, "-q"], env=yt_env, capture_output=True, timeout=120)
+        return os.path.join(venv, "Scripts", "python.exe") if os.name == "nt" else os.path.join(venv, "bin", "python")
+
+    def yt_have(py):
+        p = subprocess.run([uvx, "pip", "list", "--python", py, "--format", "json"], env=yt_env, capture_output=True,
+                           timeout=120)
+        try:
+            return dict((x["name"], x["version"]) for x in json.loads(p.stdout.decode("utf-8", "replace") or "[]"))
+        except ValueError:
+            return {}
+
+    def yt_update(py, fetch):
+        """envsetup.ytdlp_update into this venv with pypi.org's JSON from `fetch` (fetch_json itself is swapped: the
+        update before this change read none, and ran the index's way)."""
+        home_ = os.path.dirname(os.path.dirname(py))
+        real_fetch = envsetup.fetch_json
+        envsetup.fetch_json = fetch
+        try:
+            for n in ("ytdlp.stamp", "ytdlp.failed"):
+                if os.path.exists(os.path.join(home_, n)):
+                    os.unlink(os.path.join(home_, n))
+            ok_, note_ = envsetup.ytdlp_update(home_, uvx, py, yt_env, yt_sh, now=YT_NOW, lock=yt_lockfile)
+        finally:
+            envsetup.fetch_json = real_fetch
+        return ok_, note_, yt_have(py), os.path.exists(os.path.join(home_, "ytdlp.stamp"))
+
+    try:
+        YtIndex.dates = False
+        py1 = yt_venv("v1")
+        ok1_, note1_, have1, stamp1 = yt_update(py1, yt_pypi(pypi_dates))
+        YtIndex.dates = True
+        py5 = yt_venv("v5")
+        ok5_, note5_, have5, stamp5 = yt_update(py5, yt_pypi(pypi_dates))
+        py2 = yt_venv("v2")
+        ok2_, note2_, have2, stamp2 = yt_update(py2, yt_pypi(other_bytes))
+        YtIndex.dates = False
+        py3 = yt_venv("v3")
+        ok3_, note3_, have3, stamp3 = yt_update(py3, no_pypi)
+        ok4_, note4_, have4, stamp4 = yt_update(py1, no_pypi)            # yt-dlp 2099.1.1 there already
+    finally:
+        ysrv.shutdown()
+    attempt("an index with no upload dates (an HTML mirror: Aliyun's, a Nexus) gives yt-dlp all the same: the newest release "
+            "out three days by pypi.org's dates (the index's way found no yt-dlp at all)",
+            lambda: (ok1_ and have1.get("yt-dlp") == "2099.1.1" and have1.get("newdep") == "1.0" and stamp1,
+                     "%s | %s | %s" % (ok1_, note1_[:120], have1)))
+    attempt("a package yt-dlp brings in beyond the lock and YTDLP_FLOATS is held to the three days too: newdep 1.0, not "
+            "its upload of an hour ago (an index that gives dates held yt-dlp alone, and newdep came at 2.0)",
+            lambda: (ok5_ and have5.get("yt-dlp") == "2099.1.1" and have5.get("newdep") == "1.0",
+                     "%s | %s | %s" % (ok5_, note5_[:120], have5)))
+    attempt("... each file held to the SHA256 pypi.org publishes: a newdep whose bytes are not those is refused, and "
+            "nothing of the plan is installed (the index's own hashes let it in)",
+            lambda: ("newdep" not in have2 and "yt-dlp" not in have2 and not stamp2,
+                     "%s | %s | %s" % (ok2_, note2_[:140], have2)))
+    attempt("where pypi.org does not answer, the index's dates decide, and an index that gives none is named: a first "
+            "install says so (it said \"Consider removing the setting\", the skill's own)",
+            lambda: (not ok3_ and envsetup.NO_DATES_WHY in note3_ and "yt-dlp" not in have3,
+                     "%s | %s" % (ok3_, note3_[:200])))
+    attempt("... and an environment that has yt-dlp keeps it with that said, no stamp, a failed look (every update "
+            "of it was a success, with the stamp, while it never moved)",
+            lambda: (ok4_ and envsetup.NO_DATES_WHY in note4_ and not stamp4 and have4.get("yt-dlp") == "2099.1.1"
+                     and os.path.exists(os.path.join(os.path.dirname(os.path.dirname(py1)), "ytdlp.failed")),
+                     "%s | %s | stamp %s" % (ok4_, note4_[:160], stamp4)))
+else:
+    print("SKIP yt-dlp by pypi.org's dates against a local index (no uv here: --setup's, or one on PATH)")
 
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:

@@ -609,11 +609,12 @@ with `--generate-hashes` - 1 092 files, about 94 KB - and the set is the lock's:
 whole install refuses a package it does not name - measured with uv 0.13.9, an index that served the lock's own
 wheel with a PEP 658 metadata file naming one more package got that one installed, unhashed, without it - and the
 one-package-at-a-time fallback installs each top package as `name==<its pin>` with `-c` the lock under the same
-flag; the yt-dlp step has `--verify-hashes`, so the lock's packages in its tree keep their hashes and yt-dlp, which
-floats, is not refused for having none; on the command line, so no `verify-hashes = false` in a settings file turns
-any of it off; wheels only; a package with no wheel for the machine is left
-out and named) and, not pinned, yt-dlp in the newest release that has been out three days
-([video.md](video.md)), Node: the one Playwright's wheel carries in its driver (24.21.0 for the pinned Playwright, at
+flag; the yt-dlp step installs yt-dlp and what it brings in beyond the lock by exact versions with `--require-hashes`
+too, pypi.org's digests for those and the lock's for the rest (where pypi.org does not answer: `--verify-hashes`, so
+the lock's packages in its tree keep their hashes and yt-dlp, which floats, is not refused for having none); on the
+command line, so no `verify-hashes = false` in a settings file turns any of it off; wheels only; a package with no
+wheel for the machine is left out and named) and, not pinned, yt-dlp in the newest release that has been out three
+days by pypi.org's dates ([video.md](video.md)), Node: the one Playwright's wheel carries in its driver (24.21.0 for the pinned Playwright, at
 least 22.9 as npm 11 asks: nothing of nodejs.org is downloaded, 33-53 MB and 90-180 MB on disk saved) with npm 11.19.1 from
 the registry's tarball, held to the SHA512 pinned in `envsetup.py` (`NPM_INTEGRITY`, the value the registry publishes; an
 https `npm_config_registry` serves it, the hash decides); where there is no such Node - musl has no Playwright wheel, a
@@ -726,8 +727,9 @@ lock (`--require-hashes`), uv's wheel, Node's archive and PyPI's Node wheel (the
 every OCR pack by its SHA256 in `tessdata-lock.txt` (`READ_PAGE_TESSDATA_URL` may serve them: an https folder or
 template; the pins decide), our Python by the SHA256 the pinned uv carries for each build, Playwright's
 browser by TLS and its Content-Length only (Playwright's design: no hash anywhere in its download), and
-yt-dlp with the five packages that float with it (`yt-dlp-ejs`, `brotli`, `mutagen`, `pycryptodomex`,
-`websockets`) - not pinned - by TLS, from an https source. urllib trusts the machine's certificate store; uv and Node are told to
+yt-dlp with the packages it brings in beyond the lock (`yt-dlp-ejs`, `brotli`, `mutagen`, `pycryptodomex`,
+`websockets` today) - not pinned - by the SHA256 pypi.org publishes for each file, from an https source (where
+pypi.org does not answer: by TLS alone, the index's dates deciding). urllib trusts the machine's certificate store; uv and Node are told to
 (`UV_SYSTEM_CERTS=1`, `NODE_USE_SYSTEM_CA=1`, checked in uv 0.13.9's and Node 24's own help: 153 system
 roots beside Node's 118 bundled ones on the measured machine) unless the user set them, so a proxy that inspects TLS with
 its root in the OS store works for every download; a step that fails on a certificate says so once.

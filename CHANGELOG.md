@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **yt-dlp's three days are pypi.org's dates, and its files are held to pypi.org's digests** (KNOWN-ISSUES 350, 351):
+  the release - and every package it brings in beyond the lock - is chosen in pypi.org's own JSON, the newest final
+  release out three days that its requirement allows, then installed by its exact version from whatever index is set,
+  each file held to the SHA256 pypi.org publishes (`--require-hashes`, the lock as constraints). The three days were
+  uv's `--exclude-newer-package` against the index, and an index that gives no upload dates - an HTML mirror: Aliyun's,
+  Tencent Cloud's, Huawei Cloud's, Douban's (measured; TUNA, USTC, SJTU and BFSU give them), a company's Nexus - left
+  every file out: a first `--setup` got no yt-dlp, and an environment that had one never updated it while every update
+  "worked"; and the hold named a fixed list, so a package a newer yt-dlp brings in came in its newest upload, an hour
+  old. Where pypi.org does not answer the index's dates decide as before, and an index that gives none is named, with
+  no stamp. Tests: unit checks of the choice on a stand-in for pypi.org's JSON, and the real uv against a loopback
+  index served as HTML without dates and as JSON with them (12 checks; the code before failed all 12).
+
 ## 0.5.0 - 2026-11-28
 
 What 0.5.0 brings, for a user and for the agent that reads with it:

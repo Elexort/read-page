@@ -294,10 +294,13 @@ defuddle and its 26 npm packages by the SHA512 of each in `scripts/defuddle-lock
 OCR pack of tessdata_fast 4.1.0 by its SHA256 in `scripts/tessdata-lock.txt`; uv's wheel, Node's archive and
 PyPI's Node wheel (only where there is no Playwright wheel to take Node from - musl) by SHA256 pinned for
 each platform; npm's tarball by its SHA512; our Python by the SHA256 the pinned uv carries for it. Two
-downloads have no hash: yt-dlp and the five packages that float with it (`yt-dlp-ejs`, `brotli`, `mutagen`,
-`pycryptodomex`, `websockets`), which follow the sites by design - the newest release that has been out three
-days, checked by TLS alone, the lock's own packages in its tree still held to their hashes - and
-Playwright's browser, which Playwright downloads over TLS with a size check and no hash. That is why no
+downloads have no hash the skill carries: yt-dlp with the packages it brings in beyond the lock (today
+`yt-dlp-ejs`, `brotli`, `mutagen`, `pycryptodomex`, `websockets`), which follow the sites by design - each in the
+newest release that has been out three days by pypi.org's own upload dates, installed by its exact version from
+whatever index is set and held to the SHA256 pypi.org publishes for it (where pypi.org does not answer, the index's
+dates decide, and an index that gives none - an HTML mirror such as Aliyun's - is named), the lock's own packages in
+its tree still held to their hashes - and Playwright's browser, which Playwright downloads over TLS with a size
+check and no hash. That is why no
 source is used in plain `http://`: an index, a registry, a mirror or a download host named so is left out
 and the default used, and the setup's log says so; `READ_PAGE_ALLOW_HTTP=<host>` lets a company's intranet
 mirror through, and every line that uses it says it goes in plain http (anyone on that network path could
@@ -325,7 +328,7 @@ one thing: a video read in the environment looks for a newer yt-dlp every three 
 | our EPUB, ODT, ODS, ODP and RTF readers | headings, nested lists, tables with merged cells, notes, links, pictures where they stand (an RTF's too), code, formulas (ODT), a sheet's table, its text boxes and its cells' comments, a slide's text and notes (ODS, ODP), code pages (RTF); against pandoc on 52 files they lost nothing it kept, and kept the endnotes, headings, tables and non-Latin RTF it lost | built in: `scripts/docreaders.py`, the standard library alone, in a process of its own (pandoc left `--setup` on 2026-11-21) |
 | `youtube-transcript-api` | a YouTube transcript when yt-dlp has none | 1.2.5 |
 | OCR | scanned PDFs (3 pages a document) and `--ocr N` | tesseract 5.5.4 in `tesserocr` 2.13 with `tessdata_fast` 4.1.0, each pack SHA256 pinned: the ten languages with the most web text (`eng rus chi_sim chi_tra jpn kor deu fra spa por`) and four scripts English reads as nothing (`ara ell tha heb`), 27.4 MiB, the vertical packs of Chinese, Japanese and Korean and Fraktur's (`jpn_vert chi_tra_vert chi_sim_vert kor_vert frk`, 13.7 MiB), the packs of the user's own languages beside them, and `osd` (10.1 MiB), which tells each scanned page's script and which way up it lies, so that the page is turned upright and read with its own pack - a page printed in columns with a vertical one, a page whose script OSD is unsure of with the likeliest scripts' packs, the surest reading kept; `--setup --ocr-langs eng+hin` names more |
-| `yt-dlp` | video subtitles and thumbnails | not pinned: the newest release that has been out three days, looked for again every three days by a video read |
+| `yt-dlp` | video subtitles and thumbnails | not pinned: the newest release that has been out three days by pypi.org's dates, each file held to pypi.org's SHA256, looked for again every three days by a video read |
 | `pillow`, `psutil`, `python-docx`, `openpyxl`, `python-pptx` | pictures for MCP, Office files | pinned in `scripts/setup-lock.txt` with all 54 packages |
 
 What `--setup` cannot do, it says, with this OS's command: OCR on Windows on ARM and macOS 14 or
@@ -477,7 +480,7 @@ as `Referer`; on a shared `/tmp` the cache is `read-page-<uid>`, 0700.
 | The 226-page check (2026-11-06), pages picked to be hard | **202 ok, 6 blocked, 4 login_required, 5 not_found, 7 error, 2 empty**, each with its reason; p50 2.1 s, max 22.9 s on a fast machine, p50 4.8 s, max 30.9 s on an emulated weak laptop |
 | A set read the way `SKILL.md` says (2026-11-07): `--allow-external` first, advice followed, the outline to jump | a 34-page set **34 of 34**, 37 held-out pages no rule was tuned on **37 of 37** (each fact taken from a real Chrome; walls and paywalls by an honest status or through a reader); **1.10 calls** a question; every answer within 9 911 bytes and 309 lines, no CR; from the cache p50 0.22 s, max 0.26; UTF-8 whole in cmd, PowerShell 5.1 and 7, Git Bash and WSL under five code pages |
 | Contract | every manifest in the suite validated against `references/manifest-schema.json` (17 manifests, 0 errors) |
-| Tests | answer contract **239** (one check a shell the machine has - cmd, bash, PowerShell 5.1 and 7: 230 with bash alone), statuses **86**, timeouts **18**, deadline **22**, formats **168** (165 on Linux, 163 on macOS), reading **67**, sources **42**, blocks **46**, images **55**, speed **8**, MCP parallel **30**, security **53** (49 on Windows), props **83**, fixes **167**, channel **9**, setup audit **40**, environment **255** (246 off Windows; 2 fewer where no uv is found, 2 fewer with an environment set up before 2026-11-23, 4 before 2026-11-22), MCP **33**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **169** (167 on macOS), Chinese, Japanese and Korean input **228** (225 on Linux, 227 where a GBK locale is installed, 221 on macOS; 193 without curl_cffi and charset_normalizer), browser live **37**; against the real services: sources live **20** (15 without the paid readers' keys: with no Firecrawl, Exa or Tavily key set, their five checks are skipped, not failed) |
+| Tests | answer contract **239** (one check a shell the machine has - cmd, bash, PowerShell 5.1 and 7: 230 with bash alone), statuses **86**, timeouts **18**, deadline **22**, formats **168** (165 on Linux, 163 on macOS), reading **67**, sources **42**, blocks **46**, images **55**, speed **8**, MCP parallel **30**, security **53** (49 on Windows), props **83**, fixes **167**, channel **9**, setup audit **40**, environment **267** (258 off Windows; 7 fewer where no uv is found, 2 fewer with an environment set up before 2026-11-23, 4 before 2026-11-22), MCP **33**, office **3**, our EPUB/ODT/ODS/ODP/RTF readers **169** (167 on macOS), Chinese, Japanese and Korean input **228** (225 on Linux, 227 where a GBK locale is installed, 221 on macOS; 193 without curl_cffi and charset_normalizer), browser live **37**; against the real services: sources live **20** (15 without the paid readers' keys: with no Firecrawl, Exa or Tavily key set, their five checks are skipped, not failed) |
 | CI | the offline suites on ubuntu (3.9 and 3.12), windows, macOS; a browser job on all three; and a real install - `--setup` from nothing into a folder with a space and Cyrillic in its path, every engine checked, the suites and a scanned PDF read through OCR under the environment's Python, `--setup` again with nothing to fetch - on Linux, Windows and macOS, x64 and arm64, a user's own clone-and-read, a bare Python, and containers of Alpine, Ubuntu 20.04 and 24.04, Debian 11, Rocky Linux 8, Fedora, Arch and openSUSE, a proxy that inspects TLS (Linux, Windows, macOS), a Windows whose Python has the code page 936 or 950 in a profile named in Chinese, README's ZIP, and the suites in a GBK locale on Linux, `tests/cjk.py` once more in UTF-8 mode there (`install.yml`) |
 | Coverage | 65 % of the engine's statements |
 
@@ -540,7 +543,7 @@ It says so, and says what to do:
 its files, statuses, flags, privacy, limits, cookies, pictures, video) · `references/engines.md`
 (every tier, timeout and failure mode) · `references/documents.md` · `references/endpoints.md` ·
 `references/mcp.md` · `references/video.md` · `references/manifest-schema.json` ·
-[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (335 rows: 267 fixed, 17 planned, 51 by design) ·
+[`KNOWN-ISSUES.md`](https://github.com/Elexort/read-page/blob/dev/KNOWN-ISSUES.md) (337 rows: 269 fixed, 17 planned, 51 by design) ·
 [`CHANGELOG.md`](https://github.com/Elexort/read-page/blob/dev/CHANGELOG.md) - both on the `dev` branch, with the tests
 
 ## License

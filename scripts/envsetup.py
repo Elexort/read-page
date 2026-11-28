@@ -1727,7 +1727,11 @@ class Work:
     def ytdlp(self):
         ok, note = ytdlp_update(self.d, self.uv_exe, self.env_py, self.env, self.sh,
                                 lock=os.path.join(at(self.d, self.env_rel), ENV_LOCK))
-        if not ok:
+        if NO_DATES_WHY in note:
+            # neither --setup again nor a later update helps while the index gives no dates and pypi.org is not reached
+            self.lack("yt-dlp", note, "UV_DEFAULT_INDEX=<an index that gives upload dates>, or pypi.org reachable, "
+                                      "then readpage.py --setup")
+        elif not ok:
             self.lack("yt-dlp", note, "readpage.py --setup")
         return ok, note
 
@@ -2283,13 +2287,14 @@ def linked_env(env, limit=4000):
 
 
 def ytdlp_command(uv, py, now=None, floor="", lock=None):
-    """uv's command for the newest yt-dlp that has been out YTDLP_AGE_DAYS - and never an older one than
-    `floor`, the version installed now (with no floor, a pin of the lock younger than the cutoff made
-    uv backtrack to yt-dlp 2022.3.8.2, which has no `default` extra and needs none of the packages: exit 0,
-    "success", and every video read passing --js-runtimes to a yt-dlp that rejects it). The packages of
-    the environment's own lock stay at its pins, held to its hashes (--verify-hashes: no settings file switches that
-    off); the date holds only what floats (YTDLP_FLOATS), which no hash can name - its files are checked by TLS alone,
-    from an https index (refuse_plain_http)."""
+    """uv's command for the newest yt-dlp that has been out YTDLP_AGE_DAYS by the index's own dates - the way where
+    pypi.org does not answer (ytdlp_plans is the other) - and never an older one than `floor`, the version installed now
+    (with no floor, a pin of the lock younger than the cutoff made uv backtrack to yt-dlp 2022.3.8.2, which has no
+    `default` extra and needs none of the packages: exit 0, "success", and every video read passing --js-runtimes to a
+    yt-dlp that rejects it). The packages of the environment's own lock stay at its pins, held to its hashes
+    (--verify-hashes: no settings file switches that off); the date holds only what floats (YTDLP_FLOATS), which no hash
+    can name - its files are checked by TLS alone, from an https index (refuse_plain_http). An index that gives no
+    upload dates (PEP 700) leaves every file out under it: ytdlp_update says so."""
     cutoff = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((now or time.time()) - YTDLP_AGE_DAYS * 86400))
     cmd = [uv, "pip", "install", "--python", py, "--upgrade", YTDLP + (">=" + floor if floor else ""),
            "-c", lock or LOCK_FILE, "--only-binary", ":all:", "--verify-hashes"]
@@ -2301,6 +2306,177 @@ def ytdlp_command(uv, py, now=None, floor="", lock=None):
 def _vkey(v):
     """A yt-dlp version ("2026.10.26", "2026.11.20.232656") as numbers to compare."""
     return tuple(int(x) for x in re.findall(r"\d+", v or ""))
+
+
+# yt-dlp's release, and the packages that come with it beyond the lock, by pypi.org's own dates and digests (KNOWN-ISSUES
+# 350, 351). The three days were uv's --exclude-newer-package against the index, and uv leaves out a file whose upload
+# time the index does not give (PEP 700 is the simple API's JSON form): behind Aliyun's, Tencent Cloud's, Huawei Cloud's
+# or Douban's mirror (HTML, no dates - measured 2026-11-28; TUNA, USTC, SJTU and BFSU give them) a first install found no
+# yt-dlp at all, and an environment that had one kept it for good while every update "succeeded". And the date held a
+# list typed in (YTDLP_FLOATS): a package a newer yt-dlp brings in came in its newest upload, an hour old. pypi.org's JSON
+# gives every release's upload time and every file's SHA256: the releases are chosen there, then installed by their exact
+# versions from whatever index the user has, each file held to the digest pypi.org publishes (--require-hashes) - a
+# mirror serves the bytes, pypi.org their checksum, and a package no plan names is refused.
+PYPI_JSON = "https://pypi.org/pypi/%s/json"
+PYPI_VERSION_JSON = "https://pypi.org/pypi/%s/%s/json"
+YTDLP_CANDIDATES = 3            # releases tried, newest first, where one does not install (an index that lacks it)
+NO_DATES = "missing an upload date"           # uv's warning for a file whose upload time the index does not give
+NO_DATES_WHY = "the index gives no upload dates, which the three-day rule needs"
+
+
+def _norm(name):
+    """A package's name as pip compares them: lower case, a run of - _ . is one -."""
+    return re.sub(r"[-_.]+", "-", str(name or "")).lower()
+
+
+def _utc(stamp):
+    """An upload time of pypi.org's JSON ("2026-11-23T23:50:00.052942Z") as seconds since the epoch; None unread."""
+    import calendar
+    try:
+        return calendar.timegm(time.strptime(str(stamp)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return None
+
+
+def stable_version(v):
+    """A final release ("2026.11.23", "1.2.1", "1.0.post1"), not a pre-release or a nightly ("2026.11.24.232653.dev0")."""
+    return bool(re.fullmatch(r"\d+(?:\.\d+)*(?:\.post\d+)?", str(v or "")))
+
+
+def spec_allows(version, spec):
+    """Whether a final release meets a requirement's specifier ("<3,>=2.32.2", "==0.8.0", "~=1.2", "!=0.6.*"); a clause
+    this does not read is left to uv, which judges the install."""
+    def pad(a, b):
+        n = max(len(a), len(b))
+        return a + (0,) * (n - len(a)), b + (0,) * (n - len(b))
+
+    v = _vkey(version)
+    for clause in (c.strip() for c in str(spec or "").split(",")):
+        m = re.fullmatch(r"(===|==|!=|~=|>=|<=|>|<)\s*([0-9][0-9A-Za-z.!+-]*?)(\.\*)?", clause)
+        if not m:
+            continue
+        op, want, star = m.groups()
+        w = _vkey(want)
+        if star:
+            same = v[:len(w)] == w
+            if (op == "==" and not same) or (op == "!=" and same):
+                return False
+            continue
+        a, b = pad(v, w)
+        head = max(1, len(w) - 1)
+        if ((op in ("==", "===") and a != b) or (op == "!=" and a == b) or (op == ">=" and a < b)
+                or (op == "<=" and a > b) or (op == ">" and a <= b) or (op == "<" and a >= b)
+                or (op == "~=" and (a < b or v[:head] != w[:head]))):
+            return False
+    return True
+
+
+def requirements_of(requires_dist, extra=""):
+    """[(name, specifier)] of a release's Requires-Dist that come with `extra`, and those that come with none; an
+    extra's own (yt-dlp's `curl-cffi`, `pin`, `secretstorage`) is left out. Platform markers are uv's: the pins go in as
+    constraints, which install nothing that nothing asks for."""
+    out = []
+    for r in requires_dist or []:
+        req, _, marker = str(r).partition(";")
+        extras = re.findall(r"""\bextra\s*==\s*["']([^"']+)["']""", marker)
+        if extras and extra not in extras:
+            continue
+        m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*\(?\s*([^()]*?)\s*\)?\s*$", req)
+        if m:
+            out.append((_norm(m.group(1)), m.group(2).replace(" ", "")))
+    return out
+
+
+def held_release(meta, cutoff, spec="", floor=""):
+    """(version, [the SHA256 of its wheels]) of the newest final release in a package's pypi.org JSON that `spec`
+    allows, no older than `floor`, with wheels uploaded before `cutoff` - those wheels alone: one added to an old release
+    since is no file of it here (uv refuses it by its hash); None where there is none."""
+    releases = (meta.get("releases") if isinstance(meta, dict) else None) or {}
+    for v in sorted(releases, key=_vkey, reverse=True):
+        if not stable_version(v) or (floor and _vkey(v) < _vkey(floor)) or (spec and not spec_allows(v, spec)):
+            continue
+        shas = sorted(set(f["digests"]["sha256"] for f in releases[v] or []
+                          if isinstance(f, dict) and f.get("packagetype") == "bdist_wheel" and not f.get("yanked")
+                          and (f.get("digests") or {}).get("sha256")
+                          and (_utc(f.get("upload_time_iso_8601")) or cutoff) < cutoff))
+        if shas:
+            return v, shas
+    return None
+
+
+def ytdlp_plans(lock_text, now=None, floor="", fetch=None):
+    """The installs the yt-dlp step may make, newest first: {name: (version, [sha256])} - yt-dlp's newest final release,
+    no older than `floor`, that has been out YTDLP_AGE_DAYS by pypi.org's dates, and each package its `default` extra and
+    their own requirements bring in beyond the lock, in the newest release of that package out as long that the
+    requirement allows. Nothing where no such release of yt-dlp is there. Raises where pypi.org does not answer: the
+    dates are then the index's (ytdlp_command)."""
+    fetch = fetch or fetch_json
+    cutoff = (now or time.time()) - YTDLP_AGE_DAYS * 86400
+    locked = set(lock_pins(lock_text))
+    metas = {}
+
+    def meta(name):
+        if name not in metas:
+            metas[name] = fetch(PYPI_JSON % name)
+        return metas[name]
+
+    def requires(name, version, extra=""):
+        info = meta(name).get("info") or {}
+        if info.get("version") != version:           # the JSON's info is its newest release's
+            info = fetch(PYPI_VERSION_JSON % (name, version)).get("info") or {}
+        return requirements_of(info.get("requires_dist"), extra)
+
+    top = meta("yt-dlp").get("releases") or {}
+    for v in sorted(top, key=_vkey, reverse=True):
+        if floor and _vkey(v) < _vkey(floor):
+            break
+        got = held_release({"releases": {v: top[v]}}, cutoff, floor=floor)
+        if not got:
+            continue
+        plan, todo = {"yt-dlp": got}, requires("yt-dlp", v, "default")
+        while todo:
+            name, spec = todo.pop(0)
+            if name in locked or name in plan:
+                continue
+            pick = held_release(meta(name), cutoff, spec)
+            if not pick:
+                plan = None                          # it needs a release of this one that has not been out so long
+                break
+            plan[name] = pick
+            todo += requires(name, pick[0])
+        if plan:
+            yield plan
+
+
+def ytdlp_plan_files(plan, folder):
+    """A plan as uv's two files: yt-dlp[default] at its version with its digests - what is installed - and every other
+    package at its version with its own, as constraints: each comes only where something asks for it."""
+    os.makedirs(folder, exist_ok=True)
+
+    def entry(name, version, shas):
+        return "%s==%s \\\n%s\n" % (name, version, " \\\n".join("    --hash=sha256:%s" % s for s in shas))
+
+    req, cons = os.path.join(folder, "ytdlp-requirements.txt"), os.path.join(folder, "ytdlp-constraints.txt")
+    with open(req, "w", encoding="utf-8") as fh:
+        fh.write(entry(YTDLP, *plan["yt-dlp"]))
+    with open(cons, "w", encoding="utf-8") as fh:
+        fh.write("".join(entry(n, *plan[n]) for n in sorted(plan) if n != "yt-dlp") or "\n")
+    return req, cons
+
+
+def ytdlp_pinned_command(uv, py, req, cons, lock=None):
+    """uv's command for a plan: its files, the environment's lock as constraints too, every file held to a hash - the
+    lock's for its packages, pypi.org's for the rest - and nothing installed that neither names."""
+    return [uv, "pip", "install", "--python", py, "-r", req, "-c", lock or LOCK_FILE, "-c", cons, "--only-binary", ":all:",
+            "--require-hashes"]
+
+
+def _sh3(sh, cmd, timeout, env):
+    """(exit code, its last lines, the whole output) of a command run by `sh`: Work.sh keeps the whole of it in .full,
+    the background update's gives three values, a test's two."""
+    got = sh(cmd, timeout=timeout, env=env)
+    full = got[2] if len(got) > 2 else getattr(getattr(sh, "__self__", None), "full", got[1])
+    return got[0], got[1], full or ""
 
 
 def _ytdlp_version(py):
@@ -2329,14 +2505,51 @@ def env_lock(d, info):
     return None
 
 
-def ytdlp_update(d, uv, py, env, sh, now=None, lock=None):
-    """Install or update yt-dlp in the environment: (ok, note). It never goes backwards: the version
-    installed now is the floor, and a result older than it is put back. The stamp - when it was looked
-    for - is touched after an update that worked, never before (an updater killed with its command
-    had already said "looked", and nothing looked again for three days); a look that failed leaves
+def ytdlp_update(d, uv, py, env, sh, now=None, lock=None, fetch=None):
+    """Install or update yt-dlp in the environment: (ok, note). The release is the one ytdlp_plans picks by pypi.org's
+    dates and digests; where pypi.org does not answer, the index's dates decide (ytdlp_command), and an index that gives
+    none is named (NO_DATES_WHY) - it left every file out, and an environment that had yt-dlp kept it with every update
+    "a success". It never goes backwards: the version installed now is the floor, and a result older than it is put back.
+    The stamp - when it was looked for - is touched after an update that worked, never before (an updater killed with
+    its command had already said "looked", and nothing looked again for three days); a look that failed leaves
     `ytdlp.failed`, so a read does not start another at once."""
     before = _ytdlp_version(py)
-    rc, out = sh(ytdlp_command(uv, py, now, floor=before, lock=lock), timeout=600, env=env)
+    try:
+        with open(lock or LOCK_FILE, encoding="utf-8") as fh:
+            lock_text = fh.read()
+    except OSError:
+        lock_text = ""
+    rc, out, plans, plan, why = 1, "", None, None, ""
+    try:
+        plans = ytdlp_plans(lock_text, now=now, floor=before, fetch=fetch)
+        plan = next(plans, None)                         # pypi.org's JSON is read here
+    except Exception as e:                                     # noqa: BLE001
+        plans, why = None, "pypi.org did not answer (%s)" % " ".join(str(e).split())[:80]
+    if plans is not None:
+        folder = os.path.join(d, "cache", "dl")
+        if plan is None:
+            rc, out = (0, "") if before else (1, "no release of yt-dlp on pypi.org has been out %d days" % YTDLP_AGE_DAYS)
+        for _ in range(YTDLP_CANDIDATES):
+            if plan is None:
+                break
+            req, cons = ytdlp_plan_files(plan, folder)
+            rc, out, _full = _sh3(sh, ytdlp_pinned_command(uv, py, req, cons, lock), 600, env)
+            for p in (req, cons):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+            if rc == 0:
+                break
+            try:                                          # the next release down (an index that lacks this one)
+                plan = next(plans, None)
+            except Exception:                                  # noqa: BLE001
+                plan = None
+    else:
+        rc, out, full = _sh3(sh, ytdlp_command(uv, py, now, floor=before, lock=lock), 600, env)
+        if NO_DATES in full:
+            rc, out = 1, "%s, and %s: an index that gives them (pypi.org's own; the TUNA, USTC, SJTU or BFSU mirror) " \
+                         "lets the update work" % (NO_DATES_WHY, why)
     version = _ytdlp_version(py)
     if before and _vkey(version) < _vkey(before):
         sh([uv, "pip", "install", "--python", py, "%s==%s" % (YTDLP, before), "-c", lock or LOCK_FILE,
@@ -2360,9 +2573,11 @@ def ytdlp_update(d, uv, py, env, sh, now=None, lock=None):
                 fh.write("%s\n" % out[-200:])
         except OSError:
             pass
+    said = out if NO_DATES_WHY in out else ""          # the cause and what helps, whole
     if rc != 0 and not version:
-        return False, "not installed: " + out[-140:]
-    return True, "%s%s" % (version or "?", "" if rc == 0 else " (kept: no newer one could be fetched - %s)" % out[-80:])
+        return False, "not installed: " + (said or out[-140:])
+    return True, "%s%s" % (version or "?", "" if rc == 0 else " (kept: %s)" % (
+        said or "no newer one could be fetched - %s" % out[-80:]))
 
 
 def ytdlp_background(d):
@@ -2402,7 +2617,7 @@ def _ytdlp_worker(d):
                 out, rc = str(e), -1
             log.write(out[-4000:] + "\n")
             log.flush()
-            return rc, " | ".join(ln.strip() for ln in out.strip().splitlines()[-3:])[-300:]
+            return rc, " | ".join(ln.strip() for ln in out.strip().splitlines()[-3:])[-300:], out   # (the whole: _sh3)
         for attempt in range(3):
             ok, note = ytdlp_update(d, uv, py, env, sh, lock=lock)
             if ok and "kept" not in note:
