@@ -194,6 +194,27 @@ def _json3(raw):
     return cues
 
 
+_ASS_BLOCK = re.compile(r"\{[^}]*\}")
+_ASS_DRAW = re.compile(r"\\p(\d+)")
+
+
+def _ass_words(text):
+    """A Dialogue line's text without its drawings: an override block's `\\p1` (any scale past 0) starts a vector
+    drawing - "m 0 0 l 100 0 100 100", a sign's or a karaoke effect's shape - which `\\p0` or the line's end ends
+    (they were words in the transcript, KNOWN-ISSUES 334). `\\pos` and `\\pbo` are other tags."""
+    out, drawing, pos = [], False, 0
+    for m in _ASS_BLOCK.finditer(text):
+        if not drawing:
+            out.append(text[pos:m.start()])
+        out.append(m.group(0))                               # the overrides themselves: _clean takes them out
+        for scale in _ASS_DRAW.findall(m.group(0)):
+            drawing = int(scale) > 0
+        pos = m.end()
+    if not drawing:
+        out.append(text[pos:])
+    return "".join(out)
+
+
 def _ass(raw):
     fields, in_events, cues = None, False, []
     for line in raw.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
@@ -207,7 +228,7 @@ def _ass(raw):
             parts = line[9:].split(",", len(names) - 1)
             if len(parts) == len(names) and "start" in names and "end" in names and "text" in names:
                 row = dict(zip(names, parts))
-                cues.append((_seconds(row["start"]), _seconds(row["end"]), _clean(row["text"])))
+                cues.append((_seconds(row["start"]), _seconds(row["end"]), _clean(_ass_words(row["text"]))))
     return sorted(cues, key=lambda c: c[0])
 
 

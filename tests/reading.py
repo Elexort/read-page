@@ -280,6 +280,14 @@ try:
                 wrong.append("%s: %r" % (ext, got[:70]))
         check("%d subtitle formats (SRT, SBV, TTML, DFXP, srv1-3, json3, ASS, LRC) read as the same two blocks" % len(formats8),
               not wrong, "; ".join(wrong[:2]))
+        # an ASS sign or karaoke effect is a vector drawing between {\p1} and {\p0}: its path was words (KNOWN-ISSUES 334)
+        ass8 = ("[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+                "Dialogue: 0,0:00:01.00,0:00:03.50,Sign,,0,0,0,,{\\an7\\pos(10,20)\\p1}m 0 0 l 100 0 100 100 0 100{\\p0}"
+                "Hello, it's world\n"
+                "Dialogue: 0,0:00:41.00,0:00:43.50,Default,,0,0,0,,Second block{\\p2}m 5 5 l 9 9\n")
+        got8 = mod8.vtt_to_text(sub8.to_vtt(ass8, "ass"))
+        check("334: an ASS line's vector drawing ({\\p1}m 0 0 l ...{\\p0}) is no words in the transcript (its path was)",
+              got8 == want8, got8[:120])
         vtt8 = sub8.to_vtt(formats8["srt"], "srt")
         check("an SRT becomes a WEBVTT text (dotted times, no index lines): what transcript.vtt holds",
               vtt8.startswith("WEBVTT") and "00:00:01.000 --> 00:00:03.500" in vtt8 and "," not in vtt8.split("\n\n")[1].split("\n")[0],
