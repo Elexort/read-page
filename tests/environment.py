@@ -4100,6 +4100,27 @@ with warnings.catch_warnings():
 attempt("redact reads an address whose password holds a / with no warning under any Python (re.split's maxsplit by name)",
         lambda: (not e358 and "https://host.example:8443" in r358 and "pa/ss" not in r358, e358 or r358))
 
+# ---------------------------------------------------------------- a POSIX home of the user's alone (row 359)
+# Windows makes a home others may write in its user's alone (secure_home); on POSIX nothing looked at the home's owner or
+# mode, while the environment's bytecode folder in it was refused for exactly that (a .pyc planted by someone else).
+if os.name == "posix":
+    import stat as stat_                                 # noqa: E402
+    d359 = scratch("rp-env-loose-")
+    os.chmod(d359, 0o777)
+    try:
+        said359 = envsetup.secure_home_posix(d359)
+    except Exception as e_:                              # noqa: BLE001
+        said359 = "%s: %s" % (type(e_).__name__, e_)
+    mode359 = stat_.S_IMODE(os.stat(d359).st_mode)
+    attempt("POSIX: a home that group or others may write in is made the user's alone (0700), and said",
+            lambda: (mode359 == 0o700 and "yours alone" in said359, "%o %s" % (mode359, said359)))
+    attempt("... and a folder of another user's is refused before anything is touched (root may take any)",
+            lambda: ("another user" in envsetup.others_home("/") if os.getuid() != 0 else envsetup.others_home("/") == "",
+                     envsetup.others_home("/")[:100]))
+else:
+    attempt("off POSIX neither the owner's nor the mode's rule says anything (Windows has secure_home)",
+            lambda: (envsetup.secure_home_posix(tempfile.gettempdir()) == "" and envsetup.others_home("C:\\") == "", ""))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)

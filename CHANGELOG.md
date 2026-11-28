@@ -49,6 +49,9 @@
   comes all the same). `YTDLP_FLOATS` is gone.
 - **`redact` passes `re.split` its `maxsplit` by name** (KNOWN-ISSUES 358): by position it warned under Python 3.13 and
   3.15 (into the detail log, from the worker), and fails once the argument is keyword-only.
+- **On POSIX the home is the user's alone too** (KNOWN-ISSUES 359): a `READ_PAGE_HOME` of another user's is refused
+  before anything is touched, and one that group or others may write in is made 0700 (said, not mended, on a mount with
+  no Unix modes); nothing looked at either, while the environment's bytecode folder in it was refused for that reason.
 
 ## 0.5.0 - 2026-11-28
 

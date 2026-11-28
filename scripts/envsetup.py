@@ -202,7 +202,7 @@ def setup(script, skill_version):
     if too_long:
         print("read-page --setup: " + too_long)
         return 1
-    foreign = foreign_home(d)
+    foreign = foreign_home(d) or others_home(d)
     if foreign:
         print("read-page --setup: " + foreign)
         return 1
@@ -216,7 +216,7 @@ def setup(script, skill_version):
     except OSError as e:
         print("read-page --setup: cannot write to %s: %s" % (d, e))
         return 1
-    said = secure_home(d, new)
+    said = secure_home(d, new) or secure_home_posix(d)
     if said:
         print("read-page --setup: " + said)
     t0 = time.time()
@@ -387,6 +387,44 @@ def foreign_home(d):
         return ""
     shown = ", ".join(sorted(names)[:5]) + (", ..." if len(names) > 5 else "")
     return "%s holds other things (%s), and %s, so it takes only an empty folder or one it made. %s" % (d, shown, why, fix)
+
+
+def others_home(d):
+    """POSIX: what --setup says, and stops at, where its folder belongs to another user - the programs it puts there, which
+    every read runs, would be theirs to change; '' where it does not (or is not there yet), and on Windows (secure_home)."""
+    if os.name != "posix":
+        return ""
+    try:
+        st = os.stat(d)
+    except OSError:
+        return ""
+    if st.st_uid == os.getuid():
+        return ""
+    return ("%s belongs to another user (uid %d): the Python, the engines and the browser --setup puts there - which every "
+            "read runs - would be theirs to change (KNOWN-ISSUES 359). Nothing was touched: set READ_PAGE_HOME to a new "
+            "folder of your own, or unset it for the default (%s)." % (d, st.st_uid, ownenv.default_home()))
+
+
+def secure_home_posix(d):
+    """POSIX: the folder --setup puts programs in must be this user's alone, as on Windows (secure_home): one that group
+    or others may write in - a shared folder, one made with a loose umask - is made 0700 (the folder is the skill's own:
+    foreign_home), and where that does not hold - a mount with no Unix modes, WSL's /mnt/c or exFAT - it is said. The
+    environment's bytecode folder was already refused there for that reason, while its site-packages ran (KNOWN-ISSUES
+    359). What to say ('' for nothing)."""
+    if os.name != "posix":
+        return ""
+    import stat
+    try:
+        mode = os.stat(d).st_mode
+        if not mode & 0o022:
+            return ""
+        os.chmod(d, stat.S_IMODE(mode) & ~0o077)
+        if not os.stat(d).st_mode & 0o022:
+            return "group or others could write in %s: it is yours alone now (0700)" % d
+    except OSError:
+        pass
+    return ("warning: group or others can write in %s (a mount with no Unix modes?), and so change the programs --setup "
+            "puts there; a folder on a file system of this machine's own keeps them yours" % d)
 
 
 def _done(st):

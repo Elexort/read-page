@@ -803,8 +803,11 @@ into uv's cache, which the setup cleans - measured, the cleaning after a check t
 On Windows a home outside the profile (`C:\read-page`) takes the ACL of its parent, and `C:\` lets every signed-in user
 modify what is made in it: `--setup` makes such a home its user's, SYSTEM's and the administrators' alone (`icacls`,
 inheritance off) where the folder is the skill's own - new, or holding nothing but what `--setup` keeps -, else says so
-with that command. On a POSIX mount with no Unix modes (WSL's `/mnt/c`, exFAT) every folder looks writable by all, so
-the environment's bytecode folder fails its check: the temp folder's is used then (reads had run with no bytecode,
+with that command. On POSIX a home that belongs to another user is refused before anything is touched, and one that
+group or others may write in is made 0700, and said (`others_home`, `secure_home_posix`: nothing looked at either, while
+the environment's bytecode folder in it was refused for that very reason - KNOWN-ISSUES 359). On a POSIX mount with no
+Unix modes (WSL's `/mnt/c`, exFAT) every folder looks writable by all, so the home's mode is said there, not mended,
+and the environment's bytecode folder fails its check: the temp folder's is used then (reads had run with no bytecode,
 0.25 s more each).
 
 `caps()` - what this machine has - costs ~0.3 s on Windows (every tool name against every PATH
