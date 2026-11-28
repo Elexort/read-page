@@ -2223,17 +2223,23 @@ try:
     # on Linux a process's commit is what the kernel charges it - its private writable mappings, VmData and VmStk -,
     # not its peak resident size: a model process that said 401 MB took 1 238 of VmData (KNOWN-ISSUES 314)
     if sys.platform.startswith("linux"):
+        # the 256 MB are in its commit, not in its peak resident size, which this process's own work before may hold up
+        # to its commit (Python 3.9 on ubuntu-22.04: 315 MB of 448) - what moves when they are reserved, then
         import mmap
+        mod7 = module().pdftables
+        before7 = mod7.own_memory()
         reserved = mmap.mmap(-1, 256 << 20, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)   # untouched: no resident page
-        mem7 = module().pdftables.own_memory()
+        mem7 = mod7.own_memory()
         with open("/proc/self/status") as fh:
             vm7 = sum(int(v.split()[0]) * 1024 for k, _s, v in (ln.partition(":") for ln in fh)
                       if k in ("VmData", "VmStk") and v.split())
         reserved.close()
+        grew7 = {k: mem7.get(k, 0) - before7.get(k, 0) for k in ("ram", "commit")}
         check("314: on Linux what a process says it commits is its VmData and VmStk, 256 MB it reserved and never "
               "touched among them (it was its peak resident size)", abs(mem7.get("commit", 0) - vm7) < (16 << 20)
-              and mem7.get("commit", 0) > mem7.get("ram", 0) + (200 << 20),
-              "%s against %d MB" % ({k: v >> 20 for k, v in mem7.items()}, vm7 >> 20))
+              and abs(grew7["commit"] - (256 << 20)) < (16 << 20) and grew7["ram"] < (16 << 20),
+              "%s, %s MB more, against %d MB" % ({k: v >> 20 for k, v in mem7.items()},
+                                                 {k: v >> 20 for k, v in grew7.items()}, vm7 >> 20))
     else:
         check.skip("314: a process's commit as Linux charges it", "Linux only")
 
