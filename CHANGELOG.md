@@ -13,6 +13,13 @@
   old. Where pypi.org does not answer the index's dates decide as before, and an index that gives none is named, with
   no stamp. Tests: unit checks of the choice on a stand-in for pypi.org's JSON, and the real uv against a loopback
   index served as HTML without dates and as JSON with them (12 checks; the code before failed all 12).
+- **`--setup` takes only a folder of its own** (KNOWN-ISSUES 352): one that is not there yet, is empty, or holds its
+  `setup.json`, `setup.state`, `setup.lock` or `setup-detail.log` - never a drive's root or the home folder itself. Any other
+  `READ_PAGE_HOME` is refused before anything in it is touched, the folder and what it holds named, an empty folder or
+  the default proposed. It was taken whatever it held: the setup's end deleted a home folder's `envs/*`, `node/*`,
+  `python/cpython-*` and `cache/dl` as its own leftovers, said to delete the whole folder to remove it, and on Windows
+  handed the agent an `icacls ... /inheritance:r` for it (for `D:\`, the whole drive). Tests: a home-like folder of the
+  user's with `envs/`, `node/` and `python/` is refused untouched; an empty, a new and a marked folder are taken.
 
 ## 0.5.0 - 2026-11-28
 

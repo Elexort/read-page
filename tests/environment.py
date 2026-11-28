@@ -1004,6 +1004,7 @@ def played(work, home_=None):
     if os.path.isdir(home_):
         with open(os.path.join(home_, "setup.log"), "w", encoding="utf-8") as fh_:
             fh_.write(finished_log)
+        open(os.path.join(home_, "setup.lock"), "a").close()      # what an earlier --setup left beside its log
     saved_ = (envsetup.time, envsetup._read_json, envsetup._locked, envsetup._launch)
     old_env = dict((k, os.environ.get(k)) for k in ("READ_PAGE_HOME", "READ_PAGE_SETUP_WAIT"))
     os.environ.update(READ_PAGE_HOME=home_, READ_PAGE_SETUP_WAIT="1000")
@@ -3778,6 +3779,68 @@ if uvx:
                      "%s | %s | stamp %s" % (ok4_, note4_[:160], stamp4)))
 else:
     print("SKIP yt-dlp by pypi.org's dates against a local index (no uv here: --setup's, or one on PATH)")
+
+# ---------------------------------------------------------------- the folder --setup takes as its own (row 352)
+# READ_PAGE_HOME was taken whatever it held: the end of a --setup deleted the envs/, node/ and python/ of a home folder or
+# a drive's root, said to delete the whole folder to remove it, and on Windows handed the agent an icacls for it. A folder
+# is --setup's only when it is new, empty, or holds one of its marks; any other is refused before anything is touched.
+fg_launched = []
+
+
+def fg_take(home_):
+    """envsetup.setup() for this home with the work's launch recorded (nothing starts): (exit code, what it printed)."""
+    saved_ = envsetup._launch
+    old_env = dict((k, os.environ.get(k)) for k in ("READ_PAGE_HOME", "READ_PAGE_SETUP_WAIT"))
+    envsetup._launch = lambda d_, run_, ver_: (fg_launched.append(d_) or ("", False))
+    os.environ.update(READ_PAGE_HOME=home_, READ_PAGE_SETUP_WAIT="0")
+    buf_ = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf_):
+            rc_ = envsetup.setup(SCRIPT, "test")
+    finally:
+        envsetup._launch = saved_
+        for k, v in old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    return rc_, buf_.getvalue()
+
+
+def fg_tree(root):
+    return sorted(os.path.relpath(os.path.join(r_, n_), root) for r_, ds_, fs_ in os.walk(root) for n_ in ds_ + fs_)
+
+
+fg_user = scratch("rp-env-userhome-")
+for rel_, text_ in (("envs/myproject/pyvenv.cfg", "home = /usr/bin\n"), ("envs/myproject/bin/python", "#!\n"),
+                    ("node/my-node-checkout/README.md", "a clone\n"), ("python/cpython-main/README.rst", "a clone\n"),
+                    ("Documents/notes.txt", "mine\n")):
+    p_ = os.path.join(fg_user, *rel_.split("/"))
+    os.makedirs(os.path.dirname(p_), exist_ok=True)
+    with open(p_, "w", encoding="utf-8") as fh_:
+        fh_.write(text_)
+fg_before = fg_tree(fg_user)
+del fg_launched[:]
+rc_fg, out_fg = fg_take(fg_user)
+attempt("a home-like folder of the user's own (envs/, node/, python/) is refused before anything is touched: exit 1, the "
+        "folder named, an empty folder or the default proposed, nothing launched, not a file made or removed",
+        lambda: (rc_fg == 1 and fg_user in out_fg and "empty folder" in out_fg and ownenv.default_home() in out_fg
+                 and not fg_launched and fg_tree(fg_user) == fg_before, out_fg.replace("\n", " | ")[:220]))
+fg_empty, fg_marked = scratch("rp-env-emptyhome-"), scratch("rp-env-markedhome-")
+fg_new = os.path.join(scratch("rp-env-newhome-"), "read-page")
+with open(os.path.join(fg_marked, "setup.json"), "w", encoding="utf-8") as fh_:
+    json.dump({"schema": ownenv.STATE_SCHEMA}, fh_)
+os.makedirs(os.path.join(fg_marked, "envs", "py3.13.18-0123456789"))
+fg_takes = []
+for home_ in (fg_empty, fg_new, fg_marked):
+    del fg_launched[:]
+    fg_takes.append(fg_take(home_)[0] == 0 and fg_launched == [home_])
+attempt("... while an empty folder, a new one and one --setup made (its setup.json) are taken as before",
+        lambda: (fg_takes == [True, True, True], str(fg_takes)))
+fg_root = os.path.splitdrive(os.path.abspath(os.sep))[0] + os.sep
+attempt("... and never a drive's root or the home folder itself, whatever they hold",
+        lambda: ("root of a drive" in envsetup.foreign_home(fg_root)
+                 and "home folder" in envsetup.foreign_home(os.path.expanduser("~")), envsetup.foreign_home(fg_root)[:140]))
 
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:

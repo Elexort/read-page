@@ -592,7 +592,12 @@ wherever it installs them, else the machine's own command:
 **`--setup`** (`scripts/envsetup.py`) installs all of them but the keys into the skill's own
 environment, a folder of the user's that every agent on the machine sees (`ownenv.home()`:
 `.read-page` in the home folder on Windows, `~/Library/Application Support/read-page` on macOS,
-`$XDG_DATA_HOME` or `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it). On Windows that folder's path
+`$XDG_DATA_HOME` or `~/.local/share/read-page` on Linux; `READ_PAGE_HOME` moves it). It takes a folder as its own only
+when the folder is not there yet, is empty, or holds one of its marks (`setup.json`, `setup.state`, `setup.lock`, `setup-detail.log`:
+`envsetup.SETUP_MARKS`), and never a drive's root or the home folder itself; any other is refused, named, with an
+empty folder or the default proposed, before anything in it is touched (`foreign_home`) - the end of a `--setup` deletes
+in its folder what it no longer uses (the environments, Pythons and Nodes of before), and a home folder's `envs/`,
+`node/` and `python/` were taken for its own (KNOWN-ISSUES 352). On Windows that folder's path
 is at most 120 characters (`WIN_HOME_MAX`): Windows refuses a DLL that carries a manifest - every `.pyd`, curl_cffi's
 and tesserocr's libraries - by a path over 250 (WinError 206, measured), the environment's deepest, curl_cffi's
 libcurl-impersonate, lies 116 inside the folder, and 14 are left for pins that move it; `--setup` refuses a longer

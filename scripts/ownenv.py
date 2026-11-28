@@ -47,6 +47,11 @@ def home():
     v = (os.environ.get("READ_PAGE_HOME") or "").strip()
     if v:
         return os.path.abspath(os.path.expanduser(v))
+    return default_home()
+
+
+def default_home():
+    """The folder home() names where READ_PAGE_HOME is not set."""
     if os.name == "nt":
         return os.path.join(os.path.expanduser("~"), ".read-page")
     if sys.platform == "darwin":

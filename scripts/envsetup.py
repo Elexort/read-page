@@ -201,6 +201,10 @@ def setup(script, skill_version):
     if too_long:
         print("read-page --setup: " + too_long)
         return 1
+    foreign = foreign_home(d)
+    if foreign:
+        print("read-page --setup: " + foreign)
+        return 1
     try:
         new = not os.path.isdir(d)
         os.makedirs(d, exist_ok=True)
@@ -309,8 +313,41 @@ def home_too_long(d, windows=None):
              if (os.environ.get("READ_PAGE_HOME") or "").strip() and units(default) <= WIN_HOME_MAX else "")
     return ("%s is %d characters long: on Windows the environment's DLLs do not load from a folder over %d characters "
             "(Windows refuses a DLL by a path over %d, and the deepest lies %d inside the folder). Nothing was "
-            "downloaded: set READ_PAGE_HOME to a shorter folder%s and run --setup again."
+            "downloaded: set READ_PAGE_HOME to a new folder with a shorter path%s and run --setup again."
             % (d, units(d), WIN_HOME_MAX, WIN_DLL_PATH_MAX, ENV_DLL_DEPTH, other))
+
+
+# What --setup leaves first in a folder it takes (setup.lock: the command's own look at the work's lock; the work's state
+# and detail log), and what a file manager leaves in a folder it only showed
+SETUP_MARKS = ("setup.json", "setup.state", "setup.lock", "setup-detail.log")
+_NO_MATTER = (".DS_Store", "Thumbs.db", "desktop.ini")
+
+
+def foreign_home(d):
+    """What --setup says, and stops at, where its folder is not one it may take as its own ('' where it may). A folder is
+    its own when it is not there yet, when it is empty, or when it holds one of --setup's marks (SETUP_MARKS: a --setup
+    made it) - and never when it is a drive's root, the file system's or the home folder itself. Any other is the
+    user's, whatever it holds: the end of a --setup took the envs/, node/ and python/ of a home folder or of a drive's
+    root for its own and deleted what it did not use, said to delete the whole folder to remove it, and on Windows
+    handed the agent an icacls that took the other accounts' access away from it (KNOWN-ISSUES 352). Nothing is touched
+    here: the folder is listed, no more."""
+    full = os.path.normcase(os.path.realpath(os.path.abspath(d)))
+    fix = ("Nothing was touched: set READ_PAGE_HOME to an empty folder (a new one: %s, say) or unset it for the default "
+           "(%s), and run --setup again." % (os.path.join(d, "read-page"), ownenv.default_home()))
+    why = ("--setup keeps its environment in a folder of its own, deletes there what it no longer uses, and tells the "
+           "user to delete that folder to remove it")
+    if os.path.dirname(full) == full:
+        return "%s is the root of a drive: %s. %s" % (d, why, fix)
+    if full == os.path.normcase(os.path.realpath(os.path.expanduser("~"))):
+        return "%s is your home folder: %s. %s" % (d, why, fix)
+    try:
+        names = [n for n in os.listdir(d) if not n.startswith(".write-check.") and n not in _NO_MATTER]
+    except OSError:
+        return ""                    # not there yet (it is made), or not a folder one can list: the write check says so
+    if not names or set(names) & set(SETUP_MARKS):
+        return ""
+    shown = ", ".join(sorted(names)[:5]) + (", ..." if len(names) > 5 else "")
+    return "%s holds other things (%s), and %s, so it takes only an empty folder or one it made. %s" % (d, shown, why, fix)
 
 
 def _done(st):
