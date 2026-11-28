@@ -8,6 +8,11 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **A cut PDF says it is cut** (KNOWN-ISSUES 335): a PDF that ends without its `%%EOF` was read as if whole - one
+  that did not open was `empty`, "no text in it", one that opened with no page a scan with no page to render, one
+  MuPDF repaired `ok` with its last pages gone unsaid. `signals.broken_pdf` says cut or damaged and how many pages
+  opened; a PDF whose pages hold under 40 words is `error`, and the advice asks for a whole copy (`--refresh` for a
+  server's).
 - **An ASS line's vector drawing is no words** (KNOWN-ISSUES 334): between `{\p1}` and `{\p0}` an ASS line draws a
   shape ("m 0 0 l 100 0 100 100"), and its path stood in the transcript; it is left out.
 - **A subtitle file is read in its own encoding** (KNOWN-ISSUES 333): yt-dlp writes a site's file as it came, and it

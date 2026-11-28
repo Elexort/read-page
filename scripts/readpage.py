@@ -7154,6 +7154,46 @@ def tables_advice(info):
     return "the tables on " + said("still one cell a line") + flag
 
 
+PDF_END_LOOK = 1024                     # a PDF's last bytes, where its %%EOF stands (where readers look for it)
+
+
+def pdf_broke(path, pages, why=""):
+    """What is wrong with a PDF that does not open whole (KNOWN-ISSUES 335): {"how": "cut" - it ends without its
+    %%EOF in its last PDF_END_LOOK bytes - or "damaged" - it ends as a PDF does and no page of it opens -, "pages":
+    the pages that opened (None: not known, no PyMuPDF), "size", "reason": the line an answer gives}; None for one
+    that ends as a PDF does and opened (or was not opened). `why`: what the opening said, when it failed."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as fh:
+            fh.seek(max(0, size - PDF_END_LOOK))
+            ends = b"%%EOF" in fh.read()
+    except OSError:
+        return None
+    if ends and (pages is None or pages):
+        return None
+    where = "damaged" if ends else "cut after %s: it ends without its end-of-file marker" % human_bytes(size)
+    opened = ("" if pages is None else "; %d of its pages opened" % pages if pages else
+              "; no page of it opens%s" % (" (%s)" % why if why else ""))
+    return {"how": "damaged" if ends else "cut", "pages": pages, "size": size,
+            "reason": "not a whole PDF: %s%s" % (where, opened)}
+
+
+def pdf_advice(info, local, words):
+    """The advice line for a PDF that is not whole (pdf_broke): what of it the answer holds, and what gets the rest -
+    a whole copy of a file on this machine, another fetch of a server's."""
+    what = ("the PDF is cut after %s (it ends without its end-of-file marker)" % human_bytes(info["size"])
+            if info["how"] == "cut" else "the PDF is damaged")
+    n = info.get("pages")
+    held = ("no page of it opens" if n == 0 else
+            "the %d pages that opened are read here, what came after the cut is missing" % n if n and words >= 40
+            and info["how"] == "cut" else "the %d pages that opened are read here" % n if n and words >= 40 else
+            "its %d pages that opened hold no text of their own" % n if n else
+            "what of it was read is here" if words >= 40 else "no text could be read from it")
+    rest = ("a whole copy of the file is needed%s" % (" for the rest" if words >= 40 else "") if local else
+            "--refresh fetches it again, and the same bytes come back while the server's copy is %s" % info["how"])
+    return "%s: %s; %s" % (what, held, rest)
+
+
 def doc_text(path, kind, c, workdir, alternate=False, name=""):
     """PDF / DOCX / PPTX / XLSX / EPUB / ODT / RTF / a plain ZIP -> text, plus a note when a text
     layer is missing. EPUB, ODT and RTF are our own readers' (docreaders.py, the standard library
@@ -7291,8 +7331,9 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
             md, why = own_doc(again, sub, pics)
         return md, why or ("" if md.strip() else "no text in this %s" % (sub or kind).upper())
     if kind == "pdf":
+        broken = None
         if c["libs"].get("pymupdf"):
-            text = None
+            text, pages = None, []
             try:
                 import pymupdf
                 doc = pymupdf.open(path)
@@ -7300,11 +7341,23 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 text = "\n\f\n".join(pages)
             except Exception as e:                            # noqa: BLE001
                 debuglog.exc("document: converter", e)
-                note = str(e)[:100]
+                note = short_reason(e, 160)                   # (its end says what: "... as type pdf")
+            # a PDF that does not open whole - one cut short ends without its %%EOF (KNOWN-ISSUES 335) - says so: it
+            # was `empty`, "no text in it", or a scan with no page to render, or `ok` with its last pages unsaid
+            broken = pdf_broke(path, len(pages), "" if text is not None else note)
+            if broken and not name:
+                _ZIPS["pdf"] = broken
+            if broken and not pages:
+                note = broken["reason"]
+                if text is not None:
+                    return "", note                           # it opens with no page: no scan, nothing to render
             if text is not None and len(text.strip()) < 20 * max(1, len(pages)):
                 # a scan, with --alternate too: no layout tool finds text that is not there (its
                 # three words once stood for the document, and the pages were never read)
-                return text, "no text layer: this PDF is a scan; render pages to images and look at them"
+                return text, "no text layer: this PDF is a scan; render pages to images and look at them" + (
+                    "; " + broken["reason"] if broken else "")
+            if broken:
+                note = broken["reason"]                       # its pages that opened are read, the cut said
             model = c["libs"].get("pymupdf4llm") and c["libs"].get("onnxruntime") is not False
             if text is not None and alternate and model:
                 # with --alternate, pymupdf4llm's Markdown of the document - headings, every
@@ -7355,6 +7408,12 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                             _PDF["wanted"] = _PDF.get("wanted", 0) + wanted
             if text is not None:
                 return text, note
+        else:
+            broken = pdf_broke(path, None)                    # no PyMuPDF: its end alone tells a cut
+            if broken and not name:
+                _ZIPS["pdf"] = broken
+            if broken:
+                note = broken["reason"]
         if c["cli"].get("pdftotext"):
             outp = os.path.join(workdir, "_pdf.txt")
             pdf_in, pdf_out, pdf_done = narrow_paths([path], [outp])
@@ -7364,7 +7423,7 @@ def _doc_text(path, kind, c, workdir, alternate, name, state):
                 pdf_done()
             if os.path.exists(outp):
                 text = open(outp, encoding="utf-8", errors="replace").read()
-                if len(text.strip()) < 20:
+                if len(text.strip()) < 20 and not broken:
                     # the same verdict pymupdf reaches: nothing to read, so this is a scan.
                     # Without it a scan on a machine without pymupdf was just `empty`.
                     note = ("no text layer: this PDF is a scan; render pages to images "
@@ -10707,6 +10766,9 @@ def read(args):
                     "members": broke["members"], "whole": len(broke["whole"]),
                     "not_whole": ["%s: %s" % b for b in broke["broken"][:20]]},
                     **({"lost_strings": broke["lost"]["cells"]} if (broke.get("lost") or {}).get("cells") else {}))))
+        pdf_broken = _ZIPS.get("pdf") if kind == "pdf" else None
+        if pdf_broken:                         # a PDF cut short or damaged (KNOWN-ISSUES 335)
+            manifest["signals"]["broken_pdf"] = {k: pdf_broken[k] for k in ("how", "pages") if pdf_broken.get(k) is not None}
         if kind in ("zip", "rtf"):
             # an archive's pictures, or the ones our RTF reader wrote out; the names of those left out
             left = {}
@@ -11277,6 +11339,7 @@ def read(args):
     # an archive that is cut, damaged or no ZIP at all: what was read of it is the text
     broke = _ZIPS.get("read") if kind == "zip" and source == "http" else None
     complete = bool(broke and broke.get("all_members") and not broke.get("broken"))   # only its index is broken
+    pdf_broken = _ZIPS.get("pdf") if kind == "pdf" and source == "http" else None    # a PDF cut short or damaged
     if broke and ((broke.get("lost") or {}).get("cells") or LOST in text):
         # a cut workbook's cells whose text was lost read LOST_TEXT, and its rows and sheets the cut took are
         # marked (LOST_MARK): the skill's words, not the document's
@@ -11314,6 +11377,10 @@ def read(args):
         # the members that are whole hold a few words or none: not the document (40, as a transfer cut)
         manifest["status"] = "error"
         error_why = broke["reason"]
+    elif pdf_broken and word_count < 40:
+        # a PDF cut short or damaged whose pages that opened hold a few words or none (it was `empty`, "no text in it")
+        manifest["status"] = "error"
+        error_why = pdf_broken["reason"]
     elif not (text or "").strip():
         manifest["status"] = "empty"
     elif word_count < 5 and not str(engine or "").startswith("server:") and not (doc_engine and word_count):
@@ -11406,6 +11473,8 @@ def read(args):
                               else "the page is gone")
     elif broke:
         manifest["advice"] = zip_advice(broke, local, word_count, transit, f.get("cut") == "step")
+    elif pdf_broken:
+        manifest["advice"] = pdf_advice(pdf_broken, local, word_count)
     elif manifest["status"] == "empty":
         if manifest["signals"].get("binary"):
             manifest["advice"] = "the response is binary, not a page; there is no text to read"

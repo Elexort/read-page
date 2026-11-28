@@ -1996,6 +1996,45 @@ try:
     except ImportError:
         check.skip("330: an XLSX's stated size", "openpyxl is not installed here")
 
+    # a PDF cut short ends without its %%EOF: one that does not open was `empty`, "no text in it"; one that opens with
+    # no page was a scan with no page to render; one whose first pages open was `ok` with the rest unsaid (KNOWN-ISSUES
+    # 335)
+    try:
+        import pymupdf
+        made = pymupdf.open()
+        for n in range(8):
+            made.new_page().insert_textbox((72, 72, 520, 760), "PDF-PAGE-%d-FACT %s" % (n + 1, EN * 12), fontsize=10)
+        plain_pdf, streams_pdf = made.tobytes(garbage=3, deflate=True), made.tobytes(garbage=3, deflate=True, use_objstms=1)
+        made.close()
+        for label, data in (("that does not open (its first 200 bytes)", plain_pdf[:200]),
+                            ("whose objects are in streams, cut at half (it opens with no page)",
+                             streams_pdf[:len(streams_pdf) // 2])):
+            p = os.path.join(tmpc, "cut-%d.pdf" % len(data))
+            with open(p, "wb") as fh:
+                fh.write(data)
+            r = run_read(p, env=env)
+            sig = (r.manifest.get("signals") or {}).get("broken_pdf") or {}
+            check("335: a PDF %s is an error that says it is cut and asks for a whole copy (it was `empty`, \"no text in "
+                  "it\", or a scan)" % label, r.manifest.get("status") == "error" and sig.get("how") == "cut"
+                  and sig.get("pages") == 0 and "a whole copy of the file is needed" in (r.manifest.get("advice") or "")
+                  and "text layer" not in json.dumps(r.manifest.get("missing") or []), said(r))
+        p = os.path.join(tmpc, "cut-half.pdf")
+        with open(p, "wb") as fh:
+            fh.write(plain_pdf[:len(plain_pdf) // 2])
+        r = run_read(p, env=env)
+        sig = (r.manifest.get("signals") or {}).get("broken_pdf") or {}
+        check("335: a PDF cut at half whose pages open keeps what they hold, `ok`, and says it is cut (it said nothing)",
+              r.manifest.get("status") == "ok" and "PDF-PAGE-1-FACT" in r.file("content.md") and sig.get("how") == "cut"
+              and sig.get("pages") == 8 and "the file is needed for the rest" in (r.manifest.get("advice") or ""), said(r))
+        p = os.path.join(tmpc, "whole.pdf")
+        with open(p, "wb") as fh:
+            fh.write(plain_pdf)
+        r = run_read(p, env=env)
+        check("335: a whole PDF says nothing of a cut", r.manifest.get("status") == "ok" and "PDF-PAGE-8-FACT" in
+              r.file("content.md") and not (r.manifest.get("signals") or {}).get("broken_pdf"), said(r))
+    except ImportError:
+        check.skip("335: a cut PDF", "pymupdf is not installed here")
+
     def excel_ods(sheets, before=(), head=""):
         """An ODS in Excel's order: content.xml right after the styles, before the rest; `before`: members
         [(name, text)] written ahead of content.xml, as LibreOffice writes its settings.xml and meta.xml;
