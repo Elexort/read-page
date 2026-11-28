@@ -1,6 +1,33 @@
 # Changelog
 
-## Unreleased (0.5.0)
+## Unreleased
+
+## 0.5.0 - 2026-11-28
+
+What 0.5.0 brings, for a user and for the agent that reads with it:
+
+- **One command sets up every engine.** `readpage.py --setup` fetches them at pinned versions (yt-dlp alone floats) into
+  a folder of its own outside the skill - about 400-445 MB, no admin rights, no questions - and the skill uses it by
+  itself; deleting the folder uninstalls it. Without it the standard-library core still reads.
+- **A long text is read on with the command under `next:`.** The answer ends with it, to run as printed in bash,
+  PowerShell and cmd, and `EOF` ends the text. `--chars C` sets an answer's size and replaces `--to`, which is gone;
+  `--from N` and `--from "words"` go on from a line or a quote, also after a harness has cut the answer.
+- **More kinds of documents, read better.** A PDF's tables come out as tables, with no flag; EPUB, ODT, ODS, ODP and RTF
+  have readers of our own (pandoc is out); a scan is read with the OCR pack of its own script and turned upright if it
+  lies on its side; a cut or damaged ZIP, DOCX, XLSX or PPTX gives the parts that arrived whole and says what was lost.
+- **Other alphabets.** Chinese, Japanese, Korean and Russian pages and files (GBK, Big5, Shift-JIS) are decoded right and
+  a guess says so; addresses and file names in other scripts work; a video's subtitles come in any text format and in
+  the speaker's own language.
+- **Statuses that say what the page is.** Sign-in, subscription and not-found words in twenty languages, a paywall a
+  script draws, a page that shows only a loading line, a deep address that lands on the home page and a cut PDF are
+  named, not passed as `ok`; the first line names the share of the page only when the text may be a fragment.
+- **Bounded, and guarded.** Every read ends by 55 s, CLI and MCP alike; MCP runs four calls at once; the browser of a
+  public page cannot be sent to an internal address, by a redirect either.
+- **For an agent:** SKILL.md is a short procedure that says what `SKILL_DIR` is, how to read on and how to size a block;
+  `advice:` comes on any status; an MCP result is its blocks alone (the manifest is the folder's file); the pictures
+  of a text are numbered markers in place, and `--ocr N` reads the text drawn in one.
+
+The development log of the version follows.
 
 Two branches: `main` is the skill alone - SKILL.md, README.md, scripts/,
 references/, LICENSE and .gitattributes, 37 files - so a clone, a ZIP or an installer
