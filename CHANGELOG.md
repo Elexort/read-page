@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A paywalled article gets no teasers of other articles from page.md** (KNOWN-ISSUES 336): on Bloomberg Law's article
+  the block rule put back the paywall's prompt and five other articles' summaries, which read as the article's and
+  raised `cover` over a third, so `paywalled: the rest of the article is not in the page` did not come. On a page that
+  says it is paywalled nothing past the text's last block comes back now - there page.md is the site's -, while the
+  open part's own standfirst or caption before or inside the text still does: measured on 91 paywalled pages, where
+  no blocks at all would have lost the open part's own paragraphs on 12 of them.
 - **A collapsed section's list of files is in the text, under its marker** (KNOWN-ISSUES 339): statistik.at's VPI/HVPI
   page folds "Historische Daten" - two .ods files, the HVPI on base 2015 among them - into an accordion whose region is
   all links, which the rule for a menu folded away passed over, and defuddle dropped the list: the text had the heading

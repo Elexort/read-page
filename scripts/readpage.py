@@ -11419,14 +11419,16 @@ def read(args):
     text = inline_svg_text(text)
     restored = {}
     tabs_info = tabs_info if source in ("http", "browser") else None
+    pay_why = paywall_signal(html) if is_page and html else ""
     if (html and text and page_text and source in ("http", "browser", "archive")
             and str(engine or "").split("(")[0].split(":")[0] in EXTRACTORS):
         t_bl = now()
         # a hidden panel too long for the text stays in page.md: its marker in the text says where
-        # ...and a collapsed section's list of files, which an extractor drops, goes back under its marker (339)
+        # ...and a collapsed section's list of files, which an extractor drops, goes back under its marker (339);
+        # on a page that says it is paywalled nothing past the text's end goes back: there page.md is the site's (336)
         text, restored = blockrule.restore(text, page_text, base=pic_base,
                                            out=[x["text"] for x in (tabs_info or {}).get("long") or []],
-                                           keep=(tabs_info or {}).get("links") or [])
+                                           keep=(tabs_info or {}).get("links") or [], ends=bool(pay_why))
         budget.record("blocks", t_bl, note="+%d blocks" % (restored.get("restored") or 0))
         if restored.get("restored") or restored.get("pictures"):
             manifest["chain"]["tried"].append("blocks:+%d" % (restored.get("restored") or 0))
@@ -11549,7 +11551,6 @@ def read(args):
     trace("login", state=state or "-", why=why)
     if state == "weak":
         manifest["signals"]["login_hint"] = why
-    pay_why = paywall_signal(html) if is_page and html else ""
 
     # ---------------------------------------------------------------- a PDF's tables
     # the read's documents together - the PDF itself, the PDFs of an archive, an archived copy:

@@ -251,6 +251,11 @@ them the screens come one by one and `improve:` names Pillow. Nothing is scaled.
   compare: `scripts/mdtable.py` writes it in defuddle's own table form first (a spanning cell's text in the first
   column of its span, the rest of the span empty, so the words are `page.md`'s in their order), and no copy of it
   comes back (on 290 pages with such tables: 149 of 170 became Markdown, the rest code examples; 134 copies stayed out).
+  On a page that says it is paywalled nothing past the text's last block comes back: there `page.md` is the site's
+  (the paywall's prompt, other articles' teasers, the imprint), while the open part's own standfirst or caption before
+  or inside the text still does - on 91 paywalled pages a rule of no blocks at all would have lost the open part's own
+  paragraphs on 12 (standfirsts, first paragraphs, embedded posts; two of them Il Fatto Quotidiano's whole articles,
+  which trafilatura left for the site's news feed) and captions or pictures on 6 more.
 - **An article a script holds is drawn first** (`scripts/lake.py`). Aliyun's developer articles keep the article as a
   Lake document (the format of Yuque's editor) in a JavaScript string, `GLOBAL_CONFIG.larkContent = '<!doctype
   lake>...'`, beside the empty `<div id="lark-content">` the site's viewer draws it into; the server's HTML and a

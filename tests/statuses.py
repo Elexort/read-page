@@ -326,6 +326,8 @@ r_.update({
 
 # a paywall written in JavaScript: the article is in the HTML, the schema says it is not free
 ART = {"@context": "https://schema.org", "@type": "NewsArticle", "headline": "Story"}
+TEASER = ("Lawyers and staff left in the lurch by the sudden end of a large firm could heed the career of a partner who "
+          "moved to a rival two years ago and built a practice of forty people there, according to people familiar.")
 r_.update({
     "/pw-ld": (200, H, ld(dict(ART, isAccessibleForFree=False))),
     "/pw-string": (200, H, ld(dict(ART, isAccessibleForFree="False"))),
@@ -345,6 +347,22 @@ r_.update({
                                   % (json.dumps(dict(ART, isAccessibleForFree=False)), "<li><a href='/p'>Section of the "
                                      "site menu and its sub pages</a></li>" * 400, LONG_EN[:700],
                                      "<li><a href='/p'>Section of the site menu and its sub pages</a></li>" * 400))),
+    # an open part beside the site's menus, then the paywall's prompt and other articles' teasers, which the extractor
+    # drops and page.md has: the block rule put the teasers back, `cover` rose over a third, and row 261's line did not
+    # come (Bloomberg Law's article, the 0.5.0 stress round's task 7; KNOWN-ISSUES 336)
+    "/pw-teasers": (200, H, page("Story", "<script type='application/ld+json'>%s</script><header><nav><ul>%s</ul></nav>"
+                                          "<p class='dek'>PW-DEK The standfirst of the story itself, above it in the "
+                                          "page's header, says in thirty words or so what the article is about and why "
+                                          "it matters to the reader today.</p>"
+                                          "</header><main><article><h1>Story</h1><p>PW-OPEN %s</p><p>%s</p></article>"
+                                          "<section class='paywall-prompt'><h2>Log in to keep reading</h2><p>Already a "
+                                          "subscriber? Log in to keep reading or access the research tools.</p></section>"
+                                          "</main><footer><section class='more-stories'>%s</section><ul>%s</ul></footer>"
+                                  % (json.dumps(dict(ART, isAccessibleForFree=False)), "<li><a href='/p'>Section of the "
+                                     "site menu and its sub pages</a></li>" * 60, LONG_EN[:420], LONG_EN[420:800],
+                                     "".join("<div class='teaser'><h3><a href='/other/%d'>Another story %d</a></h3><p>"
+                                             "PW-TEASER-%d %s</p></div>" % (i, i, i, TEASER) for i in range(6)),
+                                     "<li><a href='/p'>Section of the site menu and its sub pages</a></li>" * 20))),
     "/pw-free": (200, H, ld(dict(ART, isAccessibleForFree=True))),
     "/pw-event": (200, H, ld({"@context": "https://schema.org", "@type": "MusicEvent", "name": "Concert",
                               "isAccessibleForFree": False})),
@@ -617,6 +635,17 @@ try:
     check("... the advice says the rest is not in the page, and what page.md holds instead",
           "the rest of the article is not in the page" in (r.manifest.get("advice") or "")
           and "menus and links" in (r.manifest.get("advice") or ""), (r.manifest.get("advice") or "")[:200])
+    r = run_read(s.public.url("/pw-teasers"), env=NO_BROWSER)
+    content, first = r.file("content.md"), r.text.split("\n")[0]
+    check("336: a paywalled page: the open part is the text, and no teaser of another article comes back from page.md "
+          "past its end (the block rule put 6 back, and their headings)", "PW-OPEN" in content
+          and "PW-TEASER" not in content and "Another story" not in content,
+          "%d teasers | %s" % (content.count("PW-TEASER"), first[:110]))
+    check("... so the first line says the rest of the article is not in the page (the teasers took cover over a third)",
+          "· paywalled: the rest of the article is not in the page ·" in first,
+          "%s | cover %s" % (first[:120], (r.manifest.get("content") or {}).get("cover")))
+    check("... and the open part's own standfirst before the text still comes back (Mediapart's, NRC's, L'Express's)",
+          "PW-DEK" in content, content[:120])
     r = run_read(s.public.url("/pw-ld"), env=NO_BROWSER)
     check("a paywalled page keeps its text: content.md has the article, not a stub",
           "servers lie about what they send" in r.file("content.md"), r.file("content.md")[:60])

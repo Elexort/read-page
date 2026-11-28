@@ -124,7 +124,7 @@ def kind(b, ws=None):
     return "short"
 
 
-def restore(content, page, base="", out=(), keep=()):
+def restore(content, page, base="", out=(), keep=(), ends=False):
     """The text with the dropped blocks of page.md back in place, and the numbers for the manifest:
     {"restored": blocks put back, "restored_bytes": their size, "pictures": pictures put back,
     "outside": bytes still only in page.md}. A text that already holds every block comes back
@@ -136,7 +136,8 @@ def restore(content, page, base="", out=(), keep=()):
     page.md's relative addresses, so the same picture is recognised in both files. `out` are texts
     that stay in page.md alone (a hidden tab panel too long for the text): a block of theirs is not
     put back. `keep` are texts that are the page's content whatever their blocks look like (a list of
-    files in a collapsed section, tabs.py): a block of theirs the text lacks goes back, a list of links too."""
+    files in a collapsed section, tabs.py): a block of theirs the text lacks goes back, a list of links too.
+    `ends`: the text ends the page's own part (a paywalled page), so nothing past its last block goes back."""
     info = {"restored": 0, "restored_bytes": 0, "pictures": 0, "outside": 0}
     if not (content or "").strip() or not (page or "").strip() or len(page) > MAX_PAGE:
         return content, info
@@ -236,6 +237,13 @@ def restore(content, page, base="", out=(), keep=()):
             if new:
                 back[i] = True
                 placed.update(new)
+    if ends:
+        # a page that says it is paywalled: past the last block the text holds, page.md is the site's - the paywall's
+        # prompt, other articles' teasers, the imprint - and none of it goes back; the open part's own standfirst,
+        # captions and embeds before or inside the text do (91 paywalled pages, KNOWN-ISSUES 336)
+        last = max([i for i, ws in enumerate(pw) if kept[i] and len(ws) >= K] or [len(pb)])
+        for i in range(last + 1, len(pb)):
+            back[i] = False
     adds = {}                                  # pictures taken out of a paragraph that stayed
     for i in range(len(pb)):
         if kept[i] and kinds[i] != "image":

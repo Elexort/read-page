@@ -152,9 +152,12 @@ share is named only where it decides something, and `content.cover` keeps it for
 early, and the advice says how to get the rest. `signals.paywall` (and an advice saying so) is a page that says it is paywalled - schema.org's
 `isAccessibleForFree: false` in its JSON-LD or microdata, with the `cssSelector` of the hidden part when it names one -
 while the status stays `ok`: the text is what the server sent, the whole article a script hides or only the part open
-to everyone, and the page cannot tell which; a container named `paywall` is no such word (free pages carry them). A
-paywalled page whose text is also under a third of its words is the part open to everyone and no more: the block rule
-has put back every paragraph `page.md` has, so the rest of `page.md` is the site's menus and links. Its first line
+to everyone, and the page cannot tell which; a container named `paywall` is no such word (free pages carry them). On
+such a page the block rule puts back what the extractor dropped before or inside the text - the open part's own
+standfirst, a caption, an embed - and nothing past its last block: there `page.md` is the site's, the paywall's
+prompt, other articles' teasers, the imprint (on 91 paywalled pages, 147 blocks of theirs stayed out and two authors'
+notes with them). A paywalled page whose text is also under a third of its words is the part open to everyone and no
+more, and the rest of `page.md` is the site's menus and links. Its first line
 says `paywalled: the rest of the article is not in the page` in place of `maybe a fragment`, and the answer shows
 `content.md`, with no `next:` line leading on through the menus (Spiegel's and Le Monde's paywalled articles, the
 bench's two paywalled fragments: a model read on through `page.md` and could not tell whether the article was hidden
