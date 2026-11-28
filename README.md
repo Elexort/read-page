@@ -541,3 +541,6 @@ its files, statuses, flags, privacy, limits, cookies, pictures, video) · `refer
 MIT. `--setup` fetches each engine from its own source under its own license (html2text GPL-3.0+,
 PyMuPDF, pymupdf4llm and its layout model AGPL-3.0 or Artifex's commercial license, the rest
 permissive); the skill ships none of them.
+
+A vulnerability is reported privately, through the repository's **Security** tab (**Report a vulnerability**),
+not in an issue: [SECURITY.md](https://github.com/Elexort/read-page/blob/dev/SECURITY.md) says what is in scope.

@@ -35,6 +35,9 @@ brings an agent nothing else; `dev` carries the code with its tests, CI, notes a
 `tools/publish.py` makes main's commit from dev's HEAD. Some harnesses show the agent every file
 of a skill's folder (483 files in a development copy, 64 in a clean clone of the old main).
 
+- **SECURITY.md** (on dev only: `tools/publish.py` does not carry it to main): private vulnerability reporting is on for
+  the repository; the file says to use the Security tab's "Report a vulnerability" and that the skill's scripts and
+  its `--setup` are in scope. README's License section has the one line, linking to it.
 - **KNOWN-ISSUES 333-337: the stress round's pages, investigated** (planned): NVIDIA's prices are drawn by its
   scripts into no text, the browser's either (333); Aliyun's article is a Lake document in a script string its viewer
   did not draw (334); Shockbyte's price cards are short blocks the block rule never puts back (335); Bloomberg Law's
