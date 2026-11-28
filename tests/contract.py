@@ -443,12 +443,27 @@ try:
             fh_.write("#!/bin/sh\necho not this python >&2\nexit 3\n")
         os.chmod(os.path.join(fake_dir, fake_name), 0o755)
     e_fake = dict(e_sh, PATH=fake_dir + os.pathsep + os.environ.get("PATH", ""))
+    # what python_command decides for this interpreter under that PATH: a command - its path, `py -X.Y` - or none,
+    # where the path needs quotes and no py is there (install.yml's environments, in a folder with a space and
+    # Cyrillic): then the answer gives the words, and no shell has a command to run
+    real_path = os.environ.get("PATH", "")
+    os.environ["PATH"] = e_fake["PATH"]
+    try:
+        decided = (command_of or python_name)(sys.executable)
+    finally:
+        os.environ["PATH"] = real_path
     other = run_read(srv.url("/long"), env={"PATH": e_fake["PATH"]})
     o_line = last_rows(other.text, 1)[0]
     n_o = next_line(other.text)
-    check("... a read whose interpreter `%s` on PATH does not reach: the command does not name it so" % fake_name,
-          bool(n_o) and not o_line.startswith(fake_name + " "), o_line[:90])
+    check("... a read whose interpreter `%s` on PATH does not reach: the command names it as python_command decides "
+          "(%s)" % (fake_name, "a command" if decided else "none: the words"),
+          bool(n_o) and (o_line.startswith(decided + " -X utf8 ") if decided else
+                         o_line == "the same command with --from %s --chars 7900 --file content.md" % n_o), o_line[:90])
     for name, run in shells():
+        if not decided:
+            check.skip("... and runs as printed in %s with that PATH" % name,
+                       "no command names this interpreter (a path that needs quotes, no py): the words, checked above")
+            continue
         p = run(o_line, e_fake)
         said = p.stdout.decode("utf-8", "replace")
         check("... and runs as printed in %s with that PATH: the next block, from line %s" % (name, n_o),
@@ -492,14 +507,36 @@ try:
                                                    % n_pf], str(last_rows(pf.text, 1))[:120])
     # PowerShell takes “ ” and „ for `"`, and Windows forbids `"` in a file name, so a name holds them: in PowerShell
     # 5.1 and 7 the command split the path there and read its second half as a host (KNOWN-ISSUES 292)
-    curly = os.path.join(tempfile.mkdtemp(prefix="rp-curly-"), "Report “Final” „de“.html")
-    with open(curly, "wb") as fh_:
-        fh_.write(ROUTES["/long"][2])
-    cq = run_read(curly)
-    n_c = next_line(cq.text)
-    check("a path holding PowerShell's other double quotes (“ ” „): the words instead of the command",
-          bool(n_c) and last_rows(cq.text, 1) == ["the same command with --from %d --chars 7900 --file content.md" % n_c],
-          str(last_rows(cq.text, 1))[:120])
+    # A name is made only where the file system's encoding holds it: GBK holds “ and ” but not „, and the check that made
+    # one name of all three stopped with a UnicodeEncodeError in install.yml's GBK job
+    curly_names = ("Report “Final”.html", "Report „de“.html")
+
+    def holdable(name, encoding=None):
+        try:
+            if encoding:
+                name.encode(encoding)
+            else:
+                os.fsencode(name)
+            return True
+        except (UnicodeError, ValueError):
+            return False
+    check("... a name is made where the file system's encoding holds it: GBK holds “Final” and not „de“",
+          holdable(curly_names[0], "gbk") and not holdable(curly_names[1], "gbk")
+          and all(holdable(x, "utf-8") for x in curly_names), "")
+    curly_dir = tempfile.mkdtemp(prefix="rp-curly-")
+    for c_name in curly_names:
+        if not holdable(c_name):
+            check.skip("a path holding PowerShell's other double quotes (%s): the words" % c_name,
+                       "the file system's encoding (%s) cannot hold that name" % sys.getfilesystemencoding())
+            continue
+        curly = os.path.join(curly_dir, c_name)
+        with open(curly, "wb") as fh_:
+            fh_.write(ROUTES["/long"][2])
+        cq = run_read(curly)
+        n_c = next_line(cq.text)
+        check("a path holding PowerShell's other double quotes (%s): the words instead of the command" % c_name,
+              bool(n_c) and last_rows(cq.text, 1) == ["the same command with --from %d --chars 7900 --file content.md"
+                                                       % n_c], str(last_rows(cq.text, 1))[:120])
     stray = run_read(srv.url("/long"), "--from", "5", "--file", "content.md", "──", reuse=first)
     ign = next((ln for ln in stray.text.split("\n") if ln.startswith("ignored: ")), "")
     check("a stray ── (a model copied the decoration): left out and named, the read goes on",
