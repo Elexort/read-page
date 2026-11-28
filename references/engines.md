@@ -264,8 +264,9 @@ them the screens come one by one and `improve:` names Pillow. Nothing is scaled.
   they stand for, into that empty element of the HTML and of the browser's DOM, before any extractor or `page.md`
   sees the page; a viewer that drew it already leaves nothing to draw. 16 articles of developer.aliyun.com
   (2026-11-28; 16 of the 23 that answered held one, the others are server-made Markdown) went from 29-30 words of
-  footer to their articles, 23-1 415 words by defuddle. Yuque's own pages fetch their documents with a request of
-  their own: nothing in their HTML to draw.
+  footer, a fragment shown as `page.md`, to their articles, whole and shown as `content.md`: 98-100 % of the
+  document's words, defuddle's text on 15 and readability's on 1. Yuque's own pages fetch their documents with a
+  request of their own: nothing in their HTML to draw.
 - **Internal hosts never go to a third party and never use TLS impersonation** - plain curl fails
   fast and nothing leaves the machine. A redirect that would leave the public internet is refused.
 - **Pin more than one fingerprint.** Sites add rules against the freshest Chrome profile: on 2026-10-30
