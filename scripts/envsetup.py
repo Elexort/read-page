@@ -1781,7 +1781,14 @@ class Work:
         other = shutil.which("uv")
         if other:
             self.uv_exe = other
-            return True, "uv from this machine (%s): ours did not download - %s" % (other, why)
+            rc, out = self.sh([other, "--version"], timeout=60)
+            seen = out.split(" | ")[-1].strip()[:60] if rc == 0 else "a version it did not say"
+            # a problem, not a step's line alone: the report said "Nothing is missing" with any uv in the pin's place,
+            # and how the lock's hashes and the yt-dlp step's flags are read is that uv's (KNOWN-ISSUES 360)
+            self.lack("uv", "uv %s did not download (%s): this machine's %s is used instead (%s)" % (
+                UV_VERSION, why or "?", seen, other), "readpage.py --setup again once pypi.org - or the index "
+                                                       "UV_DEFAULT_INDEX names - gives uv %s" % UV_VERSION)
+            return True, "uv from this machine (%s, %s): ours did not download - %s" % (other, seen, why)
         self.lack("uv", why)
         return False, "no uv: " + why
 

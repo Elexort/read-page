@@ -52,6 +52,9 @@
 - **On POSIX the home is the user's alone too** (KNOWN-ISSUES 359): a `READ_PAGE_HOME` of another user's is refused
   before anything is touched, and one that group or others may write in is made 0700 (said, not mended, on a mount with
   no Unix modes); nothing looked at either, while the environment's bytecode folder in it was refused for that reason.
+- **A uv of the machine's in the pin's place is named** (KNOWN-ISSUES 360): where the pinned uv does not download, the
+  one on PATH is used as before, now as a problem the report names with its version and the fix - it said "Nothing is
+  missing".
 
 ## 0.5.0 - 2026-11-28
 

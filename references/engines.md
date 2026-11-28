@@ -607,7 +607,8 @@ processes write there, so an environment an agent built inside such an app did n
 terminal or for the next agent ("not set up" in that agent's shell, every read in the machine's
 Python), and its files were slow to reach (a stat 372 us against 49 in the home folder). What it
 installs: uv 0.13.9 from
-PyPI (its wheel's SHA256 pinned in `envsetup.py` for every platform: `UV_WHEEL_SHA256`), CPython 3.13.18 from python-build-standalone through it (`--no-bin
+PyPI (its wheel's SHA256 pinned in `envsetup.py` for every platform: `UV_WHEEL_SHA256`; where it does not download, the
+uv on PATH is used and named as a problem with its version - KNOWN-ISSUES 360), CPython 3.13.18 from python-build-standalone through it (`--no-bin
 --no-registry`: nothing outside the folder), a venv `envs/py<version>-<lock hash>` with the 54
 packages of `scripts/setup-lock.txt` (each file pinned by SHA256: `tools/setup_lock.py` writes the lock
 with `--generate-hashes` - 1 092 files, about 94 KB - and the set is the lock's: `--require-hashes` on the

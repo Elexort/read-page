@@ -4121,6 +4121,31 @@ else:
     attempt("off POSIX neither the owner's nor the mode's rule says anything (Windows has secure_home)",
             lambda: (envsetup.secure_home_posix(tempfile.gettempdir()) == "" and envsetup.others_home("C:\\") == "", ""))
 
+# ---------------------------------------------------------------- a uv of the machine's in the pin's place (row 360)
+# Where the pinned uv did not download, the one on PATH was used - any version - with a step's line alone: the report said
+# "Nothing is missing", and how the lock's hashes and the yt-dlp step's flags are read was that uv's.
+d360, w360 = work_in("rp-env-pathuv-")
+cmds360 = []
+
+
+def no_wheel360(dl):
+    raise ValueError("neither pypi.org (timed out) nor pip (No module named pip) gave uv")
+
+
+w360._uv_wheel = no_wheel360
+w360.sh = lambda cmd, timeout=900, env=None, cwd=None: (cmds360.append(list(cmd)) or (0, "uv 0.4.30 (aaaaaaa 2024-11-01)"))
+real_which360 = envsetup.shutil.which
+envsetup.shutil.which = lambda name, *a, **k: os.path.join(d360, "bin", "uv") if name == "uv" else real_which360(name, *a, **k)
+try:
+    ok360, note360 = w360.uv()
+finally:
+    envsetup.shutil.which = real_which360
+prob360 = [p for p in w360.problems if p.get("part") == "uv"]
+attempt("a uv of the machine's in the pin's place is a problem the report names, with its version and what gets the pin "
+        "(a step's line alone, and the report said \"Nothing is missing\")",
+        lambda: (ok360 and prob360 and "0.4.30" in prob360[0]["why"] and envsetup.UV_VERSION in prob360[0]["why"]
+                 and envsetup.UV_VERSION in prob360[0]["fix"], "%s | %s" % (note360[:100], prob360)))
+
 import gc                                                # noqa: E402
 for w_ in [o_ for o_ in gc.get_objects() if isinstance(o_, envsetup.Work)]:
     w_.detail.close()                                    # (Windows deletes no folder with a file open in it)
